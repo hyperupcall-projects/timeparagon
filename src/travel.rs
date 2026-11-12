@@ -29,8 +29,8 @@ use timeslay_core::places::get;
 #[cfg(test)]
 use timeslay_core::places::search_url;
 pub use timeslay_core::places::{
-    Found, Hop, Leg, Route, START_OF_DAY, Stop, distance_label, duration_label, location_text,
-    parse_places, route_label, saved_matches, search_places,
+	Found, Hop, Leg, Route, START_OF_DAY, Stop, distance_label, duration_label, location_text,
+	parse_places, route_label, saved_matches, search_places,
 };
 
 const DIRECTIONS_URL: &str = "https://api.mapbox.com/directions/v5/mapbox";
@@ -38,598 +38,598 @@ const DIRECTIONS_URL: &str = "https://api.mapbox.com/directions/v5/mapbox";
 /// What a chosen place is for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PickTarget {
-    /// Where this task, by id, happens.
-    Task(String),
-    /// Where this calendar event, by id, happens.
-    Event(String),
-    /// Home, where the day's travel starts and ends.
-    Home,
+	/// Where this task, by id, happens.
+	Task(String),
+	/// Where this calendar event, by id, happens.
+	Event(String),
+	/// Home, where the day's travel starts and ends.
+	Home,
 }
 
 /// A place search that is open: what was typed and what came back.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Picker {
-    pub target: PickTarget,
-    pub query: String,
-    pub results: Vec<Found>,
-    pub searching: bool,
-    /// Whether a search has finished, so "no results" is not shown before one.
-    pub searched: bool,
-    pub error: Option<String>,
-    /// Whether the query searches the saved places rather than Mapbox.
-    pub recents: bool,
+	pub target: PickTarget,
+	pub query: String,
+	pub results: Vec<Found>,
+	pub searching: bool,
+	/// Whether a search has finished, so "no results" is not shown before one.
+	pub searched: bool,
+	pub error: Option<String>,
+	/// Whether the query searches the saved places rather than Mapbox.
+	pub recents: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RouteState {
-    Loading,
-    Ready(Route),
-    Failed(String),
+	Loading,
+	Ready(Route),
+	Failed(String),
 }
 
 /// A trip from one place to another by one method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RouteKey {
-    pub from: u64,
-    pub to: u64,
-    pub mode: TravelMode,
+	pub from: u64,
+	pub to: u64,
+	pub mode: TravelMode,
 }
 
 /// The details card that is open, for the trip it is about.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Open {
-    pub leg: Leg,
-    /// What the trip leaves and what it arrives at, when it is one of a day's.
-    pub between: Option<(String, String)>,
+	pub leg: Leg,
+	/// What the trip leaves and what it arrives at, when it is one of a day's.
+	pub between: Option<(String, String)>,
 }
 
 /// What the Travel tab is in the middle of.
 #[derive(Debug, Default)]
 pub struct Workspace {
-    pub map: map::Workspace,
-    /// Whether travel is shown on the calendar. Kept in the config, so the
-    /// switch in the calendar menu stays where it was left.
-    pub show: bool,
-    pub picker: Option<Picker>,
-    pub routes: HashMap<RouteKey, RouteState>,
-    pub open: Option<Open>,
-    /// The place being renamed and the title typed so far.
-    pub rename: Option<(u64, String)>,
-    /// Counts searches, so a slow answer to an old one is thrown away.
-    serial: u64,
-    cache: Option<PathBuf>,
+	pub map: map::Workspace,
+	/// Whether travel is shown on the calendar. Kept in the config, so the
+	/// switch in the calendar menu stays where it was left.
+	pub show: bool,
+	pub picker: Option<Picker>,
+	pub routes: HashMap<RouteKey, RouteState>,
+	pub open: Option<Open>,
+	/// The place being renamed and the title typed so far.
+	pub rename: Option<(u64, String)>,
+	/// Counts searches, so a slow answer to an old one is thrown away.
+	serial: u64,
+	cache: Option<PathBuf>,
 }
 
 impl Workspace {
-    /// A workspace already showing travel, or not, as the saved setting asks.
-    pub fn starting(show: bool) -> Self {
-        Self {
-            show,
-            ..Self::default()
-        }
-    }
+	/// A workspace already showing travel, or not, as the saved setting asks.
+	pub fn starting(show: bool) -> Self {
+		Self {
+			show,
+			..Self::default()
+		}
+	}
 
-    /// Keeps worked-out trips in `path`, and reads those already there. Only a
-    /// real boot calls this: a state built by hand must not touch the user's
-    /// cache.
-    pub fn cache_in(&mut self, path: Option<PathBuf>) {
-        if let Some(path) = &path {
-            for (key, route) in read_cache(path) {
-                self.routes.insert(key, RouteState::Ready(route));
-            }
-        }
-        self.cache = path;
-    }
+	/// Keeps worked-out trips in `path`, and reads those already there. Only a
+	/// real boot calls this: a state built by hand must not touch the user's
+	/// cache.
+	pub fn cache_in(&mut self, path: Option<PathBuf>) {
+		if let Some(path) = &path {
+			for (key, route) in read_cache(path) {
+				self.routes.insert(key, RouteState::Ready(route));
+			}
+		}
+		self.cache = path;
+	}
 
-    pub fn state(&self, key: RouteKey) -> Option<&RouteState> {
-        self.routes.get(&key)
-    }
+	pub fn state(&self, key: RouteKey) -> Option<&RouteState> {
+		self.routes.get(&key)
+	}
 }
 
 #[derive(Debug, Clone)]
 pub enum Action {
-    Map(map::Action),
-    /// Show or hide travel on the day view.
-    Toggle,
-    ApiKey(String),
-    DefaultMode(TravelMode),
-    SetMapApp(MapApp),
+	Map(map::Action),
+	/// Show or hide travel on the day view.
+	Toggle,
+	ApiKey(String),
+	DefaultMode(TravelMode),
+	SetMapApp(MapApp),
 
-    OpenPicker(PickTarget),
-    ClosePicker,
-    Query(String),
-    Search,
-    Searched(u64, Result<Vec<Found>, String>),
-    /// Use the search result at this position.
-    Choose(usize),
-    /// Switch between searching Mapbox and searching the saved places.
-    Recents,
-    /// Use this saved place.
-    ChooseSaved(u64),
-    /// Star or unstar this saved place.
-    Favorite(u64),
-    /// Forget where the target is.
-    Clear(PickTarget),
+	OpenPicker(PickTarget),
+	ClosePicker,
+	Query(String),
+	Search,
+	Searched(u64, Result<Vec<Found>, String>),
+	/// Use the search result at this position.
+	Choose(usize),
+	/// Switch between searching Mapbox and searching the saved places.
+	Recents,
+	/// Use this saved place.
+	ChooseSaved(u64),
+	/// Star or unstar this saved place.
+	Favorite(u64),
+	/// Forget where the target is.
+	Clear(PickTarget),
 
-    /// Start renaming this place.
-    Rename(u64),
-    RenameText(String),
-    SaveRename,
-    CancelRename,
+	/// Start renaming this place.
+	Rename(u64),
+	RenameText(String),
+	SaveRename,
+	CancelRename,
 
-    OpenLeg(Leg, Option<(String, String)>),
-    CloseLeg,
-    SetMode(Leg, TravelMode),
-    Recalculate(Leg),
-    OpenMaps(Leg),
-    Routed(RouteKey, Result<Route, String>),
-    /// Google answered a change to an event's location.
-    EventLocationSaved(Result<(), String>),
+	OpenLeg(Leg, Option<(String, String)>),
+	CloseLeg,
+	SetMode(Leg, TravelMode),
+	Recalculate(Leg),
+	OpenMaps(Leg),
+	Routed(RouteKey, Result<Route, String>),
+	/// Google answered a change to an event's location.
+	EventLocationSaved(Result<(), String>),
 }
 
 pub fn update(state: &mut State, action: Action) -> Task<Message> {
-    match action {
-        Action::Map(action) => map::update(state, action),
-        Action::Toggle => {
-            state.travel.show = !state.travel.show;
-            state.config.travel.show = state.travel.show;
-            if state.travel.show {
-                // A trip that failed is tried again when travel is turned back on.
-                state
-                    .travel
-                    .routes
-                    .retain(|_, route| !matches!(route, RouteState::Failed(_)));
-            }
-            queue_save(state)
-        }
+	match action {
+		Action::Map(action) => map::update(state, action),
+		Action::Toggle => {
+			state.travel.show = !state.travel.show;
+			state.config.travel.show = state.travel.show;
+			if state.travel.show {
+				// A trip that failed is tried again when travel is turned back on.
+				state
+					.travel
+					.routes
+					.retain(|_, route| !matches!(route, RouteState::Failed(_)));
+			}
+			queue_save(state)
+		}
 
-        Action::ApiKey(key) => {
-            state.config.travel.api_key = key;
-            // A key that was wrong may be right now.
-            state
-                .travel
-                .routes
-                .retain(|_, route| !matches!(route, RouteState::Failed(_)));
-            queue_save(state)
-        }
+		Action::ApiKey(key) => {
+			state.config.travel.api_key = key;
+			// A key that was wrong may be right now.
+			state
+				.travel
+				.routes
+				.retain(|_, route| !matches!(route, RouteState::Failed(_)));
+			queue_save(state)
+		}
 
-        Action::DefaultMode(mode) => {
-            state.config.travel.default_mode = mode;
-            queue_save(state)
-        }
+		Action::DefaultMode(mode) => {
+			state.config.travel.default_mode = mode;
+			queue_save(state)
+		}
 
-        Action::SetMapApp(app) => {
-            state.config.travel.map_app = app;
-            queue_save(state)
-        }
+		Action::SetMapApp(app) => {
+			state.config.travel.map_app = app;
+			queue_save(state)
+		}
 
-        Action::OpenPicker(target) => {
-            state.travel.picker = Some(Picker {
-                target,
-                query: String::new(),
-                results: Vec::new(),
-                searching: false,
-                searched: false,
-                error: None,
-                recents: false,
-            });
-            iced::widget::operation::focus(iced::widget::Id::new(PICKER_INPUT))
-        }
+		Action::OpenPicker(target) => {
+			state.travel.picker = Some(Picker {
+				target,
+				query: String::new(),
+				results: Vec::new(),
+				searching: false,
+				searched: false,
+				error: None,
+				recents: false,
+			});
+			iced::widget::operation::focus(iced::widget::Id::new(PICKER_INPUT))
+		}
 
-        Action::ClosePicker => {
-            state.travel.picker = None;
-            Task::none()
-        }
+		Action::ClosePicker => {
+			state.travel.picker = None;
+			Task::none()
+		}
 
-        Action::Query(query) => {
-            if let Some(picker) = &mut state.travel.picker {
-                picker.query = query;
-                picker.error = None;
-            }
-            Task::none()
-        }
+		Action::Query(query) => {
+			if let Some(picker) = &mut state.travel.picker {
+				picker.query = query;
+				picker.error = None;
+			}
+			Task::none()
+		}
 
-        Action::Search => search(state),
+		Action::Search => search(state),
 
-        Action::Searched(serial, result) => {
-            if serial != state.travel.serial {
-                return Task::none();
-            }
-            if let Some(picker) = &mut state.travel.picker {
-                picker.searching = false;
-                picker.searched = true;
-                match result {
-                    Ok(results) => {
-                        picker.results = results;
-                        picker.error = None;
-                    }
-                    Err(error) => {
-                        picker.results.clear();
-                        picker.error = Some(error);
-                    }
-                }
-            }
-            Task::none()
-        }
+		Action::Searched(serial, result) => {
+			if serial != state.travel.serial {
+				return Task::none();
+			}
+			if let Some(picker) = &mut state.travel.picker {
+				picker.searching = false;
+				picker.searched = true;
+				match result {
+					Ok(results) => {
+						picker.results = results;
+						picker.error = None;
+					}
+					Err(error) => {
+						picker.results.clear();
+						picker.error = Some(error);
+					}
+				}
+			}
+			Task::none()
+		}
 
-        Action::Choose(index) => choose(state, index),
+		Action::Choose(index) => choose(state, index),
 
-        Action::Recents => {
-            if let Some(picker) = &mut state.travel.picker {
-                picker.recents = !picker.recents;
-                picker.error = None;
-            }
-            iced::widget::operation::focus(iced::widget::Id::new(PICKER_INPUT))
-        }
+		Action::Recents => {
+			if let Some(picker) = &mut state.travel.picker {
+				picker.recents = !picker.recents;
+				picker.error = None;
+			}
+			iced::widget::operation::focus(iced::widget::Id::new(PICKER_INPUT))
+		}
 
-        Action::ChooseSaved(id) => {
-            if state.config.travel.place(id).is_none() {
-                return Task::none();
-            }
-            let Some(picker) = state.travel.picker.take() else {
-                return Task::none();
-            };
-            let save = queue_save(state);
-            let assigned = assign(state, &picker.target, Some(id));
-            Task::batch([save, assigned])
-        }
+		Action::ChooseSaved(id) => {
+			if state.config.travel.place(id).is_none() {
+				return Task::none();
+			}
+			let Some(picker) = state.travel.picker.take() else {
+				return Task::none();
+			};
+			let save = queue_save(state);
+			let assigned = assign(state, &picker.target, Some(id));
+			Task::batch([save, assigned])
+		}
 
-        Action::Favorite(id) => {
-            let Some(place) = state
-                .config
-                .travel
-                .places
-                .iter_mut()
-                .find(|place| place.id == id)
-            else {
-                return Task::none();
-            };
-            place.favorite = !place.favorite;
-            queue_save(state)
-        }
+		Action::Favorite(id) => {
+			let Some(place) = state
+				.config
+				.travel
+				.places
+				.iter_mut()
+				.find(|place| place.id == id)
+			else {
+				return Task::none();
+			};
+			place.favorite = !place.favorite;
+			queue_save(state)
+		}
 
-        Action::Clear(target) => assign(state, &target, None),
+		Action::Clear(target) => assign(state, &target, None),
 
-        Action::Rename(id) => {
-            if let Some(place) = state.config.travel.place(id) {
-                state.travel.rename = Some((id, place.name.clone()));
-            }
-            Task::none()
-        }
+		Action::Rename(id) => {
+			if let Some(place) = state.config.travel.place(id) {
+				state.travel.rename = Some((id, place.name.clone()));
+			}
+			Task::none()
+		}
 
-        Action::RenameText(text) => {
-            if let Some((_, name)) = &mut state.travel.rename {
-                *name = text;
-            }
-            Task::none()
-        }
+		Action::RenameText(text) => {
+			if let Some((_, name)) = &mut state.travel.rename {
+				*name = text;
+			}
+			Task::none()
+		}
 
-        Action::SaveRename => {
-            let Some((id, name)) = state.travel.rename.clone() else {
-                return Task::none();
-            };
-            let name = name.trim();
-            // A place without a title would be a blank row, so it keeps the
-            // edit open instead.
-            if name.is_empty() {
-                return Task::none();
-            }
-            if let Some(place) = state
-                .config
-                .travel
-                .places
-                .iter_mut()
-                .find(|place| place.id == id)
-            {
-                place.name = name.to_owned();
-            }
-            state.travel.rename = None;
-            queue_save(state)
-        }
+		Action::SaveRename => {
+			let Some((id, name)) = state.travel.rename.clone() else {
+				return Task::none();
+			};
+			let name = name.trim();
+			// A place without a title would be a blank row, so it keeps the
+			// edit open instead.
+			if name.is_empty() {
+				return Task::none();
+			}
+			if let Some(place) = state
+				.config
+				.travel
+				.places
+				.iter_mut()
+				.find(|place| place.id == id)
+			{
+				place.name = name.to_owned();
+			}
+			state.travel.rename = None;
+			queue_save(state)
+		}
 
-        Action::CancelRename => {
-            state.travel.rename = None;
-            Task::none()
-        }
+		Action::CancelRename => {
+			state.travel.rename = None;
+			Task::none()
+		}
 
-        Action::OpenLeg(leg, between) => {
-            state.travel.open = Some(Open { leg, between });
-            Task::none()
-        }
+		Action::OpenLeg(leg, between) => {
+			state.travel.open = Some(Open { leg, between });
+			Task::none()
+		}
 
-        Action::CloseLeg => {
-            state.travel.open = None;
-            Task::none()
-        }
+		Action::CloseLeg => {
+			state.travel.open = None;
+			Task::none()
+		}
 
-        Action::SetMode(leg, mode) => {
-            state.config.travel.set_mode(leg.from, leg.to, mode);
-            let fetch = fetch_missing(state, [leg]);
-            Task::batch([queue_save(state), fetch])
-        }
+		Action::SetMode(leg, mode) => {
+			state.config.travel.set_mode(leg.from, leg.to, mode);
+			let fetch = fetch_missing(state, [leg]);
+			Task::batch([queue_save(state), fetch])
+		}
 
-        Action::Recalculate(leg) => {
-            let mode = state.config.travel.mode_for(leg.from, leg.to);
-            state.travel.routes.remove(&RouteKey {
-                from: leg.from,
-                to: leg.to,
-                mode,
-            });
-            fetch_missing(state, [leg])
-        }
+		Action::Recalculate(leg) => {
+			let mode = state.config.travel.mode_for(leg.from, leg.to);
+			state.travel.routes.remove(&RouteKey {
+				from: leg.from,
+				to: leg.to,
+				mode,
+			});
+			fetch_missing(state, [leg])
+		}
 
-        Action::OpenMaps(leg) => {
-            if let Some(url) = maps_url(&state.config.travel, leg)
-                && let Err(error) = crate::calendar::oauth::open_in_browser(&url)
-            {
-                log::warn!("could not open the map: {error}");
-            }
-            Task::none()
-        }
+		Action::OpenMaps(leg) => {
+			if let Some(url) = maps_url(&state.config.travel, leg)
+				&& let Err(error) = crate::calendar::oauth::open_in_browser(&url)
+			{
+				log::warn!("could not open the map: {error}");
+			}
+			Task::none()
+		}
 
-        // A sync already running may have read the old location, which would
-        // bring a place that was just cleared back. This outdates its answer
-        // and fetches again.
-        Action::EventLocationSaved(Ok(())) => crate::app::refresh_week_after_write(state),
+		// A sync already running may have read the old location, which would
+		// bring a place that was just cleared back. This outdates its answer
+		// and fetches again.
+		Action::EventLocationSaved(Ok(())) => crate::app::refresh_week_after_write(state),
 
-        Action::EventLocationSaved(Err(error)) => {
-            // The place is kept here, so trips still work; only Google's copy
-            // of the location is behind.
-            log::warn!("could not set the event's location on Google: {error}");
-            state.calendar.error = Some(format!(
-                "The place was saved here but not on Google: {error}"
-            ));
-            Task::none()
-        }
+		Action::EventLocationSaved(Err(error)) => {
+			// The place is kept here, so trips still work; only Google's copy
+			// of the location is behind.
+			log::warn!("could not set the event's location on Google: {error}");
+			state.calendar.error = Some(format!(
+				"The place was saved here but not on Google: {error}"
+			));
+			Task::none()
+		}
 
-        Action::Routed(key, result) => match result {
-            Ok(route) => {
-                state.travel.routes.insert(key, RouteState::Ready(route));
-                save_cache(state)
-            }
-            Err(error) => {
-                state.travel.routes.insert(key, RouteState::Failed(error));
-                Task::none()
-            }
-        },
-    }
+		Action::Routed(key, result) => match result {
+			Ok(route) => {
+				state.travel.routes.insert(key, RouteState::Ready(route));
+				save_cache(state)
+			}
+			Err(error) => {
+				state.travel.routes.insert(key, RouteState::Failed(error));
+				Task::none()
+			}
+		},
+	}
 }
 
 /// The id of the search box, so opening a search can focus it.
 pub const PICKER_INPUT: &str = "travel-search";
 
 fn search(state: &mut State) -> Task<Message> {
-    let Some(picker) = &mut state.travel.picker else {
-        return Task::none();
-    };
-    let query = picker.query.trim().to_owned();
-    if query.is_empty() || picker.searching {
-        return Task::none();
-    }
-    let Some(key) = state.config.travel.key() else {
-        picker.error = Some(NO_KEY.to_owned());
-        return Task::none();
-    };
+	let Some(picker) = &mut state.travel.picker else {
+		return Task::none();
+	};
+	let query = picker.query.trim().to_owned();
+	if query.is_empty() || picker.searching {
+		return Task::none();
+	}
+	let Some(key) = state.config.travel.key() else {
+		picker.error = Some(NO_KEY.to_owned());
+		return Task::none();
+	};
 
-    picker.searching = true;
-    picker.error = None;
-    state.travel.serial += 1;
-    let serial = state.travel.serial;
+	picker.searching = true;
+	picker.error = None;
+	state.travel.serial += 1;
+	let serial = state.travel.serial;
 
-    let proximity = state
-        .config
-        .travel
-        .home
-        .and_then(|id| state.config.travel.place(id))
-        .map(|home| (home.lng, home.lat));
-    blocking::run(move || search_places(&key, &query, proximity))
-        .map(move |result| Message::Travel(Action::Searched(serial, result)))
+	let proximity = state
+		.config
+		.travel
+		.home
+		.and_then(|id| state.config.travel.place(id))
+		.map(|home| (home.lng, home.lat));
+	blocking::run(move || search_places(&key, &query, proximity))
+		.map(move |result| Message::Travel(Action::Searched(serial, result)))
 }
 
 /// What is shown when a key is needed and there is none.
 pub const NO_KEY: &str = "Add a Mapbox access token in Settings first.";
 
 fn choose(state: &mut State, index: usize) -> Task<Message> {
-    let Some(picker) = state.travel.picker.take() else {
-        return Task::none();
-    };
-    let Some(found) = picker.results.get(index) else {
-        state.travel.picker = Some(picker);
-        return Task::none();
-    };
+	let Some(picker) = state.travel.picker.take() else {
+		return Task::none();
+	};
+	let Some(found) = picker.results.get(index) else {
+		state.travel.picker = Some(picker);
+		return Task::none();
+	};
 
-    let id = state.config.travel.add_place(
-        &found.name,
-        &found.address,
-        &found.place_id,
-        found.lat,
-        found.lng,
-    );
-    let save = queue_save(state);
-    let assigned = assign(state, &picker.target, Some(id));
+	let id = state.config.travel.add_place(
+		&found.name,
+		&found.address,
+		&found.place_id,
+		found.lat,
+		found.lng,
+	);
+	let save = queue_save(state);
+	let assigned = assign(state, &picker.target, Some(id));
 
-    Task::batch([save, assigned])
+	Task::batch([save, assigned])
 }
 
 /// Points the target at a place, or at none.
 fn assign(state: &mut State, target: &PickTarget, place: Option<u64>) -> Task<Message> {
-    match target {
-        PickTarget::Home => {
-            state.config.travel.home = place;
-            queue_save(state)
-        }
-        PickTarget::Task(id) => {
-            crate::timeblocking::update(state, tb::Action::Location(id.clone(), place))
-        }
-        PickTarget::Event(id) => set_event_place(state, id, place),
-    }
+	match target {
+		PickTarget::Home => {
+			state.config.travel.home = place;
+			queue_save(state)
+		}
+		PickTarget::Task(id) => {
+			crate::timeblocking::update(state, tb::Action::Location(id.clone(), place))
+		}
+		PickTarget::Event(id) => set_event_place(state, id, place),
+	}
 }
 
 /// Gives a calendar event a place, or takes it away. The choice is kept here,
 /// so trips are known at once, and the place's name and address are written
 /// to the event's location on Google so it reads the same there.
 fn set_event_place(state: &mut State, id: &str, place: Option<u64>) -> Task<Message> {
-    let Some(calendar_id) = state
-        .calendar
-        .event(id)
-        .map(|event| event.calendar_id.clone())
-    else {
-        return Task::none();
-    };
+	let Some(calendar_id) = state
+		.calendar
+		.event(id)
+		.map(|event| event.calendar_id.clone())
+	else {
+		return Task::none();
+	};
 
-    let text = place
-        .and_then(|id| state.config.travel.place(id))
-        .map(location_text)
-        .unwrap_or_default();
+	let text = place
+		.and_then(|id| state.config.travel.place(id))
+		.map(location_text)
+		.unwrap_or_default();
 
-    match place {
-        Some(place) => {
-            state
-                .config
-                .travel
-                .event_places
-                .insert(id.to_owned(), place);
-        }
-        None => {
-            state.config.travel.event_places.remove(id);
-        }
-    }
-    state.calendar.set_location(id, &text);
-    let save = queue_save(state);
+	match place {
+		Some(place) => {
+			state
+				.config
+				.travel
+				.event_places
+				.insert(id.to_owned(), place);
+		}
+		None => {
+			state.config.travel.event_places.remove(id);
+		}
+	}
+	state.calendar.set_location(id, &text);
+	let save = queue_save(state);
 
-    let id = id.to_owned();
-    let write =
-        blocking::run(move || crate::calendar::set_event_location(&calendar_id, &id, &text))
-            .map(|result| Message::Travel(Action::EventLocationSaved(result)));
+	let id = id.to_owned();
+	let write =
+		blocking::run(move || crate::calendar::set_event_location(&calendar_id, &id, &text))
+			.map(|result| Message::Travel(Action::EventLocationSaved(result)));
 
-    Task::batch([save, write])
+	Task::batch([save, write])
 }
 
 /// Works out whichever trips the day view or the open card needs and does
 /// not have yet. Runs after every message, so a synced event, a day change
 /// or a new location all find their trips without each having to ask.
 pub fn reconcile(state: &mut State) -> Task<Message> {
-    let mut legs: Vec<Leg> = Vec::new();
+	let mut legs: Vec<Leg> = Vec::new();
 
-    if state.travel.show {
-        if state.range_view_active() {
-            for day in state.calendar_dates() {
-                legs.extend(day_hops(state, day).into_iter().map(|hop| hop.leg));
-            }
-        } else {
-            legs.extend(
-                day_hops(state, state.calendar.day)
-                    .into_iter()
-                    .map(|hop| hop.leg),
-            );
-        }
-    }
-    if let Some(open) = &state.travel.open {
-        legs.push(open.leg);
-    }
+	if state.travel.show {
+		if state.range_view_active() {
+			for day in state.calendar_dates() {
+				legs.extend(day_hops(state, day).into_iter().map(|hop| hop.leg));
+			}
+		} else {
+			legs.extend(
+				day_hops(state, state.calendar.day)
+					.into_iter()
+					.map(|hop| hop.leg),
+			);
+		}
+	}
+	if let Some(open) = &state.travel.open {
+		legs.push(open.leg);
+	}
 
-    publish_routes(state);
-    fetch_missing(state, legs)
+	publish_routes(state);
+	fetch_missing(state, legs)
 }
 
 /// Copies the trips worked out so far into the config, which is how they reach
 /// the phone: it draws them without asking Mapbox. Runs from `reconcile`, so
 /// the trips already cached at boot go out as well as new ones.
 fn publish_routes(state: &mut State) {
-    let mut changed = false;
-    for (key, route) in &state.travel.routes {
-        let RouteState::Ready(route) = route else {
-            continue;
-        };
-        let saved = SavedRoute {
-            from: key.from,
-            to: key.to,
-            mode: key.mode,
-            seconds: route.seconds,
-            meters: route.meters,
-        };
-        let routes = &mut state.config.travel.routes;
-        match routes
-            .iter_mut()
-            .find(|old| old.from == key.from && old.to == key.to && old.mode == key.mode)
-        {
-            Some(old) if *old == saved => {}
-            Some(old) => {
-                *old = saved;
-                changed = true;
-            }
-            None => {
-                routes.push(saved);
-                changed = true;
-            }
-        }
-    }
-    if changed {
-        // The routes map has no order, and the file should not churn with it.
-        state
-            .config
-            .travel
-            .routes
-            .sort_by_key(|route| (route.from, route.to, route.mode.profile()));
-        let _ = queue_save(state);
-    }
+	let mut changed = false;
+	for (key, route) in &state.travel.routes {
+		let RouteState::Ready(route) = route else {
+			continue;
+		};
+		let saved = SavedRoute {
+			from: key.from,
+			to: key.to,
+			mode: key.mode,
+			seconds: route.seconds,
+			meters: route.meters,
+		};
+		let routes = &mut state.config.travel.routes;
+		match routes
+			.iter_mut()
+			.find(|old| old.from == key.from && old.to == key.to && old.mode == key.mode)
+		{
+			Some(old) if *old == saved => {}
+			Some(old) => {
+				*old = saved;
+				changed = true;
+			}
+			None => {
+				routes.push(saved);
+				changed = true;
+			}
+		}
+	}
+	if changed {
+		// The routes map has no order, and the file should not churn with it.
+		state
+			.config
+			.travel
+			.routes
+			.sort_by_key(|route| (route.from, route.to, route.mode.profile()));
+		let _ = queue_save(state);
+	}
 }
 
 /// Asks Mapbox for each trip that has not been asked for.
 fn fetch_missing(state: &mut State, legs: impl IntoIterator<Item = Leg>) -> Task<Message> {
-    let Some(key) = state.config.travel.key() else {
-        return Task::none();
-    };
+	let Some(key) = state.config.travel.key() else {
+		return Task::none();
+	};
 
-    let mut tasks = Vec::new();
-    for leg in legs {
-        let mode = state.config.travel.mode_for(leg.from, leg.to);
-        let route = RouteKey {
-            from: leg.from,
-            to: leg.to,
-            mode,
-        };
-        if state.travel.routes.contains_key(&route) {
-            continue;
-        }
-        let (Some(from), Some(to)) = (
-            state.config.travel.place(leg.from).cloned(),
-            state.config.travel.place(leg.to).cloned(),
-        ) else {
-            continue;
-        };
+	let mut tasks = Vec::new();
+	for leg in legs {
+		let mode = state.config.travel.mode_for(leg.from, leg.to);
+		let route = RouteKey {
+			from: leg.from,
+			to: leg.to,
+			mode,
+		};
+		if state.travel.routes.contains_key(&route) {
+			continue;
+		}
+		let (Some(from), Some(to)) = (
+			state.config.travel.place(leg.from).cloned(),
+			state.config.travel.place(leg.to).cloned(),
+		) else {
+			continue;
+		};
 
-        state.travel.routes.insert(route, RouteState::Loading);
-        let key = key.clone();
-        tasks.push(
-            blocking::run(move || compute_route(&key, &from, &to, mode))
-                .map(move |result| Message::Travel(Action::Routed(route, result))),
-        );
-    }
+		state.travel.routes.insert(route, RouteState::Loading);
+		let key = key.clone();
+		tasks.push(
+			blocking::run(move || compute_route(&key, &from, &to, mode))
+				.map(move |result| Message::Travel(Action::Routed(route, result))),
+		);
+	}
 
-    Task::batch(tasks)
+	Task::batch(tasks)
 }
 
 fn save_cache(state: &State) -> Task<Message> {
-    let Some(path) = state.travel.cache.clone() else {
-        return Task::none();
-    };
-    let ready: Vec<(RouteKey, Route)> = state
-        .travel
-        .routes
-        .iter()
-        .filter_map(|(key, route)| match route {
-            RouteState::Ready(route) => Some((*key, *route)),
-            _ => None,
-        })
-        .collect();
+	let Some(path) = state.travel.cache.clone() else {
+		return Task::none();
+	};
+	let ready: Vec<(RouteKey, Route)> = state
+		.travel
+		.routes
+		.iter()
+		.filter_map(|(key, route)| match route {
+			RouteState::Ready(route) => Some((*key, *route)),
+			_ => None,
+		})
+		.collect();
 
-    blocking::run(move || {
-        if let Err(error) = write_cache(&path, &ready) {
-            log::warn!("could not save travel times: {error}");
-        }
-    })
-    .map(|()| Message::Ignored)
+	blocking::run(move || {
+		if let Err(error) = write_cache(&path, &ready) {
+			log::warn!("could not save travel times: {error}");
+		}
+	})
+	.map(|()| Message::Ignored)
 }
 
 // ---------------------------------------------------------------------------
@@ -642,54 +642,54 @@ fn save_cache(state: &State) -> Task<Message> {
 /// Google keeps, so it is matched against the saved places' titles and
 /// addresses.
 pub fn place_of(travel: &TravelSettings, event: &Event) -> Option<u64> {
-    timeslay_core::places::place_of(&travel.places, &travel.event_places, event)
+	timeslay_core::places::place_of(&travel.places, &travel.event_places, event)
 }
 
 /// The trips a day needs, in order, given its events in the order they happen.
 pub fn hops(travel: &TravelSettings, stops: &[Stop]) -> Vec<Hop> {
-    timeslay_core::places::hops(&travel.places, travel.home, stops)
+	timeslay_core::places::hops(&travel.places, travel.home, stops)
 }
 
 /// The trips of one day, from the events the grid draws for it.
 pub fn day_hops(state: &State, day: NaiveDate) -> Vec<Hop> {
-    let stops: Vec<Stop> = state
-        .calendar
-        .timed_events_on(day, &state.config.calendar)
-        .into_iter()
-        .map(|event| Stop {
-            id: event.id.clone(),
-            title: event.title.clone(),
-            place: place_of(&state.config.travel, event),
-        })
-        .collect();
+	let stops: Vec<Stop> = state
+		.calendar
+		.timed_events_on(day, &state.config.calendar)
+		.into_iter()
+		.map(|event| Stop {
+			id: event.id.clone(),
+			title: event.title.clone(),
+			place: place_of(&state.config.travel, event),
+		})
+		.collect();
 
-    hops(&state.config.travel, &stops)
+	hops(&state.config.travel, &stops)
 }
 
 /// The different trips the day in view makes, in the order it makes them.
 pub fn day_connections(state: &State) -> Vec<Leg> {
-    unique(day_hops(state, state.calendar.day))
+	unique(day_hops(state, state.calendar.day))
 }
 
 /// The different trips every loaded day makes, earliest day first.
 pub fn all_connections(state: &State) -> Vec<Leg> {
-    unique(
-        state
-            .calendar
-            .loaded_days()
-            .into_iter()
-            .flat_map(|day| day_hops(state, day)),
-    )
+	unique(
+		state
+			.calendar
+			.loaded_days()
+			.into_iter()
+			.flat_map(|day| day_hops(state, day)),
+	)
 }
 
 fn unique(hops: impl IntoIterator<Item = Hop>) -> Vec<Leg> {
-    let mut legs: Vec<Leg> = Vec::new();
-    for hop in hops {
-        if !legs.contains(&hop.leg) {
-            legs.push(hop.leg);
-        }
-    }
-    legs
+	let mut legs: Vec<Leg> = Vec::new();
+	for hop in hops {
+		if !legs.contains(&hop.leg) {
+			legs.push(hop.leg);
+		}
+	}
+	legs
 }
 
 // ---------------------------------------------------------------------------
@@ -699,70 +699,70 @@ fn unique(hops: impl IntoIterator<Item = Hop>) -> Vec<Leg> {
 /// What is known about a trip.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Summary {
-    /// There is no token to ask Mapbox with.
-    NoKey,
-    /// Nobody has asked yet.
-    Unknown,
-    Loading,
-    Failed(String),
-    Ready(Route),
+	/// There is no token to ask Mapbox with.
+	NoKey,
+	/// Nobody has asked yet.
+	Unknown,
+	Loading,
+	Failed(String),
+	Ready(Route),
 }
 
 pub fn summary(state: &State, leg: Leg) -> Summary {
-    let mode = state.config.travel.mode_for(leg.from, leg.to);
-    match state.travel.state(RouteKey {
-        from: leg.from,
-        to: leg.to,
-        mode,
-    }) {
-        Some(RouteState::Ready(route)) => Summary::Ready(*route),
-        Some(RouteState::Loading) => Summary::Loading,
-        Some(RouteState::Failed(error)) => Summary::Failed(error.clone()),
-        None if state.config.travel.key().is_none() => Summary::NoKey,
-        None => Summary::Unknown,
-    }
+	let mode = state.config.travel.mode_for(leg.from, leg.to);
+	match state.travel.state(RouteKey {
+		from: leg.from,
+		to: leg.to,
+		mode,
+	}) {
+		Some(RouteState::Ready(route)) => Summary::Ready(*route),
+		Some(RouteState::Loading) => Summary::Loading,
+		Some(RouteState::Failed(error)) => Summary::Failed(error.clone()),
+		None if state.config.travel.key().is_none() => Summary::NoKey,
+		None => Summary::Unknown,
+	}
 }
 
 /// The one line a trip is given on the day view and in lists.
 pub fn short_label(state: &State, leg: Leg) -> String {
-    let mode = state.config.travel.mode_for(leg.from, leg.to);
-    match summary(state, leg) {
-        Summary::Ready(route) => format!(
-            "{mode} · {}",
-            route_label(route, state.config.appearance.distance_unit)
-        ),
-        Summary::Loading | Summary::Unknown => format!("{mode} · calculating…"),
-        Summary::Failed(_) => format!("{mode} · no route"),
-        Summary::NoKey => "Add a Mapbox token in Settings".to_owned(),
-    }
+	let mode = state.config.travel.mode_for(leg.from, leg.to);
+	match summary(state, leg) {
+		Summary::Ready(route) => format!(
+			"{mode} · {}",
+			route_label(route, state.config.appearance.distance_unit)
+		),
+		Summary::Loading | Summary::Unknown => format!("{mode} · calculating…"),
+		Summary::Failed(_) => format!("{mode} · no route"),
+		Summary::NoKey => "Add a Mapbox token in Settings".to_owned(),
+	}
 }
 
 /// A page of the chosen map showing the trip. Mapbox has no page of its own
 /// to send someone to. Both pages are given coordinates, as that is what a
 /// place is known by here.
 fn maps_url(travel: &TravelSettings, leg: Leg) -> Option<String> {
-    let from = travel.place(leg.from)?;
-    let to = travel.place(leg.to)?;
-    let mode = travel.mode_for(leg.from, leg.to);
+	let from = travel.place(leg.from)?;
+	let to = travel.place(leg.to)?;
+	let mode = travel.mode_for(leg.from, leg.to);
 
-    Some(match travel.map_app {
-        MapApp::OpenStreetMap => format!(
-            "https://www.openstreetmap.org/directions?engine={}&route={}%2C{}%3B{}%2C{}",
-            mode.osm_engine(),
-            from.lat,
-            from.lng,
-            to.lat,
-            to.lng,
-        ),
-        MapApp::GoogleMaps => format!(
-            "https://www.google.com/maps/dir/?api=1&origin={}%2C{}&destination={}%2C{}&travelmode={}",
-            from.lat,
-            from.lng,
-            to.lat,
-            to.lng,
-            mode.google_travelmode(),
-        ),
-    })
+	Some(match travel.map_app {
+		MapApp::OpenStreetMap => format!(
+			"https://www.openstreetmap.org/directions?engine={}&route={}%2C{}%3B{}%2C{}",
+			mode.osm_engine(),
+			from.lat,
+			from.lng,
+			to.lat,
+			to.lng,
+		),
+		MapApp::GoogleMaps => format!(
+			"https://www.google.com/maps/dir/?api=1&origin={}%2C{}&destination={}%2C{}&travelmode={}",
+			from.lat,
+			from.lng,
+			to.lat,
+			to.lng,
+			mode.google_travelmode(),
+		),
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -772,43 +772,43 @@ fn maps_url(travel: &TravelSettings, leg: Leg) -> Option<String> {
 /// How long and how far a trip is, from Mapbox Directions. Blocking: call it
 /// from [`crate::blocking::run`].
 pub fn compute_route(
-    key: &str,
-    from: &Place,
-    to: &Place,
-    mode: TravelMode,
+	key: &str,
+	from: &Place,
+	to: &Place,
+	mode: TravelMode,
 ) -> Result<Route, String> {
-    parse_route(&get(&route_url(key, from, to, mode))?)
+	parse_route(&get(&route_url(key, from, to, mode))?)
 }
 
 /// The Directions request for a trip. Mapbox takes coordinates only, as
 /// `longitude,latitude` pairs. Its route distance is always returned in meters;
 /// display units must not affect this request or the cache key.
 pub fn route_url(key: &str, from: &Place, to: &Place, mode: TravelMode) -> String {
-    format!(
-        "{DIRECTIONS_URL}/{}/{},{};{},{}?overview=false&access_token={}",
-        mode.profile(),
-        from.lng,
-        from.lat,
-        to.lng,
-        to.lat,
-        urlencoding::encode(key),
-    )
+	format!(
+		"{DIRECTIONS_URL}/{}/{},{};{},{}?overview=false&access_token={}",
+		mode.profile(),
+		from.lng,
+		from.lat,
+		to.lng,
+		to.lat,
+		urlencoding::encode(key),
+	)
 }
 
 pub fn parse_route(response: &Value) -> Result<Route, String> {
-    let route = response["routes"]
-        .as_array()
-        .and_then(|routes| routes.first())
-        .ok_or("Mapbox found no route between these places")?;
+	let route = response["routes"]
+		.as_array()
+		.and_then(|routes| routes.first())
+		.ok_or("Mapbox found no route between these places")?;
 
-    let seconds = route["duration"]
-        .as_f64()
-        .ok_or("Mapbox did not say how long the trip takes")?;
+	let seconds = route["duration"]
+		.as_f64()
+		.ok_or("Mapbox did not say how long the trip takes")?;
 
-    Ok(Route {
-        seconds: seconds.round().max(0.0) as u32,
-        meters: route["distance"].as_f64().unwrap_or(0.0).round().max(0.0) as u32,
-    })
+	Ok(Route {
+		seconds: seconds.round().max(0.0) as u32,
+		meters: route["distance"].as_f64().unwrap_or(0.0).round().max(0.0) as u32,
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -817,871 +817,871 @@ pub fn parse_route(response: &Value) -> Result<Route, String> {
 
 #[derive(Serialize, Deserialize)]
 struct Stored {
-    from: u64,
-    to: u64,
-    mode: TravelMode,
-    seconds: u32,
-    meters: u32,
+	from: u64,
+	to: u64,
+	mode: TravelMode,
+	seconds: u32,
+	meters: u32,
 }
 
 fn read_cache(path: &Path) -> Vec<(RouteKey, Route)> {
-    let stored: Vec<Stored> = crate::task_db::read_document(path, crate::task_db::keys::ROUTES)
-        .ok()
-        .flatten()
-        .unwrap_or_default();
+	let stored: Vec<Stored> = crate::task_db::read_document(path, crate::task_db::keys::ROUTES)
+		.ok()
+		.flatten()
+		.unwrap_or_default();
 
-    stored
-        .into_iter()
-        .map(|trip| {
-            (
-                RouteKey {
-                    from: trip.from,
-                    to: trip.to,
-                    mode: trip.mode,
-                },
-                Route {
-                    seconds: trip.seconds,
-                    meters: trip.meters,
-                },
-            )
-        })
-        .collect()
+	stored
+		.into_iter()
+		.map(|trip| {
+			(
+				RouteKey {
+					from: trip.from,
+					to: trip.to,
+					mode: trip.mode,
+				},
+				Route {
+					seconds: trip.seconds,
+					meters: trip.meters,
+				},
+			)
+		})
+		.collect()
 }
 
 fn write_cache(path: &Path, routes: &[(RouteKey, Route)]) -> std::io::Result<()> {
-    let stored: Vec<Stored> = routes
-        .iter()
-        .map(|(key, route)| Stored {
-            from: key.from,
-            to: key.to,
-            mode: key.mode,
-            seconds: route.seconds,
-            meters: route.meters,
-        })
-        .collect();
+	let stored: Vec<Stored> = routes
+		.iter()
+		.map(|(key, route)| Stored {
+			from: key.from,
+			to: key.to,
+			mode: key.mode,
+			seconds: route.seconds,
+			meters: route.meters,
+		})
+		.collect();
 
-    crate::task_db::write_document(path, crate::task_db::keys::ROUTES, &stored)
+	crate::task_db::write_document(path, crate::task_db::keys::ROUTES, &stored)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::config::Config;
+	use super::*;
+	use crate::config::Config;
 
-    use serde_json::json;
+	use serde_json::json;
 
-    fn state() -> State {
-        State::blank()
-    }
+	fn state() -> State {
+		State::blank()
+	}
 
-    fn place(travel: &mut TravelSettings, name: &str, mapbox: &str) -> u64 {
-        travel.add_place(name, &format!("{name}, 1 Main St"), mapbox, 1.0, 2.0)
-    }
+	fn place(travel: &mut TravelSettings, name: &str, mapbox: &str) -> u64 {
+		travel.add_place(name, &format!("{name}, 1 Main St"), mapbox, 1.0, 2.0)
+	}
 
-    fn stop(id: &str, place: Option<u64>) -> Stop {
-        Stop {
-            id: id.to_owned(),
-            title: id.to_owned(),
-            place,
-        }
-    }
+	fn stop(id: &str, place: Option<u64>) -> Stop {
+		Stop {
+			id: id.to_owned(),
+			title: id.to_owned(),
+			place,
+		}
+	}
 
-    fn found(name: &str) -> Found {
-        Found {
-            place_id: format!("mapbox-{name}"),
-            name: name.to_owned(),
-            address: format!("{name}, 1 Main St"),
-            lat: 10.0,
-            lng: 20.0,
-        }
-    }
+	fn found(name: &str) -> Found {
+		Found {
+			place_id: format!("mapbox-{name}"),
+			name: name.to_owned(),
+			address: format!("{name}, 1 Main St"),
+			lat: 10.0,
+			lng: 20.0,
+		}
+	}
 
-    #[test]
-    fn each_event_is_reached_from_the_one_before_it() {
-        let mut travel = TravelSettings::default();
-        let a = place(&mut travel, "A", "g-a");
-        let b = place(&mut travel, "B", "g-b");
-        let c = place(&mut travel, "C", "g-c");
+	#[test]
+	fn each_event_is_reached_from_the_one_before_it() {
+		let mut travel = TravelSettings::default();
+		let a = place(&mut travel, "A", "g-a");
+		let b = place(&mut travel, "B", "g-b");
+		let c = place(&mut travel, "C", "g-c");
 
-        let found = hops(
-            &travel,
-            &[stop("a", Some(a)), stop("b", Some(b)), stop("c", Some(c))],
-        );
-        let legs: Vec<_> = found.iter().map(|hop| hop.leg).collect();
+		let found = hops(
+			&travel,
+			&[stop("a", Some(a)), stop("b", Some(b)), stop("c", Some(c))],
+		);
+		let legs: Vec<_> = found.iter().map(|hop| hop.leg).collect();
 
-        assert_eq!(
-            legs,
-            [Leg { from: a, to: b }, Leg { from: b, to: c }],
-            "A to B and B to C, never A to C"
-        );
-        assert_eq!(found[0].before, "b");
-        assert_eq!(found[1].before, "c");
-    }
+		assert_eq!(
+			legs,
+			[Leg { from: a, to: b }, Leg { from: b, to: c }],
+			"A to B and B to C, never A to C"
+		);
+		assert_eq!(found[0].before, "b");
+		assert_eq!(found[1].before, "c");
+	}
 
-    #[test]
-    fn staying_put_and_not_knowing_where_make_no_trip_to_that_event() {
-        let mut travel = TravelSettings::default();
-        let a = place(&mut travel, "A", "g-a");
-        let b = place(&mut travel, "B", "g-b");
+	#[test]
+	fn staying_put_and_not_knowing_where_make_no_trip_to_that_event() {
+		let mut travel = TravelSettings::default();
+		let a = place(&mut travel, "A", "g-a");
+		let b = place(&mut travel, "B", "g-b");
 
-        let same = hops(&travel, &[stop("1", Some(a)), stop("2", Some(a))]);
-        assert!(same.is_empty());
+		let same = hops(&travel, &[stop("1", Some(a)), stop("2", Some(a))]);
+		assert!(same.is_empty());
 
-        // The event in the middle has no place, so it has no trip, and the
-        // last is reached from the nearest earlier event that has one.
-        let gap = hops(
-            &travel,
-            &[stop("1", Some(a)), stop("2", None), stop("3", Some(b))],
-        );
-        assert_eq!(gap.len(), 1);
-        assert_eq!(gap[0].leg, Leg { from: a, to: b });
-        assert_eq!(gap[0].before, "3");
-        assert_eq!(gap[0].from_title, "1");
-    }
+		// The event in the middle has no place, so it has no trip, and the
+		// last is reached from the nearest earlier event that has one.
+		let gap = hops(
+			&travel,
+			&[stop("1", Some(a)), stop("2", None), stop("3", Some(b))],
+		);
+		assert_eq!(gap.len(), 1);
+		assert_eq!(gap[0].leg, Leg { from: a, to: b });
+		assert_eq!(gap[0].before, "3");
+		assert_eq!(gap[0].from_title, "1");
+	}
 
-    #[test]
-    fn the_first_event_is_reached_from_home() {
-        let mut travel = TravelSettings::default();
-        let home = place(&mut travel, "Home", "g-home");
-        let work = place(&mut travel, "Work", "g-work");
-        let gym = place(&mut travel, "Gym", "g-gym");
-        travel.home = Some(home);
+	#[test]
+	fn the_first_event_is_reached_from_home() {
+		let mut travel = TravelSettings::default();
+		let home = place(&mut travel, "Home", "g-home");
+		let work = place(&mut travel, "Work", "g-work");
+		let gym = place(&mut travel, "Gym", "g-gym");
+		travel.home = Some(home);
 
-        let found = hops(&travel, &[stop("w", Some(work)), stop("g", Some(gym))]);
+		let found = hops(&travel, &[stop("w", Some(work)), stop("g", Some(gym))]);
 
-        assert_eq!(found.len(), 2);
-        assert_eq!(
-            found[0].leg,
-            Leg {
-                from: home,
-                to: work
-            }
-        );
-        assert_eq!(found[0].before, "w");
-        assert_eq!(found[0].from_title, START_OF_DAY);
-        assert_eq!(
-            found[1].leg,
-            Leg {
-                from: work,
-                to: gym
-            }
-        );
+		assert_eq!(found.len(), 2);
+		assert_eq!(
+			found[0].leg,
+			Leg {
+				from: home,
+				to: work
+			}
+		);
+		assert_eq!(found[0].before, "w");
+		assert_eq!(found[0].from_title, START_OF_DAY);
+		assert_eq!(
+			found[1].leg,
+			Leg {
+				from: work,
+				to: gym
+			}
+		);
 
-        // Home is the source for an event with a place when nothing earlier has one.
-        let later = hops(&travel, &[stop("x", None), stop("w", Some(work))]);
-        assert_eq!(later.len(), 1);
-        assert_eq!(later[0].leg.from, home);
+		// Home is the source for an event with a place when nothing earlier has one.
+		let later = hops(&travel, &[stop("x", None), stop("w", Some(work))]);
+		assert_eq!(later.len(), 1);
+		assert_eq!(later[0].leg.from, home);
 
-        // An event at home needs no trip, and no events need none.
-        assert!(hops(&travel, &[stop("h", Some(home))]).is_empty());
-        assert!(hops(&travel, &[]).is_empty());
-    }
+		// An event at home needs no trip, and no events need none.
+		assert!(hops(&travel, &[stop("h", Some(home))]).is_empty());
+		assert!(hops(&travel, &[]).is_empty());
+	}
 
-    #[test]
-    fn a_default_place_that_was_removed_makes_no_trip() {
-        let mut travel = TravelSettings::default();
-        let work = place(&mut travel, "Work", "g-work");
-        travel.home = Some(12345);
+	#[test]
+	fn a_default_place_that_was_removed_makes_no_trip() {
+		let mut travel = TravelSettings::default();
+		let work = place(&mut travel, "Work", "g-work");
+		travel.home = Some(12345);
 
-        assert!(hops(&travel, &[stop("w", Some(work))]).is_empty());
-    }
+		assert!(hops(&travel, &[stop("w", Some(work))]).is_empty());
+	}
 
-    #[test]
-    fn a_calendar_event_is_matched_to_a_place_by_its_location_text() {
-        let mut travel = TravelSettings::default();
-        let work = place(&mut travel, "Work", "g-work");
+	#[test]
+	fn a_calendar_event_is_matched_to_a_place_by_its_location_text() {
+		let mut travel = TravelSettings::default();
+		let work = place(&mut travel, "Work", "g-work");
 
-        let mut event = crate::calendar::sample_snapshot().events.remove(0);
-        event.id = "event-1".into();
-        event.calendar_id = "primary".into();
+		let mut event = crate::calendar::sample_snapshot().events.remove(0);
+		event.id = "event-1".into();
+		event.calendar_id = "primary".into();
 
-        for text in ["work", "  Work  ", "Work, 1 Main St", "WORK,   1 main st"] {
-            event.details.location = text.into();
-            assert_eq!(place_of(&travel, &event), Some(work), "{text:?}");
-        }
+		for text in ["work", "  Work  ", "Work, 1 Main St", "WORK,   1 main st"] {
+			event.details.location = text.into();
+			assert_eq!(place_of(&travel, &event), Some(work), "{text:?}");
+		}
 
-        event.details.location = "Elsewhere".into();
-        assert_eq!(place_of(&travel, &event), None);
-        event.details.location = String::new();
-        assert_eq!(place_of(&travel, &event), None);
-    }
+		event.details.location = "Elsewhere".into();
+		assert_eq!(place_of(&travel, &event), None);
+		event.details.location = String::new();
+		assert_eq!(place_of(&travel, &event), None);
+	}
 
-    #[test]
-    fn a_calendar_event_given_a_place_keeps_it_whatever_google_says() {
-        let mut state = State::blank();
-        state.calendar = crate::calendar::Store::with_snapshot(crate::calendar::sample_snapshot());
-        let work = place(&mut state.config.travel, "Work", "g-work");
-        state.config.travel.places[0].address = "1 Main St".into();
+	#[test]
+	fn a_calendar_event_given_a_place_keeps_it_whatever_google_says() {
+		let mut state = State::blank();
+		state.calendar = crate::calendar::Store::with_snapshot(crate::calendar::sample_snapshot());
+		let work = place(&mut state.config.travel, "Work", "g-work");
+		state.config.travel.places[0].address = "1 Main St".into();
 
-        let _ = update(
-            &mut state,
-            Action::OpenPicker(PickTarget::Event("standup".into())),
-        );
-        state.travel.picker.as_mut().unwrap().results = vec![Found {
-            place_id: "g-work".into(),
-            name: "Work".into(),
-            address: "1 Main St".into(),
-            lat: 0.0,
-            lng: 0.0,
-        }];
-        let _ = update(&mut state, Action::Choose(0));
+		let _ = update(
+			&mut state,
+			Action::OpenPicker(PickTarget::Event("standup".into())),
+		);
+		state.travel.picker.as_mut().unwrap().results = vec![Found {
+			place_id: "g-work".into(),
+			name: "Work".into(),
+			address: "1 Main St".into(),
+			lat: 0.0,
+			lng: 0.0,
+		}];
+		let _ = update(&mut state, Action::Choose(0));
 
-        // The place is remembered and the event's own location reads like it.
-        assert_eq!(state.config.travel.event_places.get("standup"), Some(&work));
-        let event = state.calendar.event("standup").unwrap();
-        assert_eq!(event.details.location, "Work, 1 Main St");
-        assert_eq!(place_of(&state.config.travel, event), Some(work));
+		// The place is remembered and the event's own location reads like it.
+		assert_eq!(state.config.travel.event_places.get("standup"), Some(&work));
+		let event = state.calendar.event("standup").unwrap();
+		assert_eq!(event.details.location, "Work, 1 Main St");
+		assert_eq!(place_of(&state.config.travel, event), Some(work));
 
-        // A location typed in Google later does not undo the choice.
-        state.calendar.set_location("standup", "Room 4");
-        let event = state.calendar.event("standup").unwrap();
-        assert_eq!(place_of(&state.config.travel, event), Some(work));
+		// A location typed in Google later does not undo the choice.
+		state.calendar.set_location("standup", "Room 4");
+		let event = state.calendar.event("standup").unwrap();
+		assert_eq!(place_of(&state.config.travel, event), Some(work));
 
-        // Clearing removes both.
-        let _ = update(
-            &mut state,
-            Action::Clear(PickTarget::Event("standup".into())),
-        );
-        assert!(state.config.travel.event_places.is_empty());
-        let event = state.calendar.event("standup").unwrap();
-        assert_eq!(event.details.location, "");
-        assert_eq!(place_of(&state.config.travel, event), None);
+		// Clearing removes both.
+		let _ = update(
+			&mut state,
+			Action::Clear(PickTarget::Event("standup".into())),
+		);
+		assert!(state.config.travel.event_places.is_empty());
+		let event = state.calendar.event("standup").unwrap();
+		assert_eq!(event.details.location, "");
+		assert_eq!(place_of(&state.config.travel, event), None);
 
-        // Only a choice made here is written down: an untouched file stays as it was.
-        assert!(
-            !toml::to_string(&state.config.travel)
-                .unwrap()
-                .contains("event_places")
-        );
-    }
+		// Only a choice made here is written down: an untouched file stays as it was.
+		assert!(
+			!toml::to_string(&state.config.travel)
+				.unwrap()
+				.contains("event_places")
+		);
+	}
 
-    /// A day of Standup at X, Deep work with no place, and Lunch at Y, with
-    /// the addresses Mapbox really gives, which do not repeat the title.
-    fn day_with_a_trip_to_lunch() -> (State, u64, u64) {
-        let mut state = State::blank();
-        state.calendar = crate::calendar::Store::with_snapshot(crate::calendar::sample_snapshot());
-        let travel = &mut state.config.travel;
-        let x = travel.add_place("Office", "500 Market St, Springfield", "m-x", 1.0, 1.0);
-        let y = travel.add_place("Cafe", "66 Mint St, Springfield", "m-y", 2.0, 2.0);
-        for event in &mut state.calendar.events {
-            event.details.location = String::new();
-        }
-        state.calendar.set_location("standup", "Office");
-        state.calendar.set_location("lunch", "Cafe");
-        (state, x, y)
-    }
+	/// A day of Standup at X, Deep work with no place, and Lunch at Y, with
+	/// the addresses Mapbox really gives, which do not repeat the title.
+	fn day_with_a_trip_to_lunch() -> (State, u64, u64) {
+		let mut state = State::blank();
+		state.calendar = crate::calendar::Store::with_snapshot(crate::calendar::sample_snapshot());
+		let travel = &mut state.config.travel;
+		let x = travel.add_place("Office", "500 Market St, Springfield", "m-x", 1.0, 1.0);
+		let y = travel.add_place("Cafe", "66 Mint St, Springfield", "m-y", 2.0, 2.0);
+		for event in &mut state.calendar.events {
+			event.details.location = String::new();
+		}
+		state.calendar.set_location("standup", "Office");
+		state.calendar.set_location("lunch", "Cafe");
+		(state, x, y)
+	}
 
-    fn give_place(state: &mut State, id: &str, mapbox: &str, name: &str, address: &str) {
-        let _ = update(state, Action::OpenPicker(PickTarget::Event(id.into())));
-        state.travel.picker.as_mut().unwrap().results = vec![Found {
-            place_id: mapbox.into(),
-            name: name.into(),
-            address: address.into(),
-            lat: 0.0,
-            lng: 0.0,
-        }];
-        let _ = update(state, Action::Choose(0));
-    }
+	fn give_place(state: &mut State, id: &str, mapbox: &str, name: &str, address: &str) {
+		let _ = update(state, Action::OpenPicker(PickTarget::Event(id.into())));
+		state.travel.picker.as_mut().unwrap().results = vec![Found {
+			place_id: mapbox.into(),
+			name: name.into(),
+			address: address.into(),
+			lat: 0.0,
+			lng: 0.0,
+		}];
+		let _ = update(state, Action::Choose(0));
+	}
 
-    fn trips(state: &State) -> Vec<(Leg, String)> {
-        day_hops(state, state.calendar.day)
-            .into_iter()
-            .map(|hop| (hop.leg, hop.before))
-            .collect()
-    }
+	fn trips(state: &State) -> Vec<(Leg, String)> {
+		day_hops(state, state.calendar.day)
+			.into_iter()
+			.map(|hop| (hop.leg, hop.before))
+			.collect()
+	}
 
-    /// Giving a place to an event between two others changes the trips on both
-    /// sides of it: the later event is now reached from this one.
-    #[test]
-    fn a_place_added_between_two_events_moves_the_trip_to_it() {
-        let (mut state, x, y) = day_with_a_trip_to_lunch();
-        let trip = Leg { from: x, to: y };
-        assert_eq!(trips(&state), [(trip, "lunch".to_owned())]);
+	/// Giving a place to an event between two others changes the trips on both
+	/// sides of it: the later event is now reached from this one.
+	#[test]
+	fn a_place_added_between_two_events_moves_the_trip_to_it() {
+		let (mut state, x, y) = day_with_a_trip_to_lunch();
+		let trip = Leg { from: x, to: y };
+		assert_eq!(trips(&state), [(trip, "lunch".to_owned())]);
 
-        give_place(&mut state, "deep", "m-y", "Cafe", "66 Mint St, Springfield");
+		give_place(&mut state, "deep", "m-y", "Cafe", "66 Mint St, Springfield");
 
-        assert_eq!(trips(&state), [(trip, "deep".to_owned())]);
-    }
+		assert_eq!(trips(&state), [(trip, "deep".to_owned())]);
+	}
 
-    /// The row in `event_places` is only one of the two records of an event's
-    /// place. A config reload can drop it, and an event's other occurrences or
-    /// a copy of it never had one. The location on the event has to do.
-    #[test]
-    fn the_trips_follow_the_events_location_without_its_event_places_row() {
-        let (mut state, x, y) = day_with_a_trip_to_lunch();
+	/// The row in `event_places` is only one of the two records of an event's
+	/// place. A config reload can drop it, and an event's other occurrences or
+	/// a copy of it never had one. The location on the event has to do.
+	#[test]
+	fn the_trips_follow_the_events_location_without_its_event_places_row() {
+		let (mut state, x, y) = day_with_a_trip_to_lunch();
 
-        give_place(&mut state, "deep", "m-y", "Cafe", "66 Mint St, Springfield");
-        state.config.travel.event_places.clear();
+		give_place(&mut state, "deep", "m-y", "Cafe", "66 Mint St, Springfield");
+		state.config.travel.event_places.clear();
 
-        assert_eq!(trips(&state), [(Leg { from: x, to: y }, "deep".to_owned())]);
-    }
+		assert_eq!(trips(&state), [(Leg { from: x, to: y }, "deep".to_owned())]);
+	}
 
-    #[test]
-    fn clearing_a_place_puts_the_trip_back_even_with_copies_of_the_event() {
-        let (mut state, x, y) = day_with_a_trip_to_lunch();
-        give_place(&mut state, "deep", "m-y", "Cafe", "66 Mint St, Springfield");
+	#[test]
+	fn clearing_a_place_puts_the_trip_back_even_with_copies_of_the_event() {
+		let (mut state, x, y) = day_with_a_trip_to_lunch();
+		give_place(&mut state, "deep", "m-y", "Cafe", "66 Mint St, Springfield");
 
-        // Held twice, as an event is once it has been opened on its own.
-        state.calendar.detail_event = state.calendar.event("deep").cloned();
+		// Held twice, as an event is once it has been opened on its own.
+		state.calendar.detail_event = state.calendar.event("deep").cloned();
 
-        let _ = update(&mut state, Action::Clear(PickTarget::Event("deep".into())));
+		let _ = update(&mut state, Action::Clear(PickTarget::Event("deep".into())));
 
-        assert_eq!(
-            trips(&state),
-            [(Leg { from: x, to: y }, "lunch".to_owned())],
-            "the copy the trips are worked out from still had the old location"
-        );
-    }
+		assert_eq!(
+			trips(&state),
+			[(Leg { from: x, to: y }, "lunch".to_owned())],
+			"the copy the trips are worked out from still had the old location"
+		);
+	}
 
-    /// A sync that left before the write reached Google brings the old location
-    /// back with it, so its answer must not be believed.
-    #[test]
-    fn a_written_location_outdates_a_sync_already_running() {
-        let (mut state, ..) = day_with_a_trip_to_lunch();
-        let before = state.timeblocking.revision;
+	/// A sync that left before the write reached Google brings the old location
+	/// back with it, so its answer must not be believed.
+	#[test]
+	fn a_written_location_outdates_a_sync_already_running() {
+		let (mut state, ..) = day_with_a_trip_to_lunch();
+		let before = state.timeblocking.revision;
 
-        let _ = update(&mut state, Action::EventLocationSaved(Ok(())));
+		let _ = update(&mut state, Action::EventLocationSaved(Ok(())));
 
-        assert_ne!(state.timeblocking.revision, before);
-    }
+		assert_ne!(state.timeblocking.revision, before);
+	}
 
-    #[test]
-    fn a_task_has_the_place_it_was_given() {
-        let mut travel = TravelSettings::default();
-        let gym = place(&mut travel, "Gym", "g-gym");
+	#[test]
+	fn a_task_has_the_place_it_was_given() {
+		let mut travel = TravelSettings::default();
+		let gym = place(&mut travel, "Gym", "g-gym");
 
-        let mut task = crate::calendar::sample_snapshot().events.remove(0);
-        task.id = "task:1".into();
-        task.calendar_id = "tasks:list".into();
-        task.details.task_data = Some(crate::task_db::TaskData {
-            id: 100,
-            metadata: tb::Metadata {
-                location: Some(gym),
-                ..Default::default()
-            },
-        });
-        assert_eq!(place_of(&travel, &task), Some(gym));
+		let mut task = crate::calendar::sample_snapshot().events.remove(0);
+		task.id = "task:1".into();
+		task.calendar_id = "tasks:list".into();
+		task.details.task_data = Some(crate::task_db::TaskData {
+			id: 100,
+			metadata: tb::Metadata {
+				location: Some(gym),
+				..Default::default()
+			},
+		});
+		assert_eq!(place_of(&travel, &task), Some(gym));
 
-        // A place that has gone reads as no place.
-        task.details.task_data.as_mut().unwrap().metadata.location = Some(7);
-        assert_eq!(place_of(&travel, &task), None);
-    }
+		// A place that has gone reads as no place.
+		task.details.task_data.as_mut().unwrap().metadata.location = Some(7);
+		assert_eq!(place_of(&travel, &task), None);
+	}
 
-    #[test]
-    fn choosing_the_same_mapbox_place_twice_keeps_one_place_and_its_title() {
-        let mut travel = TravelSettings::default();
-        let first = travel.add_place("Cafe", "1 Main St", "g-cafe", 1.0, 2.0);
-        travel.places[0].name = "The usual".into();
-        let second = travel.add_place("Cafe", "1 Main St", "g-cafe", 1.0, 2.0);
+	#[test]
+	fn choosing_the_same_mapbox_place_twice_keeps_one_place_and_its_title() {
+		let mut travel = TravelSettings::default();
+		let first = travel.add_place("Cafe", "1 Main St", "g-cafe", 1.0, 2.0);
+		travel.places[0].name = "The usual".into();
+		let second = travel.add_place("Cafe", "1 Main St", "g-cafe", 1.0, 2.0);
 
-        assert_eq!(first, second);
-        assert_eq!(travel.places.len(), 1);
-        assert_eq!(travel.places[0].name, "The usual");
-        assert_eq!(travel.places[0].place_id, "g-cafe");
-    }
+		assert_eq!(first, second);
+		assert_eq!(travel.places.len(), 1);
+		assert_eq!(travel.places[0].name, "The usual");
+		assert_eq!(travel.places[0].place_id, "g-cafe");
+	}
 
-    #[test]
-    fn the_method_is_the_default_until_a_trip_is_set() {
-        let mut travel = TravelSettings::default();
-        assert_eq!(travel.mode_for(1, 2), TravelMode::Walk);
+	#[test]
+	fn the_method_is_the_default_until_a_trip_is_set() {
+		let mut travel = TravelSettings::default();
+		assert_eq!(travel.mode_for(1, 2), TravelMode::Walk);
 
-        travel.default_mode = TravelMode::Car;
-        assert_eq!(travel.mode_for(1, 2), TravelMode::Car);
+		travel.default_mode = TravelMode::Car;
+		assert_eq!(travel.mode_for(1, 2), TravelMode::Car);
 
-        travel.set_mode(1, 2, TravelMode::Bike);
-        travel.set_mode(1, 2, TravelMode::Walk);
-        assert_eq!(travel.mode_for(1, 2), TravelMode::Walk);
-        assert_eq!(
-            travel.mode_for(2, 1),
-            TravelMode::Car,
-            "the way back is its own trip"
-        );
-        assert_eq!(travel.modes.len(), 1);
-    }
+		travel.set_mode(1, 2, TravelMode::Bike);
+		travel.set_mode(1, 2, TravelMode::Walk);
+		assert_eq!(travel.mode_for(1, 2), TravelMode::Walk);
+		assert_eq!(
+			travel.mode_for(2, 1),
+			TravelMode::Car,
+			"the way back is its own trip"
+		);
+		assert_eq!(travel.modes.len(), 1);
+	}
 
-    #[test]
-    fn travel_settings_survive_the_config_file_and_stay_out_of_an_untouched_one() {
-        let untouched = toml::to_string_pretty(&Config::default()).unwrap();
-        assert!(!untouched.contains("travel"), "{untouched}");
+	#[test]
+	fn travel_settings_survive_the_config_file_and_stay_out_of_an_untouched_one() {
+		let untouched = toml::to_string_pretty(&Config::default()).unwrap();
+		assert!(!untouched.contains("travel"), "{untouched}");
 
-        let mut config = Config::default();
-        let home = place(&mut config.travel, "Home", "g-home");
-        let work = place(&mut config.travel, "Work", "g-work");
-        config.travel.api_key = "key".into();
-        config.travel.home = Some(home);
-        config.travel.default_mode = TravelMode::Car;
-        config.travel.set_mode(home, work, TravelMode::Bike);
+		let mut config = Config::default();
+		let home = place(&mut config.travel, "Home", "g-home");
+		let work = place(&mut config.travel, "Work", "g-work");
+		config.travel.api_key = "key".into();
+		config.travel.home = Some(home);
+		config.travel.default_mode = TravelMode::Car;
+		config.travel.set_mode(home, work, TravelMode::Bike);
 
-        let text = toml::to_string_pretty(&config).unwrap();
-        let read: Config = toml::from_str(&text).unwrap();
-        assert_eq!(read.travel, config.travel);
-    }
+		let text = toml::to_string_pretty(&config).unwrap();
+		let read: Config = toml::from_str(&text).unwrap();
+		assert_eq!(read.travel, config.travel);
+	}
 
-    #[test]
-    fn places_are_read_out_of_a_search_response() {
-        let response = json!({
-            "type": "FeatureCollection",
-            "features": [
-                {
-                    "type": "Feature",
-                    "geometry": { "type": "Point", "coordinates": [-122.40, 37.78] },
-                    "properties": {
-                        "mapbox_id": "dXJu1",
-                        "name": "Blue Bottle",
-                        "full_address": "66 Mint St, San Francisco, California 94103, United States",
-                        "place_formatted": "San Francisco, California 94103, United States"
-                    }
-                },
-                {
-                    "type": "Feature",
-                    "geometry": { "type": "Point", "coordinates": [-122.27, 37.80] },
-                    "properties": {
-                        "mapbox_id": "dXJu2",
-                        "name": "",
-                        "full_address": "12 Pine Rd, Oakland, California, United States"
-                    }
-                },
-                {
-                    "type": "Feature",
-                    "geometry": { "type": "Point", "coordinates": [-122.0, 37.0] },
-                    "properties": { "name": "No id" }
-                },
-                {
-                    "type": "Feature",
-                    "properties": {
-                        "mapbox_id": "no-location",
-                        "name": "Nowhere"
-                    }
-                }
-            ]
-        });
+	#[test]
+	fn places_are_read_out_of_a_search_response() {
+		let response = json!({
+			"type": "FeatureCollection",
+			"features": [
+				{
+					"type": "Feature",
+					"geometry": { "type": "Point", "coordinates": [-122.40, 37.78] },
+					"properties": {
+						"mapbox_id": "dXJu1",
+						"name": "Blue Bottle",
+						"full_address": "66 Mint St, San Francisco, California 94103, United States",
+						"place_formatted": "San Francisco, California 94103, United States"
+					}
+				},
+				{
+					"type": "Feature",
+					"geometry": { "type": "Point", "coordinates": [-122.27, 37.80] },
+					"properties": {
+						"mapbox_id": "dXJu2",
+						"name": "",
+						"full_address": "12 Pine Rd, Oakland, California, United States"
+					}
+				},
+				{
+					"type": "Feature",
+					"geometry": { "type": "Point", "coordinates": [-122.0, 37.0] },
+					"properties": { "name": "No id" }
+				},
+				{
+					"type": "Feature",
+					"properties": {
+						"mapbox_id": "no-location",
+						"name": "Nowhere"
+					}
+				}
+			]
+		});
 
-        let places = parse_places(&response);
-        assert_eq!(
-            places.len(),
-            2,
-            "a place without an id or location is skipped"
-        );
-        assert_eq!(places[0].name, "Blue Bottle");
-        assert_eq!(places[0].place_id, "dXJu1");
-        assert_eq!(
-            places[0].address,
-            "66 Mint St, San Francisco, California 94103, United States"
-        );
-        assert_eq!(
-            (places[0].lat, places[0].lng),
-            (37.78, -122.40),
-            "GeoJSON lists longitude first"
-        );
-        assert_eq!(
-            places[1].name, "12 Pine Rd",
-            "no title falls back to the street"
-        );
+		let places = parse_places(&response);
+		assert_eq!(
+			places.len(),
+			2,
+			"a place without an id or location is skipped"
+		);
+		assert_eq!(places[0].name, "Blue Bottle");
+		assert_eq!(places[0].place_id, "dXJu1");
+		assert_eq!(
+			places[0].address,
+			"66 Mint St, San Francisco, California 94103, United States"
+		);
+		assert_eq!(
+			(places[0].lat, places[0].lng),
+			(37.78, -122.40),
+			"GeoJSON lists longitude first"
+		);
+		assert_eq!(
+			places[1].name, "12 Pine Rd",
+			"no title falls back to the street"
+		);
 
-        assert!(
-            parse_places(&json!({})).is_empty(),
-            "no match is an empty body"
-        );
-    }
+		assert!(
+			parse_places(&json!({})).is_empty(),
+			"no match is an empty body"
+		);
+	}
 
-    #[test]
-    fn a_route_response_gives_seconds_and_meters() {
-        let route = parse_route(&json!({
-            "code": "Ok",
-            "routes": [{ "duration": 753.6, "distance": 1233.8 }]
-        }))
-        .unwrap();
-        assert_eq!(
-            route,
-            Route {
-                seconds: 754,
-                meters: 1234
-            }
-        );
+	#[test]
+	fn a_route_response_gives_seconds_and_meters() {
+		let route = parse_route(&json!({
+			"code": "Ok",
+			"routes": [{ "duration": 753.6, "distance": 1233.8 }]
+		}))
+		.unwrap();
+		assert_eq!(
+			route,
+			Route {
+				seconds: 754,
+				meters: 1234
+			}
+		);
 
-        let none = parse_route(&json!({ "routes": [{ "duration": 0.0 }] })).unwrap();
-        assert_eq!(
-            none,
-            Route {
-                seconds: 0,
-                meters: 0
-            }
-        );
+		let none = parse_route(&json!({ "routes": [{ "duration": 0.0 }] })).unwrap();
+		assert_eq!(
+			none,
+			Route {
+				seconds: 0,
+				meters: 0
+			}
+		);
 
-        assert!(parse_route(&json!({})).is_err());
-        assert!(parse_route(&json!({ "routes": [] })).is_err());
-        assert!(parse_route(&json!({ "routes": [{ "distance": 5.0 }] })).is_err());
-    }
+		assert!(parse_route(&json!({})).is_err());
+		assert!(parse_route(&json!({ "routes": [] })).is_err());
+		assert!(parse_route(&json!({ "routes": [{ "distance": 5.0 }] })).is_err());
+	}
 
-    #[test]
-    fn a_route_request_names_the_places_and_the_method() {
-        let mut travel = TravelSettings::default();
-        let a = travel.add_place("A", "", "m-a", 1.5, 2.5);
-        let b = travel.add_place("B", "", "m-b", 3.5, 4.5);
+	#[test]
+	fn a_route_request_names_the_places_and_the_method() {
+		let mut travel = TravelSettings::default();
+		let a = travel.add_place("A", "", "m-a", 1.5, 2.5);
+		let b = travel.add_place("B", "", "m-b", 3.5, 4.5);
 
-        let url = route_url(
-            "pk.key",
-            travel.place(a).unwrap(),
-            travel.place(b).unwrap(),
-            TravelMode::Car,
-        );
-        assert_eq!(
-            url,
-            "https://api.mapbox.com/directions/v5/mapbox/driving/2.5,1.5;4.5,3.5\
+		let url = route_url(
+			"pk.key",
+			travel.place(a).unwrap(),
+			travel.place(b).unwrap(),
+			TravelMode::Car,
+		);
+		assert_eq!(
+			url,
+			"https://api.mapbox.com/directions/v5/mapbox/driving/2.5,1.5;4.5,3.5\
              ?overview=false&access_token=pk.key",
-            "coordinates are longitude then latitude"
-        );
+			"coordinates are longitude then latitude"
+		);
 
-        for (mode, profile) in [
-            (TravelMode::Walk, "walking"),
-            (TravelMode::Bike, "cycling"),
-            (TravelMode::Car, "driving"),
-        ] {
-            let url = route_url(
-                "k",
-                travel.place(a).unwrap(),
-                travel.place(b).unwrap(),
-                mode,
-            );
-            assert!(url.contains(&format!("/mapbox/{profile}/")), "{url}");
-        }
-    }
+		for (mode, profile) in [
+			(TravelMode::Walk, "walking"),
+			(TravelMode::Bike, "cycling"),
+			(TravelMode::Car, "driving"),
+		] {
+			let url = route_url(
+				"k",
+				travel.place(a).unwrap(),
+				travel.place(b).unwrap(),
+				mode,
+			);
+			assert!(url.contains(&format!("/mapbox/{profile}/")), "{url}");
+		}
+	}
 
-    #[test]
-    fn the_map_choice_is_kept_in_the_config_only_when_changed() {
-        let untouched = toml::to_string_pretty(&TravelSettings::default()).unwrap();
-        assert!(untouched.contains("map_app = \"OpenStreetMap\""));
+	#[test]
+	fn the_map_choice_is_kept_in_the_config_only_when_changed() {
+		let untouched = toml::to_string_pretty(&TravelSettings::default()).unwrap();
+		assert!(untouched.contains("map_app = \"OpenStreetMap\""));
 
-        let mut config = Config::default();
-        config.travel.map_app = MapApp::GoogleMaps;
-        let text = toml::to_string_pretty(&config).unwrap();
-        let read: Config = toml::from_str(&text).unwrap();
-        assert_eq!(read.travel.map_app, MapApp::GoogleMaps);
+		let mut config = Config::default();
+		config.travel.map_app = MapApp::GoogleMaps;
+		let text = toml::to_string_pretty(&config).unwrap();
+		let read: Config = toml::from_str(&text).unwrap();
+		assert_eq!(read.travel.map_app, MapApp::GoogleMaps);
 
-        let old: TravelSettings = toml::from_str("api_key = \"k\"").unwrap();
-        assert_eq!(old.map_app, MapApp::OpenStreetMap);
-    }
+		let old: TravelSettings = toml::from_str("api_key = \"k\"").unwrap();
+		assert_eq!(old.map_app, MapApp::OpenStreetMap);
+	}
 
-    #[test]
-    fn home_round_trips() {
-        let read: TravelSettings = toml::from_str("home = 3").unwrap();
-        assert_eq!(read.home, Some(3));
-        let saved = toml::to_string(&read).unwrap();
-        assert_eq!(toml::from_str::<TravelSettings>(&saved).unwrap(), read);
-    }
+	#[test]
+	fn home_round_trips() {
+		let read: TravelSettings = toml::from_str("home = 3").unwrap();
+		assert_eq!(read.home, Some(3));
+		let saved = toml::to_string(&read).unwrap();
+		assert_eq!(toml::from_str::<TravelSettings>(&saved).unwrap(), read);
+	}
 
-    #[test]
-    fn search_biases_near_home_with_longitude_first_and_escapes_input() {
-        let url = search_url("key&value", "coffee & tea", Some((-122.4, 37.8)));
-        let parsed = url::Url::parse(&url).unwrap();
-        let params: std::collections::HashMap<_, _> = parsed.query_pairs().collect();
-        assert_eq!(params["q"], "coffee & tea");
-        assert_eq!(params["access_token"], "key&value");
-        assert_eq!(params["proximity"], "-122.4,37.8");
-        assert!(
-            !params.contains_key("bbox"),
-            "distant places remain searchable"
-        );
-        for proximity in [
-            None,
-            Some((f64::NAN, 0.0)),
-            Some((0.0, 91.0)),
-            Some((181.0, 0.0)),
-        ] {
-            assert!(!search_url("key", "coffee", proximity).contains("proximity="));
-        }
-    }
+	#[test]
+	fn search_biases_near_home_with_longitude_first_and_escapes_input() {
+		let url = search_url("key&value", "coffee & tea", Some((-122.4, 37.8)));
+		let parsed = url::Url::parse(&url).unwrap();
+		let params: std::collections::HashMap<_, _> = parsed.query_pairs().collect();
+		assert_eq!(params["q"], "coffee & tea");
+		assert_eq!(params["access_token"], "key&value");
+		assert_eq!(params["proximity"], "-122.4,37.8");
+		assert!(
+			!params.contains_key("bbox"),
+			"distant places remain searchable"
+		);
+		for proximity in [
+			None,
+			Some((f64::NAN, 0.0)),
+			Some((0.0, 91.0)),
+			Some((181.0, 0.0)),
+		] {
+			assert!(!search_url("key", "coffee", proximity).contains("proximity="));
+		}
+	}
 
-    #[test]
-    fn trips_read_in_minutes_and_kilometers() {
-        assert_eq!(duration_label(0), "1 min");
-        assert_eq!(duration_label(61), "2 min");
-        assert_eq!(duration_label(754), "13 min");
-        assert_eq!(duration_label(3900), "1 h 05 min");
-        assert_eq!(
-            distance_label(850, crate::config::DistanceUnit::Kilometers),
-            "850 m"
-        );
-        assert_eq!(
-            distance_label(1234, crate::config::DistanceUnit::Kilometers),
-            "1.2 km"
-        );
-        assert_eq!(
-            route_label(
-                Route {
-                    seconds: 600,
-                    meters: 2000
-                },
-                crate::config::DistanceUnit::Kilometers
-            ),
-            "10 min · 2.0 km"
-        );
-    }
+	#[test]
+	fn trips_read_in_minutes_and_kilometers() {
+		assert_eq!(duration_label(0), "1 min");
+		assert_eq!(duration_label(61), "2 min");
+		assert_eq!(duration_label(754), "13 min");
+		assert_eq!(duration_label(3900), "1 h 05 min");
+		assert_eq!(
+			distance_label(850, crate::config::DistanceUnit::Kilometers),
+			"850 m"
+		);
+		assert_eq!(
+			distance_label(1234, crate::config::DistanceUnit::Kilometers),
+			"1.2 km"
+		);
+		assert_eq!(
+			route_label(
+				Route {
+					seconds: 600,
+					meters: 2000
+				},
+				crate::config::DistanceUnit::Kilometers
+			),
+			"10 min · 2.0 km"
+		);
+	}
 
-    #[test]
-    fn a_search_needs_a_key_and_something_to_look_for() {
-        let mut state = state();
-        let _ = update(&mut state, Action::OpenPicker(PickTarget::Home));
+	#[test]
+	fn a_search_needs_a_key_and_something_to_look_for() {
+		let mut state = state();
+		let _ = update(&mut state, Action::OpenPicker(PickTarget::Home));
 
-        let _ = update(&mut state, Action::Search);
-        let picker = state.travel.picker.as_ref().unwrap();
-        assert!(!picker.searching && picker.error.is_none(), "nothing typed");
+		let _ = update(&mut state, Action::Search);
+		let picker = state.travel.picker.as_ref().unwrap();
+		assert!(!picker.searching && picker.error.is_none(), "nothing typed");
 
-        let _ = update(&mut state, Action::Query("coffee".into()));
-        // Keep the environment's own key out of the test.
-        if state.config.travel.key().is_none() {
-            let _ = update(&mut state, Action::Search);
-            let picker = state.travel.picker.as_ref().unwrap();
-            assert_eq!(picker.error.as_deref(), Some(NO_KEY));
-            assert!(!picker.searching);
-        }
-    }
+		let _ = update(&mut state, Action::Query("coffee".into()));
+		// Keep the environment's own key out of the test.
+		if state.config.travel.key().is_none() {
+			let _ = update(&mut state, Action::Search);
+			let picker = state.travel.picker.as_ref().unwrap();
+			assert_eq!(picker.error.as_deref(), Some(NO_KEY));
+			assert!(!picker.searching);
+		}
+	}
 
-    #[test]
-    fn a_late_answer_to_an_old_search_is_ignored() {
-        let mut state = state();
-        let _ = update(&mut state, Action::OpenPicker(PickTarget::Home));
-        state.travel.serial = 5;
+	#[test]
+	fn a_late_answer_to_an_old_search_is_ignored() {
+		let mut state = state();
+		let _ = update(&mut state, Action::OpenPicker(PickTarget::Home));
+		state.travel.serial = 5;
 
-        let _ = update(&mut state, Action::Searched(4, Ok(vec![found("Old")])));
-        assert!(state.travel.picker.as_ref().unwrap().results.is_empty());
+		let _ = update(&mut state, Action::Searched(4, Ok(vec![found("Old")])));
+		assert!(state.travel.picker.as_ref().unwrap().results.is_empty());
 
-        let _ = update(&mut state, Action::Searched(5, Ok(vec![found("New")])));
-        let picker = state.travel.picker.as_ref().unwrap();
-        assert_eq!(picker.results.len(), 1);
-        assert!(picker.searched);
+		let _ = update(&mut state, Action::Searched(5, Ok(vec![found("New")])));
+		let picker = state.travel.picker.as_ref().unwrap();
+		assert_eq!(picker.results.len(), 1);
+		assert!(picker.searched);
 
-        let _ = update(&mut state, Action::Searched(5, Err("Quota".into())));
-        let picker = state.travel.picker.as_ref().unwrap();
-        assert!(picker.results.is_empty());
-        assert_eq!(picker.error.as_deref(), Some("Quota"));
-    }
+		let _ = update(&mut state, Action::Searched(5, Err("Quota".into())));
+		let picker = state.travel.picker.as_ref().unwrap();
+		assert!(picker.results.is_empty());
+		assert_eq!(picker.error.as_deref(), Some("Quota"));
+	}
 
-    #[test]
-    fn choosing_a_result_sets_and_clears_home() {
-        let mut state = state();
+	#[test]
+	fn choosing_a_result_sets_and_clears_home() {
+		let mut state = state();
 
-        for _ in 0..2 {
-            let _ = update(&mut state, Action::OpenPicker(PickTarget::Home));
-            state.travel.picker.as_mut().unwrap().results = vec![found("Home")];
-            let _ = update(&mut state, Action::Choose(0));
+		for _ in 0..2 {
+			let _ = update(&mut state, Action::OpenPicker(PickTarget::Home));
+			state.travel.picker.as_mut().unwrap().results = vec![found("Home")];
+			let _ = update(&mut state, Action::Choose(0));
 
-            assert!(state.travel.picker.is_none(), "choosing closes the search");
-            let id = state.config.travel.home.expect("Home is set");
-            assert_eq!(state.config.travel.place(id).unwrap().name, "Home");
+			assert!(state.travel.picker.is_none(), "choosing closes the search");
+			let id = state.config.travel.home.expect("Home is set");
+			assert_eq!(state.config.travel.place(id).unwrap().name, "Home");
 
-            let _ = update(&mut state, Action::Clear(PickTarget::Home));
-            assert_eq!(state.config.travel.home, None);
-        }
-        assert_eq!(
-            state.config.travel.places.len(),
-            1,
-            "one place, chosen twice"
-        );
-    }
+			let _ = update(&mut state, Action::Clear(PickTarget::Home));
+			assert_eq!(state.config.travel.home, None);
+		}
+		assert_eq!(
+			state.config.travel.places.len(),
+			1,
+			"one place, chosen twice"
+		);
+	}
 
-    #[test]
-    fn a_saved_place_can_be_starred_and_chosen_without_mapbox() {
-        let mut state = state();
-        let id = state
-            .config
-            .travel
-            .add_place("Cafe", "1 Main St", "mapbox-cafe", 1.0, 2.0);
+	#[test]
+	fn a_saved_place_can_be_starred_and_chosen_without_mapbox() {
+		let mut state = state();
+		let id = state
+			.config
+			.travel
+			.add_place("Cafe", "1 Main St", "mapbox-cafe", 1.0, 2.0);
 
-        let _ = update(&mut state, Action::OpenPicker(PickTarget::Home));
-        let _ = update(&mut state, Action::Recents);
-        assert!(state.travel.picker.as_ref().unwrap().recents);
+		let _ = update(&mut state, Action::OpenPicker(PickTarget::Home));
+		let _ = update(&mut state, Action::Recents);
+		assert!(state.travel.picker.as_ref().unwrap().recents);
 
-        let _ = update(&mut state, Action::Favorite(id));
-        assert!(state.config.travel.place(id).unwrap().favorite);
-        let _ = update(&mut state, Action::Favorite(id));
-        assert!(!state.config.travel.place(id).unwrap().favorite);
+		let _ = update(&mut state, Action::Favorite(id));
+		assert!(state.config.travel.place(id).unwrap().favorite);
+		let _ = update(&mut state, Action::Favorite(id));
+		assert!(!state.config.travel.place(id).unwrap().favorite);
 
-        let _ = update(&mut state, Action::ChooseSaved(id));
-        assert!(state.travel.picker.is_none());
-        assert_eq!(state.config.travel.home, Some(id));
-        assert_eq!(state.travel.serial, 0, "Mapbox was never asked");
-    }
+		let _ = update(&mut state, Action::ChooseSaved(id));
+		assert!(state.travel.picker.is_none());
+		assert_eq!(state.config.travel.home, Some(id));
+		assert_eq!(state.travel.serial, 0, "Mapbox was never asked");
+	}
 
-    #[test]
-    fn renaming_a_place_keeps_what_mapbox_needs() {
-        let mut state = state();
-        let id = state
-            .config
-            .travel
-            .add_place("Starbucks", "1 Main St", "g-sbux", 1.0, 2.0);
+	#[test]
+	fn renaming_a_place_keeps_what_mapbox_needs() {
+		let mut state = state();
+		let id = state
+			.config
+			.travel
+			.add_place("Starbucks", "1 Main St", "g-sbux", 1.0, 2.0);
 
-        let _ = update(&mut state, Action::Rename(id));
-        let _ = update(&mut state, Action::RenameText("   ".into()));
-        let _ = update(&mut state, Action::SaveRename);
-        assert!(state.travel.rename.is_some(), "a blank title is refused");
-        assert_eq!(state.config.travel.place(id).unwrap().name, "Starbucks");
+		let _ = update(&mut state, Action::Rename(id));
+		let _ = update(&mut state, Action::RenameText("   ".into()));
+		let _ = update(&mut state, Action::SaveRename);
+		assert!(state.travel.rename.is_some(), "a blank title is refused");
+		assert_eq!(state.config.travel.place(id).unwrap().name, "Starbucks");
 
-        let _ = update(&mut state, Action::RenameText(" Study spot ".into()));
-        let _ = update(&mut state, Action::SaveRename);
+		let _ = update(&mut state, Action::RenameText(" Study spot ".into()));
+		let _ = update(&mut state, Action::SaveRename);
 
-        assert!(state.travel.rename.is_none());
-        let place = state.config.travel.place(id).unwrap();
-        assert_eq!(place.name, "Study spot");
-        assert_eq!(place.address, "1 Main St");
-        assert_eq!(place.place_id, "g-sbux");
-        assert_eq!((place.lat, place.lng), (1.0, 2.0));
-    }
+		assert!(state.travel.rename.is_none());
+		let place = state.config.travel.place(id).unwrap();
+		assert_eq!(place.name, "Study spot");
+		assert_eq!(place.address, "1 Main St");
+		assert_eq!(place.place_id, "g-sbux");
+		assert_eq!((place.lat, place.lng), (1.0, 2.0));
+	}
 
-    #[test]
-    fn the_menu_toggle_is_saved_and_restored_at_startup() {
-        let mut state = state();
-        assert!(!state.travel.show, "travel starts off");
+	#[test]
+	fn the_menu_toggle_is_saved_and_restored_at_startup() {
+		let mut state = state();
+		assert!(!state.travel.show, "travel starts off");
 
-        let _ = update(&mut state, Action::Toggle);
-        assert!(state.travel.show);
-        assert!(
-            state.config.travel.show,
-            "the switch is kept in the config file"
-        );
+		let _ = update(&mut state, Action::Toggle);
+		assert!(state.travel.show);
+		assert!(
+			state.config.travel.show,
+			"the switch is kept in the config file"
+		);
 
-        let _ = update(&mut state, Action::Toggle);
-        assert!(!state.travel.show);
-        assert!(!state.config.travel.show);
+		let _ = update(&mut state, Action::Toggle);
+		assert!(!state.travel.show);
+		assert!(!state.config.travel.show);
 
-        // A fresh state comes up the way the config was left.
-        state.config.travel.show = true;
-        let restored = State::new(state.config.clone(), crate::theme::Catalog::built_in());
-        assert!(restored.travel.show);
-    }
+		// A fresh state comes up the way the config was left.
+		state.config.travel.show = true;
+		let restored = State::new(state.config.clone(), crate::theme::Catalog::built_in());
+		assert!(restored.travel.show);
+	}
 
-    #[test]
-    fn a_finished_trip_is_kept_and_a_failed_one_is_tried_again_later() {
-        let mut state = state();
-        let key = RouteKey {
-            from: 1,
-            to: 2,
-            mode: TravelMode::Walk,
-        };
-        let leg = Leg { from: 1, to: 2 };
+	#[test]
+	fn a_finished_trip_is_kept_and_a_failed_one_is_tried_again_later() {
+		let mut state = state();
+		let key = RouteKey {
+			from: 1,
+			to: 2,
+			mode: TravelMode::Walk,
+		};
+		let leg = Leg { from: 1, to: 2 };
 
-        let _ = update(&mut state, Action::Routed(key, Err("Quota".into())));
-        assert_eq!(summary(&state, leg), Summary::Failed("Quota".into()));
+		let _ = update(&mut state, Action::Routed(key, Err("Quota".into())));
+		assert_eq!(summary(&state, leg), Summary::Failed("Quota".into()));
 
-        let _ = update(&mut state, Action::Toggle);
-        assert!(state.travel.show);
-        assert_ne!(summary(&state, leg), Summary::Failed("Quota".into()));
+		let _ = update(&mut state, Action::Toggle);
+		assert!(state.travel.show);
+		assert_ne!(summary(&state, leg), Summary::Failed("Quota".into()));
 
-        let route = Route {
-            seconds: 300,
-            meters: 400,
-        };
-        let _ = update(&mut state, Action::Routed(key, Ok(route)));
-        assert_eq!(summary(&state, leg), Summary::Ready(route));
-        assert_eq!(short_label(&state, leg), "Walk · 5 min · 400 m");
+		let route = Route {
+			seconds: 300,
+			meters: 400,
+		};
+		let _ = update(&mut state, Action::Routed(key, Ok(route)));
+		assert_eq!(summary(&state, leg), Summary::Ready(route));
+		assert_eq!(short_label(&state, leg), "Walk · 5 min · 400 m");
 
-        // Publish the freshly computed route before changing display settings.
-        let _ = reconcile(&mut state);
-        let cached = state.config.travel.routes.clone();
-        let _ = crate::app::update(
-            &mut state,
-            crate::app::Message::Settings(crate::app::SettingsMessage::DistanceUnitSelected(
-                crate::config::DistanceUnit::Miles,
-            )),
-        );
-        assert_eq!(short_label(&state, leg), "Walk · 5 min · 0.2 mi");
-        assert_eq!(summary(&state, leg), Summary::Ready(route));
-        assert_eq!(state.config.travel.routes, cached);
+		// Publish the freshly computed route before changing display settings.
+		let _ = reconcile(&mut state);
+		let cached = state.config.travel.routes.clone();
+		let _ = crate::app::update(
+			&mut state,
+			crate::app::Message::Settings(crate::app::SettingsMessage::DistanceUnitSelected(
+				crate::config::DistanceUnit::Miles,
+			)),
+		);
+		assert_eq!(short_label(&state, leg), "Walk · 5 min · 0.2 mi");
+		assert_eq!(summary(&state, leg), Summary::Ready(route));
+		assert_eq!(state.config.travel.routes, cached);
 
-        // Another method is another trip.
-        state.config.travel.set_mode(1, 2, TravelMode::Car);
-        assert_ne!(summary(&state, leg), Summary::Ready(route));
-    }
+		// Another method is another trip.
+		state.config.travel.set_mode(1, 2, TravelMode::Car);
+		assert_ne!(summary(&state, leg), Summary::Ready(route));
+	}
 
-    #[test]
-    fn worked_out_trips_are_published_to_the_config_once() {
-        let mut state = state();
-        let key = RouteKey {
-            from: 1,
-            to: 2,
-            mode: TravelMode::Car,
-        };
-        state.travel.routes.insert(
-            key,
-            RouteState::Ready(Route {
-                seconds: 600,
-                meters: 5000,
-            }),
-        );
-        state
-            .travel
-            .routes
-            .insert(RouteKey { to: 3, ..key }, RouteState::Failed("no".into()));
+	#[test]
+	fn worked_out_trips_are_published_to_the_config_once() {
+		let mut state = state();
+		let key = RouteKey {
+			from: 1,
+			to: 2,
+			mode: TravelMode::Car,
+		};
+		state.travel.routes.insert(
+			key,
+			RouteState::Ready(Route {
+				seconds: 600,
+				meters: 5000,
+			}),
+		);
+		state
+			.travel
+			.routes
+			.insert(RouteKey { to: 3, ..key }, RouteState::Failed("no".into()));
 
-        let _ = reconcile(&mut state);
-        assert_eq!(
-            state.config.travel.routes,
-            [SavedRoute {
-                from: 1,
-                to: 2,
-                mode: TravelMode::Car,
-                seconds: 600,
-                meters: 5000,
-            }]
-        );
+		let _ = reconcile(&mut state);
+		assert_eq!(
+			state.config.travel.routes,
+			[SavedRoute {
+				from: 1,
+				to: 2,
+				mode: TravelMode::Car,
+				seconds: 600,
+				meters: 5000,
+			}]
+		);
 
-        let _ = reconcile(&mut state);
-        assert_eq!(state.config.travel.routes.len(), 1);
-    }
+		let _ = reconcile(&mut state);
+		assert_eq!(state.config.travel.routes.len(), 1);
+	}
 
-    #[test]
-    fn worked_out_trips_come_back_after_a_restart() {
-        let dir = std::env::temp_dir().join(format!("tt-travel-{}", std::process::id()));
-        let path = dir.join("test.sqlite3");
-        let key = RouteKey {
-            from: 1,
-            to: 2,
-            mode: TravelMode::Bike,
-        };
-        let route = Route {
-            seconds: 90,
-            meters: 300,
-        };
+	#[test]
+	fn worked_out_trips_come_back_after_a_restart() {
+		let dir = std::env::temp_dir().join(format!("tt-travel-{}", std::process::id()));
+		let path = dir.join("test.sqlite3");
+		let key = RouteKey {
+			from: 1,
+			to: 2,
+			mode: TravelMode::Bike,
+		};
+		let route = Route {
+			seconds: 90,
+			meters: 300,
+		};
 
-        write_cache(&path, &[(key, route)]).unwrap();
+		write_cache(&path, &[(key, route)]).unwrap();
 
-        let mut travel = Workspace::default();
-        travel.cache_in(Some(path.clone()));
-        assert_eq!(travel.state(key), Some(&RouteState::Ready(route)));
+		let mut travel = Workspace::default();
+		travel.cache_in(Some(path.clone()));
+		assert_eq!(travel.state(key), Some(&RouteState::Ready(route)));
 
-        crate::task_db::write_document_json(&path, crate::task_db::keys::ROUTES, "not json")
-            .unwrap();
-        let mut travel = Workspace::default();
-        travel.cache_in(Some(path));
-        assert!(travel.routes.is_empty(), "a damaged cache is just empty");
+		crate::task_db::write_document_json(&path, crate::task_db::keys::ROUTES, "not json")
+			.unwrap();
+		let mut travel = Workspace::default();
+		travel.cache_in(Some(path));
+		assert!(travel.routes.is_empty(), "a damaged cache is just empty");
 
-        let _ = std::fs::remove_dir_all(dir);
-    }
+		let _ = std::fs::remove_dir_all(dir);
+	}
 
-    #[test]
-    fn the_maps_link_names_both_places_and_the_method() {
-        let mut travel = TravelSettings::default();
-        let a = travel.add_place("A", "", "m-a", 1.5, 2.5);
-        let b = travel.add_place("B", "", "m-b", 3.5, 4.5);
-        travel.set_mode(a, b, TravelMode::Car);
+	#[test]
+	fn the_maps_link_names_both_places_and_the_method() {
+		let mut travel = TravelSettings::default();
+		let a = travel.add_place("A", "", "m-a", 1.5, 2.5);
+		let b = travel.add_place("B", "", "m-b", 3.5, 4.5);
+		travel.set_mode(a, b, TravelMode::Car);
 
-        let url = maps_url(&travel, Leg { from: a, to: b }).unwrap();
-        assert_eq!(
-            url,
-            "https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=1.5%2C2.5%3B3.5%2C4.5"
-        );
-        assert!(maps_url(&travel, Leg { from: a, to: 99 }).is_none());
+		let url = maps_url(&travel, Leg { from: a, to: b }).unwrap();
+		assert_eq!(
+			url,
+			"https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=1.5%2C2.5%3B3.5%2C4.5"
+		);
+		assert!(maps_url(&travel, Leg { from: a, to: 99 }).is_none());
 
-        travel.map_app = MapApp::GoogleMaps;
-        assert_eq!(
-            maps_url(&travel, Leg { from: a, to: b }).unwrap(),
-            "https://www.google.com/maps/dir/?api=1&origin=1.5%2C2.5&destination=3.5%2C4.5&travelmode=driving"
-        );
-        travel.set_mode(a, b, TravelMode::Bike);
-        assert!(
-            maps_url(&travel, Leg { from: a, to: b })
-                .unwrap()
-                .ends_with("travelmode=bicycling")
-        );
-    }
+		travel.map_app = MapApp::GoogleMaps;
+		assert_eq!(
+			maps_url(&travel, Leg { from: a, to: b }).unwrap(),
+			"https://www.google.com/maps/dir/?api=1&origin=1.5%2C2.5&destination=3.5%2C4.5&travelmode=driving"
+		);
+		travel.set_mode(a, b, TravelMode::Bike);
+		assert!(
+			maps_url(&travel, Leg { from: a, to: b })
+				.unwrap()
+				.ends_with("travelmode=bicycling")
+		);
+	}
 }

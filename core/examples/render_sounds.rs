@@ -12,15 +12,15 @@ use std::path::PathBuf;
 use timeslay_core::sounds::{Tone, wav};
 
 fn main() -> std::io::Result<()> {
-    let directory = std::env::args_os()
-        .nth(1)
-        .map(PathBuf::from)
-        .ok_or_else(|| std::io::Error::other("usage: render_sounds <directory>"))?;
-    std::fs::create_dir_all(&directory)?;
-    for tone in Tone::ALL {
-        let path = directory.join(format!("{}.wav", tone.android_resource()));
-        std::fs::write(&path, wav(&tone.render()))?;
-        println!("{}", path.display());
-    }
-    Ok(())
+	let directory = std::env::args_os()
+		.nth(1)
+		.map(PathBuf::from)
+		.ok_or_else(|| std::io::Error::other("usage: render_sounds <directory>"))?;
+	std::fs::create_dir_all(&directory)?;
+	for tone in Tone::ALL {
+		let path = directory.join(format!("{}.wav", tone.android_resource()));
+		std::fs::write(&path, wav(&tone.render()))?;
+		println!("{}", path.display());
+	}
+	Ok(())
 }

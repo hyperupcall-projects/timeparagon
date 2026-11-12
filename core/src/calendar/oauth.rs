@@ -54,35 +54,35 @@ const DONE_RESPONSE: &str = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Tokens {
-    pub access_token: String,
-    pub refresh_token: String,
-    /// Seconds since the Unix epoch, when `access_token` stops working.
-    pub expires_at: u64,
+	pub access_token: String,
+	pub refresh_token: String,
+	/// Seconds since the Unix epoch, when `access_token` stops working.
+	pub expires_at: u64,
 }
 
 #[derive(Debug, Deserialize)]
 struct TokenResponse {
-    access_token: String,
-    #[serde(default)]
-    refresh_token: Option<String>,
-    #[serde(default)]
-    expires_in: u64,
+	access_token: String,
+	#[serde(default)]
+	refresh_token: Option<String>,
+	#[serde(default)]
+	expires_in: u64,
 }
 
 #[derive(Debug, Deserialize)]
 struct TokenError {
-    #[serde(default)]
-    error: String,
-    #[serde(default)]
-    error_description: String,
+	#[serde(default)]
+	error: String,
+	#[serde(default)]
+	error_description: String,
 }
 
 impl Tokens {
-    pub fn access_valid(&self) -> bool {
-        let now = now_unix();
-        // Refresh a minute early so a request never races the expiry.
-        self.expires_at > now + 60
-    }
+	pub fn access_valid(&self) -> bool {
+		let now = now_unix();
+		// Refresh a minute early so a request never races the expiry.
+		self.expires_at > now + 60
+	}
 }
 
 /// Where older builds kept plaintext tokens, still looked for on Android. Desktop
@@ -90,58 +90,58 @@ impl Tokens {
 /// through getNoBackupFilesDir().
 #[cfg(target_os = "android")]
 pub fn token_path() -> Option<std::path::PathBuf> {
-    Some(
-        crate::config::project_dirs()?
-            .config_dir()
-            .join("google-token.toml"),
-    )
+	Some(
+		crate::config::project_dirs()?
+			.config_dir()
+			.join("google-token.toml"),
+	)
 }
 
 #[cfg(not(target_os = "android"))]
 pub fn load_tokens() -> Option<Tokens> {
-    let path = crate::secrets::path()?;
-    crate::secrets::read(&path, crate::secrets::keys::GOOGLE_TOKENS).unwrap_or_else(|error| {
-        log::warn!("could not read Google tokens: {error}");
-        None
-    })
+	let path = crate::secrets::path()?;
+	crate::secrets::read(&path, crate::secrets::keys::GOOGLE_TOKENS).unwrap_or_else(|error| {
+		log::warn!("could not read Google tokens: {error}");
+		None
+	})
 }
 
 #[cfg(target_os = "android")]
 pub fn load_tokens() -> Option<Tokens> {
-    match android_tokens::load() {
-        Ok(tokens) => tokens,
-        Err(error) => {
-            log::warn!("could not open protected Google tokens: {error}");
-            None
-        }
-    }
+	match android_tokens::load() {
+		Ok(tokens) => tokens,
+		Err(error) => {
+			log::warn!("could not open protected Google tokens: {error}");
+			None
+		}
+	}
 }
 
 #[cfg(target_os = "android")]
 pub fn save_tokens(tokens: &Tokens) -> io::Result<()> {
-    android_tokens::save(tokens)
+	android_tokens::save(tokens)
 }
 
 #[cfg(not(target_os = "android"))]
 pub fn save_tokens(tokens: &Tokens) -> io::Result<()> {
-    let path = crate::secrets::path()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no state directory available"))?;
-    crate::secrets::write(&path, crate::secrets::keys::GOOGLE_TOKENS, tokens)
+	let path = crate::secrets::path()
+		.ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no state directory available"))?;
+	crate::secrets::write(&path, crate::secrets::keys::GOOGLE_TOKENS, tokens)
 }
 
 pub fn clear_tokens() {
-    #[cfg(target_os = "android")]
-    {
-        if let Err(error) = android_tokens::clear() {
-            log::warn!("could not remove protected Google tokens: {error}");
-        }
-    }
-    #[cfg(not(target_os = "android"))]
-    if let Some(path) = crate::secrets::path()
-        && let Err(error) = crate::secrets::remove(&path, crate::secrets::keys::GOOGLE_TOKENS)
-    {
-        log::warn!("could not remove Google tokens: {error}");
-    }
+	#[cfg(target_os = "android")]
+	{
+		if let Err(error) = android_tokens::clear() {
+			log::warn!("could not remove protected Google tokens: {error}");
+		}
+	}
+	#[cfg(not(target_os = "android"))]
+	if let Some(path) = crate::secrets::path()
+		&& let Err(error) = crate::secrets::remove(&path, crate::secrets::keys::GOOGLE_TOKENS)
+	{
+		log::warn!("could not remove Google tokens: {error}");
+	}
 }
 
 /// Runs the browser-based sign-in and returns tokens on success.
@@ -149,379 +149,379 @@ pub fn clear_tokens() {
 /// Blocking: the local socket waits for Google to redirect back. Call this
 /// from the app's `blocking::run`, not from the UI thread.
 pub fn authorize(client_id: &str, client_secret: &str) -> Result<Tokens, String> {
-    authorize_for(client_id, client_secret, SCOPE, "consent")
+	authorize_for(client_id, client_secret, SCOPE, "consent")
 }
 
 /// Like [`authorize`], for any scope. `prompt` is Google's `prompt` parameter:
 /// `select_account consent` makes the browser ask which account to use, which
 /// is what lets a second account be added while the first is signed in.
 pub fn authorize_for(
-    client_id: &str,
-    client_secret: &str,
-    scope: &str,
-    prompt: &str,
+	client_id: &str,
+	client_secret: &str,
+	scope: &str,
+	prompt: &str,
 ) -> Result<Tokens, String> {
-    let client_id = client_id.trim();
-    if client_id.is_empty() {
-        return Err("add a Google OAuth client ID in Settings before connecting".to_owned());
-    }
+	let client_id = client_id.trim();
+	if client_id.is_empty() {
+		return Err("add a Google OAuth client ID in Settings before connecting".to_owned());
+	}
 
-    let listener = TcpListener::bind("127.0.0.1:0").map_err(|error| error.to_string())?;
-    listener
-        .set_nonblocking(false)
-        .map_err(|error| error.to_string())?;
+	let listener = TcpListener::bind("127.0.0.1:0").map_err(|error| error.to_string())?;
+	listener
+		.set_nonblocking(false)
+		.map_err(|error| error.to_string())?;
 
-    let port = listener
-        .local_addr()
-        .map_err(|error| error.to_string())?
-        .port();
-    let redirect = format!("http://127.0.0.1:{port}");
-    let verifier = random_token(32)?;
-    let challenge = code_challenge(&verifier);
-    let state = random_token(16)?;
+	let port = listener
+		.local_addr()
+		.map_err(|error| error.to_string())?
+		.port();
+	let redirect = format!("http://127.0.0.1:{port}");
+	let verifier = random_token(32)?;
+	let challenge = code_challenge(&verifier);
+	let state = random_token(16)?;
 
-    let url = format!(
-        "{AUTH_URL}?client_id={}&redirect_uri={}&response_type=code&scope={}&code_challenge={}&code_challenge_method=S256&state={}&access_type=offline&prompt={}",
-        urlencoding::encode(client_id),
-        urlencoding::encode(&redirect),
-        urlencoding::encode(scope),
-        urlencoding::encode(&challenge),
-        urlencoding::encode(&state),
-        urlencoding::encode(prompt),
-    );
+	let url = format!(
+		"{AUTH_URL}?client_id={}&redirect_uri={}&response_type=code&scope={}&code_challenge={}&code_challenge_method=S256&state={}&access_type=offline&prompt={}",
+		urlencoding::encode(client_id),
+		urlencoding::encode(&redirect),
+		urlencoding::encode(scope),
+		urlencoding::encode(&challenge),
+		urlencoding::encode(&state),
+		urlencoding::encode(prompt),
+	);
 
-    open_in_browser(&url)?;
+	open_in_browser(&url)?;
 
-    // Any app on the device can reach a loopback port, so keep listening until
-    // a request carrying our `state` arrives instead of trusting the first one.
-    listener
-        .set_nonblocking(true)
-        .map_err(|error| error.to_string())?;
-    let deadline = Instant::now() + AUTH_TIMEOUT;
-    let code = loop {
-        let mut stream = match listener.accept() {
-            Ok((stream, _)) => stream,
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                if Instant::now() >= deadline {
-                    return Err("timed out waiting for Google sign-in".to_owned());
-                }
-                std::thread::sleep(Duration::from_millis(100));
-                continue;
-            }
-            Err(error) => return Err(format!("waiting for Google sign-in: {error}")),
-        };
-        if stream.set_nonblocking(false).is_err()
-            || stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .is_err()
-        {
-            continue;
-        }
+	// Any app on the device can reach a loopback port, so keep listening until
+	// a request carrying our `state` arrives instead of trusting the first one.
+	listener
+		.set_nonblocking(true)
+		.map_err(|error| error.to_string())?;
+	let deadline = Instant::now() + AUTH_TIMEOUT;
+	let code = loop {
+		let mut stream = match listener.accept() {
+			Ok((stream, _)) => stream,
+			Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+				if Instant::now() >= deadline {
+					return Err("timed out waiting for Google sign-in".to_owned());
+				}
+				std::thread::sleep(Duration::from_millis(100));
+				continue;
+			}
+			Err(error) => return Err(format!("waiting for Google sign-in: {error}")),
+		};
+		if stream.set_nonblocking(false).is_err()
+			|| stream
+				.set_read_timeout(Some(Duration::from_secs(5)))
+				.is_err()
+		{
+			continue;
+		}
 
-        let mut buffer = [0u8; 4096];
-        let Ok(read) = stream.read(&mut buffer) else {
-            continue;
-        };
-        let request = String::from_utf8_lossy(&buffer[..read]);
-        match parse_redirect(&request, &state) {
-            Redirect::Unrelated => {
-                let _ = stream.write_all(
-                    b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-                );
-            }
-            Redirect::Done(result) => {
-                let _ = stream.write_all(DONE_RESPONSE.as_bytes());
-                break result?;
-            }
-        }
-    };
+		let mut buffer = [0u8; 4096];
+		let Ok(read) = stream.read(&mut buffer) else {
+			continue;
+		};
+		let request = String::from_utf8_lossy(&buffer[..read]);
+		match parse_redirect(&request, &state) {
+			Redirect::Unrelated => {
+				let _ = stream.write_all(
+					b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+				);
+			}
+			Redirect::Done(result) => {
+				let _ = stream.write_all(DONE_RESPONSE.as_bytes());
+				break result?;
+			}
+		}
+	};
 
-    exchange_code(client_id, client_secret, &redirect, &code, &verifier)
+	exchange_code(client_id, client_secret, &redirect, &code, &verifier)
 }
 
 pub fn refresh(
-    client_id: &str,
-    client_secret: &str,
-    refresh_token: &str,
+	client_id: &str,
+	client_secret: &str,
+	refresh_token: &str,
 ) -> Result<Tokens, GoogleError> {
-    let client_id = client_id.trim();
-    if client_id.is_empty() {
-        return Err(GoogleError::auth("Google OAuth client ID is missing"));
-    }
+	let client_id = client_id.trim();
+	if client_id.is_empty() {
+		return Err(GoogleError::auth("Google OAuth client ID is missing"));
+	}
 
-    let body = form(&[
-        ("client_id", client_id),
-        ("client_secret", client_secret.trim()),
-        ("refresh_token", refresh_token),
-        ("grant_type", "refresh_token"),
-    ]);
+	let body = form(&[
+		("client_id", client_id),
+		("client_secret", client_secret.trim()),
+		("refresh_token", refresh_token),
+		("grant_type", "refresh_token"),
+	]);
 
-    let response = post_token(&body)?;
-    Ok(Tokens {
-        access_token: response.access_token,
-        refresh_token: response
-            .refresh_token
-            .unwrap_or_else(|| refresh_token.to_owned()),
-        expires_at: now_unix().saturating_add(response.expires_in.max(60)),
-    })
+	let response = post_token(&body)?;
+	Ok(Tokens {
+		access_token: response.access_token,
+		refresh_token: response
+			.refresh_token
+			.unwrap_or_else(|| refresh_token.to_owned()),
+		expires_at: now_unix().saturating_add(response.expires_in.max(60)),
+	})
 }
 
 /// Makes sure `tokens` has a usable access token, refreshing if needed.
 pub fn ensure_access(
-    client_id: &str,
-    client_secret: &str,
-    tokens: Tokens,
+	client_id: &str,
+	client_secret: &str,
+	tokens: Tokens,
 ) -> Result<Tokens, GoogleError> {
-    if tokens.access_valid() {
-        return Ok(tokens);
-    }
+	if tokens.access_valid() {
+		return Ok(tokens);
+	}
 
-    let refreshed = refresh(client_id, client_secret, &tokens.refresh_token)?;
-    if let Err(error) = save_tokens(&refreshed) {
-        log::warn!("could not save refreshed Google tokens: {error}");
-    }
-    Ok(refreshed)
+	let refreshed = refresh(client_id, client_secret, &tokens.refresh_token)?;
+	if let Err(error) = save_tokens(&refreshed) {
+		log::warn!("could not save refreshed Google tokens: {error}");
+	}
+	Ok(refreshed)
 }
 
 pub fn open_in_browser(url: &str) -> Result<(), String> {
-    // Android has no xdg-open; use the platform Intent API instead.
-    #[cfg(target_os = "android")]
-    {
-        webbrowser::open(url)
-            .map(|_| ())
-            .map_err(|error| format!("could not open a browser: {error}"))
-    }
-    // xdg-open is the right tool on this desktop; we do not wait for the
-    // browser, only for it to be launched.
-    #[cfg(not(target_os = "android"))]
-    {
-        match std::process::Command::new("xdg-open").arg(url).spawn() {
-            Ok(_) => Ok(()),
-            Err(error) => Err(format!("could not open a browser: {error}")),
-        }
-    }
+	// Android has no xdg-open; use the platform Intent API instead.
+	#[cfg(target_os = "android")]
+	{
+		webbrowser::open(url)
+			.map(|_| ())
+			.map_err(|error| format!("could not open a browser: {error}"))
+	}
+	// xdg-open is the right tool on this desktop; we do not wait for the
+	// browser, only for it to be launched.
+	#[cfg(not(target_os = "android"))]
+	{
+		match std::process::Command::new("xdg-open").arg(url).spawn() {
+			Ok(_) => Ok(()),
+			Err(error) => Err(format!("could not open a browser: {error}")),
+		}
+	}
 }
 
 fn exchange_code(
-    client_id: &str,
-    client_secret: &str,
-    redirect: &str,
-    code: &str,
-    verifier: &str,
+	client_id: &str,
+	client_secret: &str,
+	redirect: &str,
+	code: &str,
+	verifier: &str,
 ) -> Result<Tokens, String> {
-    let body = form(&[
-        ("client_id", client_id),
-        ("client_secret", client_secret.trim()),
-        ("code", code),
-        ("code_verifier", verifier),
-        ("redirect_uri", redirect),
-        ("grant_type", "authorization_code"),
-    ]);
+	let body = form(&[
+		("client_id", client_id),
+		("client_secret", client_secret.trim()),
+		("code", code),
+		("code_verifier", verifier),
+		("redirect_uri", redirect),
+		("grant_type", "authorization_code"),
+	]);
 
-    let response = post_token(&body)?;
-    let refresh_token = response.refresh_token.ok_or_else(|| {
-        "Google did not return a refresh token; try disconnecting and connecting again".to_owned()
-    })?;
+	let response = post_token(&body)?;
+	let refresh_token = response.refresh_token.ok_or_else(|| {
+		"Google did not return a refresh token; try disconnecting and connecting again".to_owned()
+	})?;
 
-    Ok(Tokens {
-        access_token: response.access_token,
-        refresh_token,
-        expires_at: now_unix().saturating_add(response.expires_in.max(60)),
-    })
+	Ok(Tokens {
+		access_token: response.access_token,
+		refresh_token,
+		expires_at: now_unix().saturating_add(response.expires_in.max(60)),
+	})
 }
 
 /// Refusals from the token endpoint are [`Kind::Auth`]: a revoked or expired
 /// sign-in is fixed by connecting again, never by giving up on the edits that
 /// were waiting for it. Only a server-side failure is an ordinary HTTP error.
 fn post_token(body: &str) -> Result<TokenResponse, GoogleError> {
-    const CONTEXT: &str = "Google sign-in failed";
-    let result = super::api::agent()
-        .post(TOKEN_URL)
-        .set("Content-Type", "application/x-www-form-urlencoded")
-        .send_string(body);
+	const CONTEXT: &str = "Google sign-in failed";
+	let result = super::api::agent()
+		.post(TOKEN_URL)
+		.set("Content-Type", "application/x-www-form-urlencoded")
+		.send_string(body);
 
-    match result {
-        Ok(response) => response
-            .into_json()
-            .map_err(|error| GoogleError::transport("Google token response", error)),
-        Err(ureq::Error::Status(code, response)) => {
-            let detail = response
-                .into_json::<TokenError>()
-                .map(|parsed| {
-                    if parsed.error_description.is_empty() {
-                        parsed.error
-                    } else {
-                        parsed.error_description
-                    }
-                })
-                .unwrap_or_else(|_| format!("HTTP {code}"));
-            let mut error = GoogleError::from_status(CONTEXT, code, detail);
-            if !matches!(error.kind, Kind::RateLimited { .. }) && code < 500 {
-                error.kind = Kind::Auth;
-            }
-            Err(error)
-        }
-        Err(error) => Err(GoogleError::transport(CONTEXT, error)),
-    }
+	match result {
+		Ok(response) => response
+			.into_json()
+			.map_err(|error| GoogleError::transport("Google token response", error)),
+		Err(ureq::Error::Status(code, response)) => {
+			let detail = response
+				.into_json::<TokenError>()
+				.map(|parsed| {
+					if parsed.error_description.is_empty() {
+						parsed.error
+					} else {
+						parsed.error_description
+					}
+				})
+				.unwrap_or_else(|_| format!("HTTP {code}"));
+			let mut error = GoogleError::from_status(CONTEXT, code, detail);
+			if !matches!(error.kind, Kind::RateLimited { .. }) && code < 500 {
+				error.kind = Kind::Auth;
+			}
+			Err(error)
+		}
+		Err(error) => Err(GoogleError::transport(CONTEXT, error)),
+	}
 }
 
 fn form(pairs: &[(&str, &str)]) -> String {
-    let mut body = String::new();
-    for (key, value) in pairs {
-        if value.is_empty() {
-            continue;
-        }
-        if !body.is_empty() {
-            body.push('&');
-        }
-        body.push_str(&urlencoding::encode(key));
-        body.push('=');
-        body.push_str(&urlencoding::encode(value));
-    }
-    body
+	let mut body = String::new();
+	for (key, value) in pairs {
+		if value.is_empty() {
+			continue;
+		}
+		if !body.is_empty() {
+			body.push('&');
+		}
+		body.push_str(&urlencoding::encode(key));
+		body.push('=');
+		body.push_str(&urlencoding::encode(value));
+	}
+	body
 }
 
 /// What a request to the loopback listener turned out to be.
 enum Redirect {
-    /// Not Google's redirect for this sign-in: wrong or missing `state`.
-    Unrelated,
-    /// The redirect for this sign-in: the code, or why there is none.
-    Done(Result<String, String>),
+	/// Not Google's redirect for this sign-in: wrong or missing `state`.
+	Unrelated,
+	/// The redirect for this sign-in: the code, or why there is none.
+	Done(Result<String, String>),
 }
 
 fn parse_redirect(request: &str, expected_state: &str) -> Redirect {
-    let line = request.lines().next().unwrap_or("");
-    let path = line.split_whitespace().nth(1).unwrap_or("");
-    let query = path.split_once('?').map(|(_, query)| query).unwrap_or("");
+	let line = request.lines().next().unwrap_or("");
+	let path = line.split_whitespace().nth(1).unwrap_or("");
+	let query = path.split_once('?').map(|(_, query)| query).unwrap_or("");
 
-    let mut code = None;
-    let mut error = None;
-    let mut state = None;
+	let mut code = None;
+	let mut error = None;
+	let mut state = None;
 
-    for pair in query.split('&') {
-        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-        let value = urlencoding::decode(value)
-            .unwrap_or_else(|_| value.into())
-            .into_owned();
+	for pair in query.split('&') {
+		let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+		let value = urlencoding::decode(value)
+			.unwrap_or_else(|_| value.into())
+			.into_owned();
 
-        match key {
-            "code" => code = Some(value),
-            "error" => error = Some(value),
-            "state" => state = Some(value),
-            _ => {}
-        }
-    }
+		match key {
+			"code" => code = Some(value),
+			"error" => error = Some(value),
+			"state" => state = Some(value),
+			_ => {}
+		}
+	}
 
-    if state.as_deref() != Some(expected_state) {
-        return Redirect::Unrelated;
-    }
+	if state.as_deref() != Some(expected_state) {
+		return Redirect::Unrelated;
+	}
 
-    if let Some(error) = error {
-        return Redirect::Done(Err(format!("Google sign-in was cancelled ({error})")));
-    }
+	if let Some(error) = error {
+		return Redirect::Done(Err(format!("Google sign-in was cancelled ({error})")));
+	}
 
-    Redirect::Done(
-        code.ok_or_else(|| "Google sign-in did not return an authorization code".to_owned()),
-    )
+	Redirect::Done(
+		code.ok_or_else(|| "Google sign-in did not return an authorization code".to_owned()),
+	)
 }
 
 /// Random URL-safe text. Fails rather than falling back to anything
 /// predictable, since PKCE and `state` are only worth having if unguessable.
 fn random_token(bytes: usize) -> Result<String, String> {
-    random_token_with(bytes, getrandom::fill)
+	random_token_with(bytes, getrandom::fill)
 }
 
 fn random_token_with(
-    bytes: usize,
-    fill: impl FnOnce(&mut [u8]) -> Result<(), getrandom::Error>,
+	bytes: usize,
+	fill: impl FnOnce(&mut [u8]) -> Result<(), getrandom::Error>,
 ) -> Result<String, String> {
-    let mut buffer = vec![0u8; bytes];
-    fill(&mut buffer)
-        .map_err(|error| format!("could not gather randomness for sign-in: {error}"))?;
-    Ok(URL_SAFE_NO_PAD.encode(buffer))
+	let mut buffer = vec![0u8; bytes];
+	fill(&mut buffer)
+		.map_err(|error| format!("could not gather randomness for sign-in: {error}"))?;
+	Ok(URL_SAFE_NO_PAD.encode(buffer))
 }
 
 fn code_challenge(verifier: &str) -> String {
-    let digest = Sha256::digest(verifier.as_bytes());
-    URL_SAFE_NO_PAD.encode(digest)
+	let digest = Sha256::digest(verifier.as_bytes());
+	URL_SAFE_NO_PAD.encode(digest)
 }
 
 fn now_unix() -> u64 {
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0)
+	SystemTime::now()
+		.duration_since(SystemTime::UNIX_EPOCH)
+		.map(|duration| duration.as_secs())
+		.unwrap_or(0)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+	use super::*;
 
-    fn done(redirect: Redirect) -> Result<String, String> {
-        match redirect {
-            Redirect::Done(result) => result,
-            Redirect::Unrelated => panic!("expected the redirect to be accepted"),
-        }
-    }
+	fn done(redirect: Redirect) -> Result<String, String> {
+		match redirect {
+			Redirect::Done(result) => result,
+			Redirect::Unrelated => panic!("expected the redirect to be accepted"),
+		}
+	}
 
-    #[test]
-    fn a_successful_redirect_yields_the_code() {
-        let request =
-            "GET /?code=abc%2Fde&state=s1&scope=calendar HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
-        assert_eq!(done(parse_redirect(request, "s1")).unwrap(), "abc/de");
-    }
+	#[test]
+	fn a_successful_redirect_yields_the_code() {
+		let request =
+			"GET /?code=abc%2Fde&state=s1&scope=calendar HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
+		assert_eq!(done(parse_redirect(request, "s1")).unwrap(), "abc/de");
+	}
 
-    #[test]
-    fn a_denied_redirect_is_an_error() {
-        let request = "GET /?error=access_denied&state=s1 HTTP/1.1\r\n\r\n";
-        assert!(
-            done(parse_redirect(request, "s1"))
-                .unwrap_err()
-                .contains("access_denied")
-        );
-    }
+	#[test]
+	fn a_denied_redirect_is_an_error() {
+		let request = "GET /?error=access_denied&state=s1 HTTP/1.1\r\n\r\n";
+		assert!(
+			done(parse_redirect(request, "s1"))
+				.unwrap_err()
+				.contains("access_denied")
+		);
+	}
 
-    #[test]
-    fn a_request_without_the_expected_state_is_ignored() {
-        for request in [
-            "GET /?code=abc HTTP/1.1\r\n\r\n",
-            "GET /?code=abc&state=other HTTP/1.1\r\n\r\n",
-            "GET /?error=x&state=other HTTP/1.1\r\n\r\n",
-            "GET / HTTP/1.1\r\n\r\n",
-        ] {
-            assert!(matches!(parse_redirect(request, "s1"), Redirect::Unrelated));
-        }
-    }
+	#[test]
+	fn a_request_without_the_expected_state_is_ignored() {
+		for request in [
+			"GET /?code=abc HTTP/1.1\r\n\r\n",
+			"GET /?code=abc&state=other HTTP/1.1\r\n\r\n",
+			"GET /?error=x&state=other HTTP/1.1\r\n\r\n",
+			"GET / HTTP/1.1\r\n\r\n",
+		] {
+			assert!(matches!(parse_redirect(request, "s1"), Redirect::Unrelated));
+		}
+	}
 
-    #[test]
-    fn the_pkce_challenge_is_s256() {
-        // Vector from RFC 7636 appendix B.
-        let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
-        assert_eq!(
-            code_challenge(verifier),
-            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
-        );
-    }
+	#[test]
+	fn the_pkce_challenge_is_s256() {
+		// Vector from RFC 7636 appendix B.
+		let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+		assert_eq!(
+			code_challenge(verifier),
+			"E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+		);
+	}
 
-    #[test]
-    fn randomness_failure_aborts_instead_of_producing_a_verifier() {
-        assert!(random_token_with(32, |_| Err(getrandom::Error::UNSUPPORTED)).is_err());
-    }
+	#[test]
+	fn randomness_failure_aborts_instead_of_producing_a_verifier() {
+		assert!(random_token_with(32, |_| Err(getrandom::Error::UNSUPPORTED)).is_err());
+	}
 
-    #[test]
-    fn pkce_verifiers_have_32_random_bytes_and_url_safe_encoding() {
-        let verifier = random_token(32).unwrap();
-        assert_eq!(verifier.len(), 43);
-        assert_eq!(URL_SAFE_NO_PAD.decode(verifier).unwrap().len(), 32);
-    }
+	#[test]
+	fn pkce_verifiers_have_32_random_bytes_and_url_safe_encoding() {
+		let verifier = random_token(32).unwrap();
+		assert_eq!(verifier.len(), 43);
+		assert_eq!(URL_SAFE_NO_PAD.decode(verifier).unwrap().len(), 32);
+	}
 
-    #[test]
-    fn an_unexpired_token_is_not_refreshed() {
-        let tokens = Tokens {
-            access_token: "a".into(),
-            refresh_token: "r".into(),
-            expires_at: now_unix() + 3_600,
-        };
-        assert!(tokens.access_valid());
-    }
+	#[test]
+	fn an_unexpired_token_is_not_refreshed() {
+		let tokens = Tokens {
+			access_token: "a".into(),
+			refresh_token: "r".into(),
+			expires_at: now_unix() + 3_600,
+		};
+		assert!(tokens.access_valid());
+	}
 }

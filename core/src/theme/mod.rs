@@ -13,61 +13,61 @@ use iced_core::theme::palette::Extended;
 /// One of the four selectable color schemes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scheme {
-    Light,
-    LightHighContrast,
-    Dark,
-    DarkHighContrast,
+	Light,
+	LightHighContrast,
+	Dark,
+	DarkHighContrast,
 }
 
 impl Scheme {
-    /// In the order the theme pickers offer them.
-    pub const ALL: [Self; 4] = [
-        Self::Light,
-        Self::LightHighContrast,
-        Self::Dark,
-        Self::DarkHighContrast,
-    ];
+	/// In the order the theme pickers offer them.
+	pub const ALL: [Self; 4] = [
+		Self::Light,
+		Self::LightHighContrast,
+		Self::Dark,
+		Self::DarkHighContrast,
+	];
 
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Light => "Light",
-            Self::LightHighContrast => "Light high contrast",
-            Self::Dark => "Dark",
-            Self::DarkHighContrast => "Dark high contrast",
-        }
-    }
+	pub fn name(self) -> &'static str {
+		match self {
+			Self::Light => "Light",
+			Self::LightHighContrast => "Light high contrast",
+			Self::Dark => "Dark",
+			Self::DarkHighContrast => "Dark high contrast",
+		}
+	}
 
-    pub fn palette(self) -> Palette {
-        match self {
-            Self::Light => palettes::LIGHT,
-            Self::LightHighContrast => palettes::LIGHT_HIGH_CONTRAST,
-            Self::Dark => palettes::DARK,
-            Self::DarkHighContrast => palettes::DARK_HIGH_CONTRAST,
-        }
-    }
+	pub fn palette(self) -> Palette {
+		match self {
+			Self::Light => palettes::LIGHT,
+			Self::LightHighContrast => palettes::LIGHT_HIGH_CONTRAST,
+			Self::Dark => palettes::DARK,
+			Self::DarkHighContrast => palettes::DARK_HIGH_CONTRAST,
+		}
+	}
 
-    /// Every surface, border and accent of the scheme.
-    pub fn extended(self) -> Extended {
-        let palette = self.palette();
-        match self {
-            Self::Light => palettes::calm_extended(
-                palette,
-                palettes::LIGHT_SURFACES,
-                Color::from_rgb8(0x76, 0x71, 0x6A),
-            ),
-            Self::Dark => palettes::calm_extended(
-                palette,
-                palettes::DARK_SURFACES,
-                Color::from_rgb8(0xA3, 0x9E, 0x95),
-            ),
-            Self::LightHighContrast => {
-                palettes::high_contrast_extended(palette, palettes::LIGHT_HIGH_CONTRAST_SURFACES)
-            }
-            Self::DarkHighContrast => {
-                palettes::high_contrast_extended(palette, palettes::DARK_HIGH_CONTRAST_SURFACES)
-            }
-        }
-    }
+	/// Every surface, border and accent of the scheme.
+	pub fn extended(self) -> Extended {
+		let palette = self.palette();
+		match self {
+			Self::Light => palettes::calm_extended(
+				palette,
+				palettes::LIGHT_SURFACES,
+				Color::from_rgb8(0x76, 0x71, 0x6A),
+			),
+			Self::Dark => palettes::calm_extended(
+				palette,
+				palettes::DARK_SURFACES,
+				Color::from_rgb8(0xA3, 0x9E, 0x95),
+			),
+			Self::LightHighContrast => {
+				palettes::high_contrast_extended(palette, palettes::LIGHT_HIGH_CONTRAST_SURFACES)
+			}
+			Self::DarkHighContrast => {
+				palettes::high_contrast_extended(palette, palettes::DARK_HIGH_CONTRAST_SURFACES)
+			}
+		}
+	}
 }
 
 /// Corner radii shared by every surface.
@@ -79,21 +79,21 @@ pub const RADIUS_SMALL: f32 = 5.0;
 /// A soft black shadow.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Elevation {
-    pub alpha: f32,
-    pub y: f32,
-    pub blur: f32,
+	pub alpha: f32,
+	pub y: f32,
+	pub blur: f32,
 }
 
 impl Elevation {
-    /// The shadow's color, deepened on dark themes where it would otherwise vanish.
-    pub fn color(self, is_dark: bool) -> Color {
-        let depth = if is_dark { 3.0 } else { 1.0 };
-        Color::BLACK.scale_alpha((self.alpha * depth).min(0.6))
-    }
+	/// The shadow's color, deepened on dark themes where it would otherwise vanish.
+	pub fn color(self, is_dark: bool) -> Color {
+		let depth = if is_dark { 3.0 } else { 1.0 };
+		Color::BLACK.scale_alpha((self.alpha * depth).min(0.6))
+	}
 }
 
 const fn elevation(alpha: f32, y: f32, blur: f32) -> Elevation {
-    Elevation { alpha, y, blur }
+	Elevation { alpha, y, blur }
 }
 
 /// A section or list card.
@@ -119,7 +119,7 @@ pub const FILLED_PRESS_SHADE: f32 = 0.16;
 
 /// A color pulled toward black, the way a filled button darkens.
 pub fn shade(color: Color, by: f32) -> Color {
-    iced_core::theme::palette::mix(color, Color::BLACK, by)
+	iced_core::theme::palette::mix(color, Color::BLACK, by)
 }
 
 /// How much of the accent tints a surface that marks today.
@@ -129,7 +129,7 @@ pub const TODAY_PRESS_TINT: f32 = 0.30;
 
 /// A surface pulled toward `accent`, for a very light accent fill.
 pub fn tint(surface: Color, accent: Color, by: f32) -> Color {
-    iced_core::theme::palette::mix(surface, accent, by)
+	iced_core::theme::palette::mix(surface, accent, by)
 }
 
 /// The dim sheet behind a dialog.
@@ -162,10 +162,10 @@ pub const TRAVEL_MIN_HEIGHT: f32 = 16.0;
 
 /// The hour lines across a day grid.
 pub const HOUR_LINE: Color = Color::from_rgba(
-    0x8A as f32 / 255.0,
-    0x85 as f32 / 255.0,
-    0x7C as f32 / 255.0,
-    0.28,
+	0x8A as f32 / 255.0,
+	0x85 as f32 / 255.0,
+	0x7C as f32 / 255.0,
+	0.28,
 );
 /// The edge of an event, and of a travel box.
 pub const EVENT_EDGE: Color = Color::from_rgba(0.0, 0.0, 0.0, 0.28);
@@ -189,20 +189,20 @@ pub const BLOCK_ROW_OVER: Color = Color::from_rgba(0.9, 0.2, 0.15, 0.22);
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+	use super::*;
 
-    #[test]
-    fn only_the_dark_schemes_are_dark() {
-        for scheme in Scheme::ALL {
-            let dark = matches!(scheme, Scheme::Dark | Scheme::DarkHighContrast);
-            assert_eq!(scheme.extended().is_dark, dark, "{}", scheme.name());
-        }
-    }
+	#[test]
+	fn only_the_dark_schemes_are_dark() {
+		for scheme in Scheme::ALL {
+			let dark = matches!(scheme, Scheme::Dark | Scheme::DarkHighContrast);
+			assert_eq!(scheme.extended().is_dark, dark, "{}", scheme.name());
+		}
+	}
 
-    #[test]
-    fn a_shadow_deepens_on_dark_themes_up_to_a_limit() {
-        assert_eq!(CARD.color(false).a, 0.16);
-        assert!((CARD.color(true).a - 0.48).abs() < 1e-6);
-        assert_eq!(elevation(0.5, 0.0, 0.0).color(true).a, 0.6);
-    }
+	#[test]
+	fn a_shadow_deepens_on_dark_themes_up_to_a_limit() {
+		assert_eq!(CARD.color(false).a, 0.16);
+		assert!((CARD.color(true).a - 0.48).abs() < 1e-6);
+		assert_eq!(elevation(0.5, 0.0, 0.0).color(true).a, 0.6);
+	}
 }

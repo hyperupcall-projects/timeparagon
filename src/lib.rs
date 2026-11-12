@@ -13,8 +13,8 @@
 //!   [`webextension`]), which adds a link to the inbox and exits.
 
 pub use timeslay_core::{
-    calendar, clock, database_sync, fsutil, hex, recurrence, secrets, settings, shared_data,
-    task_db, task_input,
+	calendar, clock, database_sync, fsutil, hex, recurrence, secrets, settings, shared_data,
+	task_db, task_input,
 };
 
 pub mod activity;

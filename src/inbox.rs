@@ -28,1801 +28,1799 @@ const MAX_TITLE_CHARS: usize = 1024;
 
 #[derive(Default)]
 pub struct Inbox {
-    pub voice: crate::voice::Session,
-    pub image: crate::image_input::Session,
-    /// Inactive creation forms, retained while another type is selected.
-    pub(crate) entry_drafts: Vec<calendar::Draft>,
-    previous_calendar_draft: Option<calendar::Draft>,
-    /// The add something popup, while it is open.
-    pub draft: Option<Draft>,
-    /// "View in calendar": what is about to be created, over its day or week.
-    pub preview: Option<preview::Preview>,
-    /// The task whose day chooser is open.
-    pub scheduling: Option<String>,
-    /// The day typed into the open chooser.
-    pub date: String,
-    /// The month calendar open in the details pane: the task it schedules, and
-    /// the first day of the month on show.
-    pub picker: Option<(String, NaiveDate)>,
-    pub error: Option<String>,
-    /// Invitations waiting for an answer, soonest first. They sit here rather
-    /// than as tasks, and leave as soon as they are answered.
-    pub invitations: Vec<Event>,
-    invitation_requests: u64,
-    /// The list a task was last created on, for the time before a sync has
-    /// brought that list's name back.
-    created_list: Option<String>,
-    lookups: u64,
-    pub(crate) workspace: Option<Box<tb::Workspace>>,
+	pub voice: crate::voice::Session,
+	pub image: crate::image_input::Session,
+	/// Inactive creation forms, retained while another type is selected.
+	pub(crate) entry_drafts: Vec<calendar::Draft>,
+	previous_calendar_draft: Option<calendar::Draft>,
+	/// The add something popup, while it is open.
+	pub draft: Option<Draft>,
+	/// "View in calendar": what is about to be created, over its day or week.
+	pub preview: Option<preview::Preview>,
+	/// The task whose day chooser is open.
+	pub scheduling: Option<String>,
+	/// The day typed into the open chooser.
+	pub date: String,
+	/// The month calendar open in the details pane: the task it schedules, and
+	/// the first day of the month on show.
+	pub picker: Option<(String, NaiveDate)>,
+	pub error: Option<String>,
+	/// Invitations waiting for an answer, soonest first. They sit here rather
+	/// than as tasks, and leave as soon as they are answered.
+	pub invitations: Vec<Event>,
+	invitation_requests: u64,
+	/// The list a task was last created on, for the time before a sync has
+	/// brought that list's name back.
+	created_list: Option<String>,
+	lookups: u64,
+	pub(crate) workspace: Option<Box<tb::Workspace>>,
 }
 
 /// A task being written in the popup.
 #[derive(Debug, Clone, Default)]
 pub struct Draft {
-    /// None is the default Task tab.
-    pub kind: Option<calendar::DraftKind>,
-    pub title: String,
-    pub event: Option<Event>,
-    pub deadline: String,
-    pub due: String,
-    /// Where the task came from, once a link has been recognized.
-    pub source: Option<Source>,
-    /// An integration is reading the link.
-    pub fetching: bool,
-    pub saving: bool,
-    pub error: Option<String>,
-    lookup: u64,
-    pub syntax_help: bool,
-    quick_ignored: Vec<std::ops::Range<usize>>,
-    quick_base: Option<(tb::Metadata, String, String)>,
-    quick_applied: Option<(tb::Metadata, String, String)>,
+	/// None is the default Task tab.
+	pub kind: Option<calendar::DraftKind>,
+	pub title: String,
+	pub event: Option<Event>,
+	pub deadline: String,
+	pub due: String,
+	/// Where the task came from, once a link has been recognized.
+	pub source: Option<Source>,
+	/// An integration is reading the link.
+	pub fetching: bool,
+	pub saving: bool,
+	pub error: Option<String>,
+	lookup: u64,
+	pub syntax_help: bool,
+	quick_ignored: Vec<std::ops::Range<usize>>,
+	quick_base: Option<(tb::Metadata, String, String)>,
+	quick_applied: Option<(tb::Metadata, String, String)>,
 }
 
 impl Draft {
-    pub(crate) fn quick_tokens(
-        &self,
-        projects: &crate::config::ProjectsSettings,
-    ) -> Vec<crate::task_input::Token> {
-        crate::task_input::detect(&self.title, crate::clock::now().date_naive(), projects)
-            .into_iter()
-            .filter(|token| !self.quick_ignored.contains(&token.range))
-            .collect()
-    }
+	pub(crate) fn quick_tokens(
+		&self,
+		projects: &crate::config::ProjectsSettings,
+	) -> Vec<crate::task_input::Token> {
+		crate::task_input::detect(&self.title, crate::clock::now().date_naive(), projects)
+			.into_iter()
+			.filter(|token| !self.quick_ignored.contains(&token.range))
+			.collect()
+	}
 
-    fn set_title(&mut self, title: String) {
-        crate::task_input::remap_ignored(&self.title, &title, &mut self.quick_ignored);
-        self.title = title;
-    }
+	fn set_title(&mut self, title: String) {
+		crate::task_input::remap_ignored(&self.title, &title, &mut self.quick_ignored);
+		self.title = title;
+	}
 }
 
 // Messages only live until the next update, so a large variant costs nothing lasting.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum Action {
-    Voice(crate::voice::Action),
-    Image(crate::image_input::Action),
-    Sort(InboxSort),
-    OverdueSort(InboxSort),
-    /// Open the add something popup.
-    NewTask,
-    KindSelected(calendar::DraftKind),
-    /// The "View in calendar" preview.
-    Preview(preview::PreviewAction),
-    Cancel,
-    Title(String),
-    SyntaxHelp(bool),
-    AcceptToken(std::ops::Range<usize>),
-    DismissToken(std::ops::Range<usize>),
-    Description(iced::widget::text_editor::Action),
-    Deadline(String),
-    Due(String),
-    /// Forget the recognized link without touching the title.
-    ClearSource,
-    /// An integration's answer to the link with this lookup number.
-    Fetched(u64, Result<integrations::Details, String>),
-    Create,
-    Created(Result<Event, String>),
-    /// Open or close the day chooser under a task.
-    ChooseDay(String),
-    /// The day typed into the chooser changed.
-    Date(String),
-    /// Plan the task for this day.
-    ScheduleOn(String, NaiveDate),
-    /// Plan the task for the day typed into the chooser.
-    ScheduleTyped(String),
-    /// The list that collects new tasks was chosen in Settings.
-    List(Option<String>),
-    /// Open or close the month calendar in a task's details pane.
-    TogglePicker(String),
-    /// Show the month this many months after (or before) the one on show.
-    PickerShift(i32),
-    /// Google's answer to the request with this number.
-    InvitationsFetched(u64, Result<Vec<Event>, String>),
-    /// Open an invitation in the details pane.
-    OpenInvitation(String),
+	Voice(crate::voice::Action),
+	Image(crate::image_input::Action),
+	Sort(InboxSort),
+	OverdueSort(InboxSort),
+	/// Open the add something popup.
+	NewTask,
+	KindSelected(calendar::DraftKind),
+	/// The "View in calendar" preview.
+	Preview(preview::PreviewAction),
+	Cancel,
+	Title(String),
+	SyntaxHelp(bool),
+	AcceptToken(std::ops::Range<usize>),
+	DismissToken(std::ops::Range<usize>),
+	Description(iced::widget::text_editor::Action),
+	Deadline(String),
+	Due(String),
+	/// Forget the recognized link without touching the title.
+	ClearSource,
+	/// An integration's answer to the link with this lookup number.
+	Fetched(u64, Result<integrations::Details, String>),
+	Create,
+	Created(Result<Event, String>),
+	/// Open or close the day chooser under a task.
+	ChooseDay(String),
+	/// The day typed into the chooser changed.
+	Date(String),
+	/// Plan the task for this day.
+	ScheduleOn(String, NaiveDate),
+	/// Plan the task for the day typed into the chooser.
+	ScheduleTyped(String),
+	/// The list that collects new tasks was chosen in Settings.
+	List(Option<String>),
+	/// Open or close the month calendar in a task's details pane.
+	TogglePicker(String),
+	/// Show the month this many months after (or before) the one on show.
+	PickerShift(i32),
+	/// Google's answer to the request with this number.
+	InvitationsFetched(u64, Result<Vec<Event>, String>),
+	/// Open an invitation in the details pane.
+	OpenInvitation(String),
 }
 
 /// Asks Google which invitations are waiting. They are only looked for on the
 /// primary calendar: on a calendar shared with the user, the guest Google calls
 /// "self" is that calendar's owner, whose invitations aren't the user's to answer.
 pub fn refresh_invitations(state: &mut State) -> Task<Message> {
-    let Some(calendar) = state
-        .calendar
-        .calendars
-        .iter()
-        .find(|calendar| calendar.primary && !calendar.is_task_list())
-        .cloned()
-    else {
-        return Task::none();
-    };
-    state.inbox.invitation_requests += 1;
-    let request = state.inbox.invitation_requests;
-    let settings = state.config.calendar.clone();
-    blocking::run(move || {
-        calendar::sync_invitations(&calendar::GoogleClient::from_settings(&settings), &calendar)
-    })
-    .map(move |result| Message::Inbox(Action::InvitationsFetched(request, result)))
+	let Some(calendar) = state
+		.calendar
+		.calendars
+		.iter()
+		.find(|calendar| calendar.primary && !calendar.is_task_list())
+		.cloned()
+	else {
+		return Task::none();
+	};
+	state.inbox.invitation_requests += 1;
+	let request = state.inbox.invitation_requests;
+	let settings = state.config.calendar.clone();
+	blocking::run(move || {
+		calendar::sync_invitations(&calendar::GoogleClient::from_settings(&settings), &calendar)
+	})
+	.map(move |result| Message::Inbox(Action::InvitationsFetched(request, result)))
 }
 
 /// Whether `calendar_id` is the list that collects new tasks.
 pub fn is_inbox_list(state: &State, calendar_id: &str) -> bool {
-    if let Some(chosen) = &state.config.calendar.inbox_list {
-        return ids::bare_list(chosen) == ids::bare_list(calendar_id);
-    }
-    state.inbox.created_list.as_deref() == Some(calendar_id)
-        || state.calendar.calendars.iter().any(|calendar| {
-            calendar.id == calendar_id
-                && calendar.is_task_list()
-                && calendar.name.trim().eq_ignore_ascii_case(DEFAULT_LIST)
-        })
+	if let Some(chosen) = &state.config.calendar.inbox_list {
+		return ids::bare_list(chosen) == ids::bare_list(calendar_id);
+	}
+	state.inbox.created_list.as_deref() == Some(calendar_id)
+		|| state.calendar.calendars.iter().any(|calendar| {
+			calendar.id == calendar_id
+				&& calendar.is_task_list()
+				&& calendar.name.trim().eq_ignore_ascii_case(DEFAULT_LIST)
+		})
 }
 
 /// A task waiting on the inbox list with nothing to say when it will be done.
 pub fn untriaged(state: &State, event: &Event) -> bool {
-    event.start.date_naive() == UNDATED
-        && tb::in_backlog(event)
-        && is_inbox_list(state, &event.calendar_id)
+	event.start.date_naive() == UNDATED
+		&& tb::in_backlog(event)
+		&& is_inbox_list(state, &event.calendar_id)
 }
 
 /// Every task still to be triaged, in the selected order. Unknown times sort last.
 pub fn tasks(state: &State) -> Vec<&Event> {
-    let mut tasks: Vec<_> = state
-        .calendar
-        .events
-        .iter()
-        .filter(|event| untriaged(state, event))
-        .collect();
-    sort_tasks(&mut tasks, state.config.calendar.inbox_sort);
-    tasks
+	let mut tasks: Vec<_> = state
+		.calendar
+		.events
+		.iter()
+		.filter(|event| untriaged(state, event))
+		.collect();
+	sort_tasks(&mut tasks, state.config.calendar.inbox_sort);
+	tasks
 }
 
 /// Incomplete date-only tasks for today that have no assigned block or time slot.
 pub fn today_tasks(state: &State) -> Vec<&Event> {
-    let now = crate::clock::now();
-    let mut tasks: Vec<_> = state
-        .calendar
-        .events
-        .iter()
-        .filter(|event| tb::unslotted_on(event, now.date_naive(), now))
-        .collect();
-    sort_tasks(&mut tasks, state.config.calendar.inbox_sort);
-    tasks
+	let now = crate::clock::now();
+	let mut tasks: Vec<_> = state
+		.calendar
+		.events
+		.iter()
+		.filter(|event| tb::unslotted_on(event, now.date_naive(), now))
+		.collect();
+	sort_tasks(&mut tasks, state.config.calendar.inbox_sort);
+	tasks
 }
 
 /// Incomplete tasks across all lists whose planned time or deadline has passed.
 pub fn overdue_tasks(state: &State) -> Vec<&Event> {
-    overdue_tasks_at(state, crate::clock::now())
+	overdue_tasks_at(state, crate::clock::now())
 }
 
 fn overdue_tasks_at(state: &State, now: chrono::DateTime<Local>) -> Vec<&Event> {
-    let mut tasks: Vec<_> = state
-        .calendar
-        .events
-        .iter()
-        .filter(|event| tb::past_due(event, now))
-        .collect();
-    sort_tasks(&mut tasks, state.config.calendar.overdue_sort);
-    tasks
+	let mut tasks: Vec<_> = state
+		.calendar
+		.events
+		.iter()
+		.filter(|event| tb::past_due(event, now))
+		.collect();
+	sort_tasks(&mut tasks, state.config.calendar.overdue_sort);
+	tasks
 }
 
 fn sort_tasks(tasks: &mut Vec<&Event>, sort: InboxSort) {
-    tasks.sort_by_cached_key(|event| {
-        let metadata = tb::metadata(event);
-        let timestamp = match sort {
-            InboxSort::CreatedAscending | InboxSort::CreatedDescending => metadata.created_at,
-            InboxSort::ModifiedAscending | InboxSort::ModifiedDescending => {
-                event.details.task_updated_at
-            }
-            InboxSort::Manual => None,
-        };
-        let descending = matches!(
-            sort,
-            InboxSort::CreatedDescending | InboxSort::ModifiedDescending
-        );
-        let manual = if sort == InboxSort::Manual {
-            metadata.order
-        } else {
-            0
-        };
-        // Keep unknown timestamps last in either direction, and ties stable across syncs.
-        (
-            timestamp.is_none(),
-            timestamp.filter(|_| !descending),
-            std::cmp::Reverse(timestamp.filter(|_| descending)),
-            manual,
-            event.title.to_lowercase(),
-            event.id.clone(),
-        )
-    });
+	tasks.sort_by_cached_key(|event| {
+		let metadata = tb::metadata(event);
+		let timestamp = match sort {
+			InboxSort::CreatedAscending | InboxSort::CreatedDescending => metadata.created_at,
+			InboxSort::ModifiedAscending | InboxSort::ModifiedDescending => {
+				event.details.task_updated_at
+			}
+			InboxSort::Manual => None,
+		};
+		let descending = matches!(
+			sort,
+			InboxSort::CreatedDescending | InboxSort::ModifiedDescending
+		);
+		let manual = if sort == InboxSort::Manual {
+			metadata.order
+		} else {
+			0
+		};
+		// Keep unknown timestamps last in either direction, and ties stable across syncs.
+		(
+			timestamp.is_none(),
+			timestamp.filter(|_| !descending),
+			std::cmp::Reverse(timestamp.filter(|_| descending)),
+			manual,
+			event.title.to_lowercase(),
+			event.id.clone(),
+		)
+	});
 }
 
 /// Whether `calendar_id` is the list that collects triaged tasks.
 pub fn is_triaged_list(state: &State, calendar_id: &str) -> bool {
-    if let Some(chosen) = &state.config.calendar.triaged_list {
-        return ids::bare_list(chosen) == ids::bare_list(calendar_id);
-    }
-    let default = crate::config::CalendarSettings::DEFAULT_TRIAGED_LIST;
-    calendar_id
-        .trim_start_matches("tasks:")
-        .eq_ignore_ascii_case(default)
-        || state.calendar.calendars.iter().any(|calendar| {
-            calendar.id == calendar_id
-                && calendar.is_task_list()
-                && calendar.name.trim().eq_ignore_ascii_case(default)
-        })
+	if let Some(chosen) = &state.config.calendar.triaged_list {
+		return ids::bare_list(chosen) == ids::bare_list(calendar_id);
+	}
+	let default = crate::config::CalendarSettings::DEFAULT_TRIAGED_LIST;
+	calendar_id
+		.trim_start_matches("tasks:")
+		.eq_ignore_ascii_case(default)
+		|| state.calendar.calendars.iter().any(|calendar| {
+			calendar.id == calendar_id
+				&& calendar.is_task_list()
+				&& calendar.name.trim().eq_ignore_ascii_case(default)
+		})
 }
 
 /// Every task that has been triaged, in the order they were put in order.
 pub fn triaged_tasks(state: &State) -> Vec<&Event> {
-    let mut tasks: Vec<_> = state
-        .calendar
-        .events
-        .iter()
-        .filter(|event| {
-            event.is_task() && !event.completed && is_triaged_list(state, &event.calendar_id)
-        })
-        .collect();
-    tasks.sort_by_cached_key(|event| (tb::metadata(event).order, event.title.to_lowercase()));
-    tasks
+	let mut tasks: Vec<_> = state
+		.calendar
+		.events
+		.iter()
+		.filter(|event| {
+			event.is_task() && !event.completed && is_triaged_list(state, &event.calendar_id)
+		})
+		.collect();
+	tasks.sort_by_cached_key(|event| (tb::metadata(event).order, event.title.to_lowercase()));
+	tasks
 }
 
 pub fn update(state: &mut State, action: Action) -> Task<Message> {
-    match action {
-        Action::InvitationsFetched(request, result) => {
-            // Only the latest request can know about the latest reply.
-            if request == state.inbox.invitation_requests {
-                match result {
-                    Ok(invitations) => state.inbox.invitations = invitations,
-                    Err(error) => log::warn!("could not look for invitations: {error}"),
-                }
-            }
-            Task::none()
-        }
-        Action::OpenInvitation(id) => {
-            // A series, or an event far ahead, needn't be in the range on show.
-            if let Some(event) = state.inbox.invitations.iter().find(|e| e.id == id) {
-                state.calendar.detail_event = Some(event.clone());
-            }
-            Task::done(Message::Event(crate::app::EventMessage::EventOpened(id)))
-        }
-        Action::Voice(action) => crate::voice::update(state, action),
-        Action::Image(action) => crate::image_input::update(state, action),
-        Action::Sort(sort) => {
-            state.config.calendar.inbox_sort = sort;
-            crate::app::queue_save(state)
-        }
-        Action::OverdueSort(sort) => {
-            state.config.calendar.overdue_sort = sort;
-            crate::app::queue_save(state)
-        }
-        Action::NewTask => {
-            state.inbox.error = None;
-            if state.inbox.draft.is_none() {
-                state.inbox.previous_calendar_draft = state.calendar.draft.take();
-                state.inbox.workspace = Some(Box::new(std::mem::take(&mut state.timeblocking)));
-                state.inbox.draft = Some(Draft {
-                    event: Some(blank_event()),
-                    ..Draft::default()
-                });
-                state.calendar.error = None;
-                state.task_description = iced::widget::text_editor::Content::new();
-            }
-            operation::focus(Id::new(TITLE_FIELD))
-        }
-        Action::KindSelected(kind) => creation::select(state, kind),
-        Action::Preview(action) => preview::update(state, action),
-        Action::Cancel => {
-            // A task being saved cannot be taken back, so keep its popup up
-            // to show whether the save worked.
-            if state.inbox.draft.as_ref().is_some_and(|draft| draft.saving) {
-                return Task::none();
-            }
-            close_draft(state);
-            // A reply that is still on its way must not land in the next popup.
-            state.inbox.lookups += 1;
-            Task::none()
-        }
-        Action::Title(value) => title_changed(state, value),
-        Action::SyntaxHelp(open) => edit(state, |draft| draft.syntax_help = open),
-        Action::AcceptToken(range) => {
-            if let Some(draft) = state.inbox.draft.as_mut().filter(|d| !d.saving) {
-                let tokens = draft.quick_tokens(&state.config.projects);
-                if let Some(token) = tokens.into_iter().find(|t| t.range == range) {
-                    preview(
-                        draft,
-                        &mut state.timeblocking.date,
-                        &mut state.timeblocking.deadline,
-                        &state.config.projects,
-                    );
-                    if let Some((metadata, due, deadline)) = draft.quick_base.as_mut() {
-                        apply_value(metadata, due, deadline, token.value);
-                    }
-                    draft.set_title(crate::task_input::remove(&draft.title, [range]));
-                    preview(
-                        draft,
-                        &mut state.timeblocking.date,
-                        &mut state.timeblocking.deadline,
-                        &state.config.projects,
-                    );
-                }
-            }
-            Task::none()
-        }
-        Action::DismissToken(range) => {
-            if let Some(draft) = state.inbox.draft.as_mut().filter(|d| !d.saving)
-                && draft
-                    .quick_tokens(&state.config.projects)
-                    .iter()
-                    .any(|t| t.range == range)
-            {
-                draft.quick_ignored.push(range);
-                preview(
-                    draft,
-                    &mut state.timeblocking.date,
-                    &mut state.timeblocking.deadline,
-                    &state.config.projects,
-                );
-            }
-            Task::none()
-        }
-        Action::Description(action) => {
-            if state.inbox.draft.as_ref().is_some_and(|d| !d.saving) {
-                state.task_description.perform(action);
-                let value = state.task_description.text();
-                if let Some(event) = state.inbox.draft.as_mut().and_then(|d| d.event.as_mut()) {
-                    event.details.description = value;
-                }
-            }
-            Task::none()
-        }
-        Action::Deadline(value) => {
-            state.timeblocking.deadline = value.clone();
-            edit(state, |draft| draft.deadline = value)
-        }
-        Action::Due(value) => {
-            state.timeblocking.date = value.clone();
-            edit(state, |draft| draft.due = value)
-        }
-        Action::ClearSource => edit(state, |draft| draft.source = None),
-        Action::Fetched(lookup, result) => {
-            fetched(state, lookup, result);
-            Task::none()
-        }
-        Action::Create if state.inbox.image.busy => Task::none(),
-        Action::Create => {
-            if state.inbox.draft.as_ref().and_then(|d| d.kind).is_some() {
-                creation::create(state)
-            } else {
-                create(state)
-            }
-        }
-        Action::Created(result) => created(state, result),
-        Action::ChooseDay(id) => {
-            state.inbox.error = None;
-            if state.inbox.scheduling.as_deref() == Some(id.as_str()) {
-                state.inbox.scheduling = None;
-            } else {
-                state.inbox.scheduling = Some(id);
-                state.inbox.date.clear();
-            }
-            Task::none()
-        }
-        Action::Date(value) => {
-            state.inbox.date = value;
-            state.inbox.error = None;
-            Task::none()
-        }
-        Action::ScheduleOn(id, day) => schedule(state, id, day),
-        Action::ScheduleTyped(id) => match deadline::parse_date(state.inbox.date.trim()) {
-            Ok(day) => schedule(state, id, day),
-            Err(error) => {
-                state.inbox.error = Some(error.replace("a deadline", "a day"));
-                Task::none()
-            }
-        },
-        Action::List(list) => {
-            state.config.calendar.inbox_list = list;
-            crate::app::queue_save(state)
-        }
-        Action::TogglePicker(id) => {
-            state.inbox.error = None;
-            state.inbox.picker = match state.inbox.picker {
-                Some((ref open, _)) if *open == id => None,
-                _ => {
-                    let today = calendar::day_at(
-                        crate::clock::now(),
-                        state.config.calendar.day_start_hour(),
-                    );
-                    Some((id, calendar::first_of_month(today)))
-                }
-            };
-            Task::none()
-        }
-        Action::PickerShift(months) => {
-            if let Some((_, month)) = state.inbox.picker.as_mut() {
-                let step = chrono::Months::new(months.unsigned_abs());
-                let shifted = if months >= 0 {
-                    month.checked_add_months(step)
-                } else {
-                    month.checked_sub_months(step)
-                };
-                if let Some(shifted) = shifted {
-                    *month = shifted;
-                }
-            }
-            Task::none()
-        }
-    }
+	match action {
+		Action::InvitationsFetched(request, result) => {
+			// Only the latest request can know about the latest reply.
+			if request == state.inbox.invitation_requests {
+				match result {
+					Ok(invitations) => state.inbox.invitations = invitations,
+					Err(error) => log::warn!("could not look for invitations: {error}"),
+				}
+			}
+			Task::none()
+		}
+		Action::OpenInvitation(id) => {
+			// A series, or an event far ahead, needn't be in the range on show.
+			if let Some(event) = state.inbox.invitations.iter().find(|e| e.id == id) {
+				state.calendar.detail_event = Some(event.clone());
+			}
+			Task::done(Message::Event(crate::app::EventMessage::EventOpened(id)))
+		}
+		Action::Voice(action) => crate::voice::update(state, action),
+		Action::Image(action) => crate::image_input::update(state, action),
+		Action::Sort(sort) => {
+			state.config.calendar.inbox_sort = sort;
+			crate::app::queue_save(state)
+		}
+		Action::OverdueSort(sort) => {
+			state.config.calendar.overdue_sort = sort;
+			crate::app::queue_save(state)
+		}
+		Action::NewTask => {
+			state.inbox.error = None;
+			if state.inbox.draft.is_none() {
+				state.inbox.previous_calendar_draft = state.calendar.draft.take();
+				state.inbox.workspace = Some(Box::new(std::mem::take(&mut state.timeblocking)));
+				state.inbox.draft = Some(Draft {
+					event: Some(blank_event()),
+					..Draft::default()
+				});
+				state.calendar.error = None;
+				state.task_description = iced::widget::text_editor::Content::new();
+			}
+			operation::focus(Id::new(TITLE_FIELD))
+		}
+		Action::KindSelected(kind) => creation::select(state, kind),
+		Action::Preview(action) => preview::update(state, action),
+		Action::Cancel => {
+			// A task being saved cannot be taken back, so keep its popup up
+			// to show whether the save worked.
+			if state.inbox.draft.as_ref().is_some_and(|draft| draft.saving) {
+				return Task::none();
+			}
+			close_draft(state);
+			// A reply that is still on its way must not land in the next popup.
+			state.inbox.lookups += 1;
+			Task::none()
+		}
+		Action::Title(value) => title_changed(state, value),
+		Action::SyntaxHelp(open) => edit(state, |draft| draft.syntax_help = open),
+		Action::AcceptToken(range) => {
+			if let Some(draft) = state.inbox.draft.as_mut().filter(|d| !d.saving) {
+				let tokens = draft.quick_tokens(&state.config.projects);
+				if let Some(token) = tokens.into_iter().find(|t| t.range == range) {
+					preview(
+						draft,
+						&mut state.timeblocking.date,
+						&mut state.timeblocking.deadline,
+						&state.config.projects,
+					);
+					if let Some((metadata, due, deadline)) = draft.quick_base.as_mut() {
+						apply_value(metadata, due, deadline, token.value);
+					}
+					draft.set_title(crate::task_input::remove(&draft.title, [range]));
+					preview(
+						draft,
+						&mut state.timeblocking.date,
+						&mut state.timeblocking.deadline,
+						&state.config.projects,
+					);
+				}
+			}
+			Task::none()
+		}
+		Action::DismissToken(range) => {
+			if let Some(draft) = state.inbox.draft.as_mut().filter(|d| !d.saving)
+				&& draft
+					.quick_tokens(&state.config.projects)
+					.iter()
+					.any(|t| t.range == range)
+			{
+				draft.quick_ignored.push(range);
+				preview(
+					draft,
+					&mut state.timeblocking.date,
+					&mut state.timeblocking.deadline,
+					&state.config.projects,
+				);
+			}
+			Task::none()
+		}
+		Action::Description(action) => {
+			if state.inbox.draft.as_ref().is_some_and(|d| !d.saving) {
+				state.task_description.perform(action);
+				let value = state.task_description.text();
+				if let Some(event) = state.inbox.draft.as_mut().and_then(|d| d.event.as_mut()) {
+					event.details.description = value;
+				}
+			}
+			Task::none()
+		}
+		Action::Deadline(value) => {
+			state.timeblocking.deadline = value.clone();
+			edit(state, |draft| draft.deadline = value)
+		}
+		Action::Due(value) => {
+			state.timeblocking.date = value.clone();
+			edit(state, |draft| draft.due = value)
+		}
+		Action::ClearSource => edit(state, |draft| draft.source = None),
+		Action::Fetched(lookup, result) => {
+			fetched(state, lookup, result);
+			Task::none()
+		}
+		Action::Create if state.inbox.image.busy => Task::none(),
+		Action::Create => {
+			if state.inbox.draft.as_ref().and_then(|d| d.kind).is_some() {
+				creation::create(state)
+			} else {
+				create(state)
+			}
+		}
+		Action::Created(result) => created(state, result),
+		Action::ChooseDay(id) => {
+			state.inbox.error = None;
+			if state.inbox.scheduling.as_deref() == Some(id.as_str()) {
+				state.inbox.scheduling = None;
+			} else {
+				state.inbox.scheduling = Some(id);
+				state.inbox.date.clear();
+			}
+			Task::none()
+		}
+		Action::Date(value) => {
+			state.inbox.date = value;
+			state.inbox.error = None;
+			Task::none()
+		}
+		Action::ScheduleOn(id, day) => schedule(state, id, day),
+		Action::ScheduleTyped(id) => match deadline::parse_date(state.inbox.date.trim()) {
+			Ok(day) => schedule(state, id, day),
+			Err(error) => {
+				state.inbox.error = Some(error.replace("a deadline", "a day"));
+				Task::none()
+			}
+		},
+		Action::List(list) => {
+			state.config.calendar.inbox_list = list;
+			crate::app::queue_save(state)
+		}
+		Action::TogglePicker(id) => {
+			state.inbox.error = None;
+			state.inbox.picker = match state.inbox.picker {
+				Some((ref open, _)) if *open == id => None,
+				_ => {
+					let today = calendar::day_at(
+						crate::clock::now(),
+						state.config.calendar.day_start_hour(),
+					);
+					Some((id, calendar::first_of_month(today)))
+				}
+			};
+			Task::none()
+		}
+		Action::PickerShift(months) => {
+			if let Some((_, month)) = state.inbox.picker.as_mut() {
+				let step = chrono::Months::new(months.unsigned_abs());
+				let shifted = if months >= 0 {
+					month.checked_add_months(step)
+				} else {
+					month.checked_sub_months(step)
+				};
+				if let Some(shifted) = shifted {
+					*month = shifted;
+				}
+			}
+			Task::none()
+		}
+	}
 }
 
 pub const DRAFT_ID: &str = "task:new-draft";
 
 fn blank_event() -> Event {
-    let start = calendar::at_clock(UNDATED, 0, 0);
-    Event {
-        id: DRAFT_ID.into(),
-        calendar_id: "tasks:inbox".into(),
-        title: String::new(),
-        start,
-        end: start + Duration::days(1),
-        all_day: true,
-        completed: false,
-        color: calendar::colors::TASK,
-        details: calendar::Details {
-            task_data: Some(task_db::TaskData {
-                id: 0,
-                metadata: tb::Metadata::default(),
-            }),
-            ..Default::default()
-        },
-    }
+	let start = calendar::at_clock(UNDATED, 0, 0);
+	Event {
+		id: DRAFT_ID.into(),
+		calendar_id: "tasks:inbox".into(),
+		title: String::new(),
+		start,
+		end: start + Duration::days(1),
+		all_day: true,
+		completed: false,
+		color: calendar::colors::TASK,
+		details: calendar::Details {
+			task_data: Some(task_db::TaskData {
+				id: 0,
+				metadata: tb::Metadata::default(),
+			}),
+			..Default::default()
+		},
+	}
 }
 
 fn close_draft(state: &mut State) {
-    state.inbox.voice.cancel();
-    state.inbox.image = Default::default();
-    state.inbox.preview = None;
-    state.calendar.draft = state.inbox.previous_calendar_draft.take();
-    state.inbox.entry_drafts.clear();
-    state.inbox.draft = None;
-    state.travel.picker = None;
-    state.picker = None;
-    if let Some(workspace) = state.inbox.workspace.take() {
-        state.timeblocking = *workspace;
-    }
+	state.inbox.voice.cancel();
+	state.inbox.image = Default::default();
+	state.inbox.preview = None;
+	state.calendar.draft = state.inbox.previous_calendar_draft.take();
+	state.inbox.entry_drafts.clear();
+	state.inbox.draft = None;
+	state.travel.picker = None;
+	state.picker = None;
+	if let Some(workspace) = state.inbox.workspace.take() {
+		state.timeblocking = *workspace;
+	}
 }
 
 fn edit(state: &mut State, change: impl FnOnce(&mut Draft)) -> Task<Message> {
-    if let Some(draft) = state.inbox.draft.as_mut().filter(|draft| !draft.saving) {
-        change(draft);
-        draft.error = None;
-    }
-    Task::none()
+	if let Some(draft) = state.inbox.draft.as_mut().filter(|draft| !draft.saving) {
+		change(draft);
+		draft.error = None;
+	}
+	Task::none()
 }
 
 /// A link pasted in becomes the task's source, and is read straight away. A
 /// link typed in a character at a time is only recognized, because every
 /// prefix of it is not worth a request; creating the task reads it then.
 fn title_changed(state: &mut State, value: String) -> Task<Message> {
-    let Some(draft) = state.inbox.draft.as_mut().filter(|draft| !draft.saving) else {
-        return Task::none();
-    };
-    let pasted = value.len() >= draft.title.len() + 2;
-    draft.set_title(value);
-    draft.error = None;
-    preview(
-        draft,
-        &mut state.timeblocking.date,
-        &mut state.timeblocking.deadline,
-        &state.config.projects,
-    );
-    let Some(source) = integrations::recognize(&draft.title) else {
-        return Task::none();
-    };
-    draft.source = Some(source.clone());
-    if !pasted {
-        return Task::none();
-    }
+	let Some(draft) = state.inbox.draft.as_mut().filter(|draft| !draft.saving) else {
+		return Task::none();
+	};
+	let pasted = value.len() >= draft.title.len() + 2;
+	draft.set_title(value);
+	draft.error = None;
+	preview(
+		draft,
+		&mut state.timeblocking.date,
+		&mut state.timeblocking.deadline,
+		&state.config.projects,
+	);
+	let Some(source) = integrations::recognize(&draft.title) else {
+		return Task::none();
+	};
+	draft.source = Some(source.clone());
+	if !pasted {
+		return Task::none();
+	}
 
-    state.inbox.lookups += 1;
-    let lookup = state.inbox.lookups;
-    draft.lookup = lookup;
-    draft.fetching = true;
-    let auth = Auth {
-        settings: state.config.calendar.clone(),
-    };
-    blocking::run(move || integrations::fetch(&source, &auth))
-        .map(move |result| Message::Inbox(Action::Fetched(lookup, result)))
+	state.inbox.lookups += 1;
+	let lookup = state.inbox.lookups;
+	draft.lookup = lookup;
+	draft.fetching = true;
+	let auth = Auth {
+		settings: state.config.calendar.clone(),
+	};
+	blocking::run(move || integrations::fetch(&source, &auth))
+		.map(move |result| Message::Inbox(Action::Fetched(lookup, result)))
 }
 
 fn preview(
-    draft: &mut Draft,
-    due: &mut String,
-    deadline: &mut String,
-    projects: &crate::config::ProjectsSettings,
+	draft: &mut Draft,
+	due: &mut String,
+	deadline: &mut String,
+	projects: &crate::config::ProjectsSettings,
 ) {
-    let tokens = draft.quick_tokens(projects);
-    let Some(data) = draft
-        .event
-        .as_mut()
-        .and_then(|e| e.details.task_data.as_mut())
-    else {
-        return;
-    };
-    let current = (data.metadata.clone(), due.clone(), deadline.clone());
-    let mut base = draft.quick_base.take().unwrap_or_else(|| current.clone());
-    if let Some(applied) = draft.quick_applied.take() {
-        // Keep changes made through the ordinary form controls during a preview.
-        if current.0.priority != applied.0.priority {
-            base.0.priority = current.0.priority;
-        }
-        if current.0.minutes != applied.0.minutes {
-            base.0.minutes = current.0.minutes;
-        }
-        if current.0.projects != applied.0.projects {
-            base.0.projects = current.0.projects;
-        }
-        if current.0.labels != applied.0.labels {
-            base.0.labels = current.0.labels;
-        }
-        if current.1 != applied.1 {
-            base.1 = current.1;
-        }
-        if current.2 != applied.2 {
-            base.2 = current.2;
-        }
-    }
-    data.metadata.priority = base.0.priority;
-    data.metadata.minutes = base.0.minutes;
-    data.metadata.projects = base.0.projects.clone();
-    data.metadata.labels = base.0.labels.clone();
-    *due = base.1.clone();
-    *deadline = base.2.clone();
-    for token in tokens {
-        apply_value(&mut data.metadata, due, deadline, token.value);
-    }
-    draft.due = due.clone();
-    draft.deadline = deadline.clone();
-    draft.quick_base = Some(base);
-    draft.quick_applied = Some((data.metadata.clone(), due.clone(), deadline.clone()));
+	let tokens = draft.quick_tokens(projects);
+	let Some(data) = draft
+		.event
+		.as_mut()
+		.and_then(|e| e.details.task_data.as_mut())
+	else {
+		return;
+	};
+	let current = (data.metadata.clone(), due.clone(), deadline.clone());
+	let mut base = draft.quick_base.take().unwrap_or_else(|| current.clone());
+	if let Some(applied) = draft.quick_applied.take() {
+		// Keep changes made through the ordinary form controls during a preview.
+		if current.0.priority != applied.0.priority {
+			base.0.priority = current.0.priority;
+		}
+		if current.0.minutes != applied.0.minutes {
+			base.0.minutes = current.0.minutes;
+		}
+		if current.0.projects != applied.0.projects {
+			base.0.projects = current.0.projects;
+		}
+		if current.0.labels != applied.0.labels {
+			base.0.labels = current.0.labels;
+		}
+		if current.1 != applied.1 {
+			base.1 = current.1;
+		}
+		if current.2 != applied.2 {
+			base.2 = current.2;
+		}
+	}
+	data.metadata.priority = base.0.priority;
+	data.metadata.minutes = base.0.minutes;
+	data.metadata.projects = base.0.projects.clone();
+	data.metadata.labels = base.0.labels.clone();
+	*due = base.1.clone();
+	*deadline = base.2.clone();
+	for token in tokens {
+		apply_value(&mut data.metadata, due, deadline, token.value);
+	}
+	draft.due = due.clone();
+	draft.deadline = deadline.clone();
+	draft.quick_base = Some(base);
+	draft.quick_applied = Some((data.metadata.clone(), due.clone(), deadline.clone()));
 }
 
 fn apply_value(
-    metadata: &mut tb::Metadata,
-    due: &mut String,
-    deadline: &mut String,
-    value: crate::task_input::Value,
+	metadata: &mut tb::Metadata,
+	due: &mut String,
+	deadline: &mut String,
+	value: crate::task_input::Value,
 ) {
-    use crate::task_input::Value;
-    match value {
-        Value::Due(day) => *due = day.to_string(),
-        Value::Deadline(day) => *deadline = day.to_string(),
-        Value::Priority(p) => metadata.priority = Some(p),
-        Value::Minutes(n) => metadata.minutes = n,
-        Value::Label(label) => {
-            if !metadata.labels.contains(&label) {
-                metadata.labels.push(label);
-            }
-        }
-        Value::Project(id) => {
-            if !metadata.projects.contains(&id) {
-                metadata.projects.push(id);
-            }
-        }
-    }
+	use crate::task_input::Value;
+	match value {
+		Value::Due(day) => *due = day.to_string(),
+		Value::Deadline(day) => *deadline = day.to_string(),
+		Value::Priority(p) => metadata.priority = Some(p),
+		Value::Minutes(n) => metadata.minutes = n,
+		Value::Label(label) => {
+			if !metadata.labels.contains(&label) {
+				metadata.labels.push(label);
+			}
+		}
+		Value::Project(id) => {
+			if !metadata.projects.contains(&id) {
+				metadata.projects.push(id);
+			}
+		}
+	}
 }
 
 fn fetched(state: &mut State, lookup: u64, result: Result<integrations::Details, String>) {
-    let Some(draft) = state
-        .inbox
-        .draft
-        .as_mut()
-        .filter(|draft| draft.lookup == lookup && draft.fetching)
-    else {
-        return;
-    };
-    draft.fetching = false;
-    match result {
-        Ok(details) => {
-            // Only the box still holding the bare link is replaced: if the
-            // person has started writing their own title, theirs stays.
-            let still_the_link = draft.title.trim().is_empty()
-                || draft
-                    .source
-                    .as_ref()
-                    .is_some_and(|source| source.url == draft.title.trim());
-            if still_the_link {
-                draft.set_title(details.title);
-            }
-            if let Some(deadline) = details
-                .deadline
-                .filter(|_| state.timeblocking.deadline.trim().is_empty())
-            {
-                draft.deadline = deadline.value();
-                state.timeblocking.deadline = draft.deadline.clone();
-            }
-            if let Some(due) = details
-                .due
-                .filter(|_| state.timeblocking.date.trim().is_empty())
-            {
-                draft.due = due.to_string();
-                state.timeblocking.date = draft.due.clone();
-            }
-        }
-        Err(error) => draft.error = Some(error),
-    }
+	let Some(draft) = state
+		.inbox
+		.draft
+		.as_mut()
+		.filter(|draft| draft.lookup == lookup && draft.fetching)
+	else {
+		return;
+	};
+	draft.fetching = false;
+	match result {
+		Ok(details) => {
+			// Only the box still holding the bare link is replaced: if the
+			// person has started writing their own title, theirs stays.
+			let still_the_link = draft.title.trim().is_empty()
+				|| draft
+					.source
+					.as_ref()
+					.is_some_and(|source| source.url == draft.title.trim());
+			if still_the_link {
+				draft.set_title(details.title);
+			}
+			if let Some(deadline) = details
+				.deadline
+				.filter(|_| state.timeblocking.deadline.trim().is_empty())
+			{
+				draft.deadline = deadline.value();
+				state.timeblocking.deadline = draft.deadline.clone();
+			}
+			if let Some(due) = details
+				.due
+				.filter(|_| state.timeblocking.date.trim().is_empty())
+			{
+				draft.due = due.to_string();
+				state.timeblocking.date = draft.due.clone();
+			}
+		}
+		Err(error) => draft.error = Some(error),
+	}
 }
 
 /// What the popup asks for, checked and ready to send.
 #[derive(Debug)]
 pub(crate) struct NewTask {
-    title: String,
-    deadline: Option<Deadline>,
-    due: Option<NaiveDate>,
-    source: Option<Source>,
-    event: Option<Event>,
+	title: String,
+	deadline: Option<Deadline>,
+	due: Option<NaiveDate>,
+	source: Option<Source>,
+	event: Option<Event>,
 }
 
 pub(crate) fn validate(draft: &Draft) -> Result<NewTask, String> {
-    let title = draft.title.trim().to_owned();
-    if title.is_empty() {
-        return Err("A task needs a name".into());
-    }
-    if title.chars().count() > MAX_TITLE_CHARS {
-        return Err(format!(
-            "A task name can be at most {MAX_TITLE_CHARS} characters"
-        ));
-    }
-    let deadline = match draft.deadline.trim() {
-        "" => None,
-        text => Some(deadline::parse_input(text)?),
-    };
-    let due = match draft.due.trim() {
-        "" => None,
-        text => Some(
-            crate::task_input::date(text, crate::clock::now().date_naive()).ok_or_else(|| {
-                "Enter a due date as YYYY-MM-DD or a date like tomorrow".to_owned()
-            })?,
-        ),
-    };
-    // A link typed out in full is a source too, even if it was never pasted.
-    let source = draft
-        .source
-        .clone()
-        .or_else(|| integrations::recognize(&title));
-    Ok(NewTask {
-        title,
-        deadline,
-        due,
-        source,
-        event: draft.event.clone(),
-    })
+	let title = draft.title.trim().to_owned();
+	if title.is_empty() {
+		return Err("A task needs a name".into());
+	}
+	if title.chars().count() > MAX_TITLE_CHARS {
+		return Err(format!(
+			"A task name can be at most {MAX_TITLE_CHARS} characters"
+		));
+	}
+	let deadline = match draft.deadline.trim() {
+		"" => None,
+		text => Some(deadline::parse_input(text)?),
+	};
+	let due = match draft.due.trim() {
+		"" => None,
+		text => Some(
+			crate::task_input::date(text, crate::clock::now().date_naive()).ok_or_else(|| {
+				"Enter a due date as YYYY-MM-DD or a date like tomorrow".to_owned()
+			})?,
+		),
+	};
+	// A link typed out in full is a source too, even if it was never pasted.
+	let source = draft
+		.source
+		.clone()
+		.or_else(|| integrations::recognize(&title));
+	Ok(NewTask {
+		title,
+		deadline,
+		due,
+		source,
+		event: draft.event.clone(),
+	})
 }
 
 fn create(state: &mut State) -> Task<Message> {
-    let Some((settings, task)) = prepare_create(state) else {
-        return Task::none();
-    };
-    blocking::run(move || write(&settings, task))
-        .map(|result| Message::Inbox(Action::Created(result)))
+	let Some((settings, task)) = prepare_create(state) else {
+		return Task::none();
+	};
+	blocking::run(move || write(&settings, task))
+		.map(|result| Message::Inbox(Action::Created(result)))
 }
 
 /// Validates the draft and marks it saving, without touching Google.
 fn prepare_create(state: &mut State) -> Option<(crate::config::CalendarSettings, NewTask)> {
-    if state.inbox.voice.active() {
-        return None;
-    }
-    if let Some(draft) = state
-        .inbox
-        .draft
-        .as_mut()
-        .filter(|d| !d.saving && !d.fetching)
-    {
-        let tokens = draft.quick_tokens(&state.config.projects);
-        draft.set_title(crate::task_input::remove(
-            &draft.title,
-            tokens.into_iter().map(|t| t.range),
-        ));
-        draft.quick_base = None;
-        draft.quick_applied = None;
-    }
-    let deadline = state.timeblocking.deadline.clone();
-    let due = state.timeblocking.date.clone();
-    let draft = state.inbox.draft.as_mut()?;
-    draft.deadline = deadline;
-    draft.due = due;
-    if draft.saving || draft.fetching {
-        return None;
-    }
-    let task = match validate(draft) {
-        Ok(task) => task,
-        Err(error) => {
-            draft.error = Some(error);
-            return None;
-        }
-    };
-    draft.saving = true;
-    draft.error = None;
-    let settings = state.config.calendar.clone();
-    Some((settings, task))
+	if state.inbox.voice.active() {
+		return None;
+	}
+	if let Some(draft) = state
+		.inbox
+		.draft
+		.as_mut()
+		.filter(|d| !d.saving && !d.fetching)
+	{
+		let tokens = draft.quick_tokens(&state.config.projects);
+		draft.set_title(crate::task_input::remove(
+			&draft.title,
+			tokens.into_iter().map(|t| t.range),
+		));
+		draft.quick_base = None;
+		draft.quick_applied = None;
+	}
+	let deadline = state.timeblocking.deadline.clone();
+	let due = state.timeblocking.date.clone();
+	let draft = state.inbox.draft.as_mut()?;
+	draft.deadline = deadline;
+	draft.due = due;
+	if draft.saving || draft.fetching {
+		return None;
+	}
+	let task = match validate(draft) {
+		Ok(task) => task,
+		Err(error) => {
+			draft.error = Some(error);
+			return None;
+		}
+	};
+	draft.saving = true;
+	draft.error = None;
+	let settings = state.config.calendar.clone();
+	Some((settings, task))
 }
 
 /// Creates the task on Google. A link whose title was never read gets one more
 /// try here, so a task made quickly still arrives with a proper name.
 pub(crate) fn write(
-    settings: &crate::config::CalendarSettings,
-    task: NewTask,
+	settings: &crate::config::CalendarSettings,
+	task: NewTask,
 ) -> Result<Event, String> {
-    let token = tb::access(settings)?;
-    let mut title = task.title;
-    if let Some(source) = task.source.as_ref().filter(|source| source.url == title) {
-        let auth = Auth {
-            settings: settings.clone(),
-        };
-        if let Ok(details) = integrations::fetch(source, &auth) {
-            title = details.title;
-        }
-    }
-    let mut prose = task
-        .event
-        .as_ref()
-        .map(|e| e.details.description.clone())
-        .unwrap_or_default();
-    if let Some(source) = &task.source
-        && !prose.contains(&source.url)
-    {
-        if !prose.is_empty() {
-            prose.push_str("\n\n");
-        }
-        prose.push_str(&source.url);
-    }
-    let mut metadata = task.event.as_ref().map(tb::metadata).unwrap_or_default();
-    metadata.deadline = task.deadline;
-    let mut event =
-        create_event_with_metadata(settings, &token, &title, &prose, task.due, Some(metadata))?;
-    if let Some(draft) = task.event
-        && !draft.all_day
-    {
-        event = tb::schedule_created(event, settings, draft.start, draft.end)?;
-    }
-    Ok(event)
+	let token = tb::access(settings)?;
+	let mut title = task.title;
+	if let Some(source) = task.source.as_ref().filter(|source| source.url == title) {
+		let auth = Auth {
+			settings: settings.clone(),
+		};
+		if let Ok(details) = integrations::fetch(source, &auth) {
+			title = details.title;
+		}
+	}
+	let mut prose = task
+		.event
+		.as_ref()
+		.map(|e| e.details.description.clone())
+		.unwrap_or_default();
+	if let Some(source) = &task.source
+		&& !prose.contains(&source.url)
+	{
+		if !prose.is_empty() {
+			prose.push_str("\n\n");
+		}
+		prose.push_str(&source.url);
+	}
+	let mut metadata = task.event.as_ref().map(tb::metadata).unwrap_or_default();
+	metadata.deadline = task.deadline;
+	let mut event =
+		create_event_with_metadata(settings, &token, &title, &prose, task.due, Some(metadata))?;
+	if let Some(draft) = task.event
+		&& !draft.all_day
+	{
+		event = tb::schedule_created(event, settings, draft.start, draft.end)?;
+	}
+	Ok(event)
 }
 
 /// Adds a task that already has its title and notes, for callers outside the
 /// add something popup: the browser extension and the Slack app. The notes keep the
 /// link that lets the task show its source later.
 pub fn add(
-    settings: &crate::config::CalendarSettings,
-    title: &str,
-    notes: &str,
-    due: Option<NaiveDate>,
-    deadline: Option<Deadline>,
+	settings: &crate::config::CalendarSettings,
+	title: &str,
+	notes: &str,
+	due: Option<NaiveDate>,
+	deadline: Option<Deadline>,
 ) -> Result<Event, String> {
-    let token = tb::access(settings)?;
-    create_event_with_metadata(
-        settings,
-        &token,
-        title,
-        notes,
-        due,
-        Some(tb::Metadata {
-            deadline,
-            ..Default::default()
-        }),
-    )
+	let token = tb::access(settings)?;
+	create_event_with_metadata(
+		settings,
+		&token,
+		title,
+		notes,
+		due,
+		Some(tb::Metadata {
+			deadline,
+			..Default::default()
+		}),
+	)
 }
 
 /// Writes one task to the inbox list and builds the local [`Event`] for it.
 fn create_event_with_metadata(
-    settings: &crate::config::CalendarSettings,
-    token: &str,
-    title: &str,
-    notes: &str,
-    due: Option<NaiveDate>,
-    metadata: Option<tb::Metadata>,
+	settings: &crate::config::CalendarSettings,
+	token: &str,
+	title: &str,
+	notes: &str,
+	due: Option<NaiveDate>,
+	metadata: Option<tb::Metadata>,
 ) -> Result<Event, String> {
-    timeslay_core::task_edit::create_inbox_task(settings, token, title, notes, due, metadata)
+	timeslay_core::task_edit::create_inbox_task(settings, token, title, notes, due, metadata)
 }
 
 fn created(state: &mut State, result: Result<Event, String>) -> Task<Message> {
-    match result {
-        Ok(event) => {
-            if event.is_task() {
-                state.inbox.created_list = Some(event.calendar_id.clone());
-            }
-            if !crate::image_input::saved(state) {
-                close_draft(state);
-            }
-            state.timeblocking.revision += 1;
-            state.calendar.events.retain(|other| other.id != event.id);
-            if event.is_task() {
-                state.calendar.replace_cached_task(&event.id, &event);
-            }
-            state.calendar.add_event(event);
-            // Brings the Inbox list itself, if this made it, into the app.
-            Task::done(Message::Calendar(CalendarMessage::CalendarSyncRequested))
-        }
-        Err(error) => {
-            if let Some(draft) = state.calendar.draft.as_mut() {
-                draft.saving = false;
-            }
-            if let Some(draft) = state.inbox.draft.as_mut() {
-                draft.saving = false;
-                draft.error = Some(error);
-            }
-            Task::none()
-        }
-    }
+	match result {
+		Ok(event) => {
+			if event.is_task() {
+				state.inbox.created_list = Some(event.calendar_id.clone());
+			}
+			if !crate::image_input::saved(state) {
+				close_draft(state);
+			}
+			state.timeblocking.revision += 1;
+			state.calendar.events.retain(|other| other.id != event.id);
+			if event.is_task() {
+				state.calendar.replace_cached_task(&event.id, &event);
+			}
+			state.calendar.add_event(event);
+			// Brings the Inbox list itself, if this made it, into the app.
+			Task::done(Message::Calendar(CalendarMessage::CalendarSyncRequested))
+		}
+		Err(error) => {
+			if let Some(draft) = state.calendar.draft.as_mut() {
+				draft.saving = false;
+			}
+			if let Some(draft) = state.inbox.draft.as_mut() {
+				draft.saving = false;
+				draft.error = Some(error);
+			}
+			Task::none()
+		}
+	}
 }
 
 fn schedule(state: &mut State, id: String, day: NaiveDate) -> Task<Message> {
-    state.inbox.error = None;
-    state.inbox.scheduling = None;
-    state.inbox.picker = None;
-    tb::update(state, tb::Action::ScheduleDay(id, day))
+	state.inbox.error = None;
+	state.inbox.scheduling = None;
+	state.inbox.picker = None;
+	tb::update(state, tb::Action::ScheduleDay(id, day))
 }
 
 /// The days the chooser offers without typing: today, tomorrow, and the
 /// coming Monday.
 pub fn quick_days(today: NaiveDate) -> [(&'static str, NaiveDate); 3] {
-    use chrono::Datelike;
-    let ahead = 7 - i64::from(today.weekday().num_days_from_monday());
-    [
-        ("Today", today),
-        ("Tomorrow", today + Duration::days(1)),
-        ("Next Monday", today + Duration::days(ahead)),
-    ]
+	use chrono::Datelike;
+	let ahead = 7 - i64::from(today.weekday().num_days_from_monday());
+	[
+		("Today", today),
+		("Tomorrow", today + Duration::days(1)),
+		("Next Monday", today + Duration::days(ahead)),
+	]
 }
 
 pub fn today() -> NaiveDate {
-    crate::clock::now().date_naive()
+	crate::clock::now().date_naive()
 }
 
 /// Opens the add something popup already planned for `start` to `end`, as when a
 /// range is chosen on the calendar.
 pub(crate) fn new_something_at(
-    state: &mut State,
-    title: String,
-    start: chrono::DateTime<Local>,
-    end: chrono::DateTime<Local>,
+	state: &mut State,
+	title: String,
+	start: chrono::DateTime<Local>,
+	end: chrono::DateTime<Local>,
 ) -> Task<Message> {
-    let focus = update(state, Action::NewTask);
-    let Some(draft) = state.inbox.draft.as_mut() else {
-        return focus;
-    };
-    let day = start.date_naive().to_string();
-    draft.set_title(title);
-    draft.due = day.clone();
-    state.timeblocking.date = day;
-    state.timeblocking.start_time = start.format("%H:%M").to_string();
-    state.timeblocking.end_time = end.format("%H:%M").to_string();
-    state.timeblocking.editing_due_time = false;
-    if let Some(event) = draft.event.as_mut() {
-        event.start = start;
-        event.end = end;
-        event.all_day = false;
-    }
-    focus
+	let focus = update(state, Action::NewTask);
+	let Some(draft) = state.inbox.draft.as_mut() else {
+		return focus;
+	};
+	let day = start.date_naive().to_string();
+	draft.set_title(title);
+	draft.due = day.clone();
+	state.timeblocking.date = day;
+	state.timeblocking.start_time = start.format("%H:%M").to_string();
+	state.timeblocking.end_time = end.format("%H:%M").to_string();
+	state.timeblocking.editing_due_time = false;
+	if let Some(event) = draft.event.as_mut() {
+		event.start = start;
+		event.end = end;
+		event.all_day = false;
+	}
+	focus
 }
 
 /// Apply a fully validated voice patch as a new quick-add baseline.
 pub(crate) fn apply_voice(state: &mut State, patch: crate::voice::Patch) {
-    let Some(draft) = state.inbox.draft.as_mut().filter(|d| !d.saving) else {
-        return;
-    };
-    // Compute the schedule before changing fields so invalid combinations are atomic.
-    let schedule = if patch.due.is_some() || patch.due_time.is_some() {
-        let day = patch.due.as_deref().unwrap_or(&draft.due);
-        let old = draft.event.as_ref();
-        let time = patch.due_time.clone().unwrap_or_else(|| {
-            old.filter(|e| !e.all_day)
-                .map(|e| e.start.format("%H:%M").to_string())
-                .unwrap_or_default()
-        });
-        let result = if day.is_empty() || time.is_empty() {
-            let day = if day.is_empty() {
-                Some(UNDATED)
-            } else {
-                chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d").ok()
-            };
-            day.map(|day| {
-                let start = calendar::at_clock(day, 0, 0);
-                (start, start + Duration::days(1), true)
-            })
-        } else {
-            crate::voice::due_start(day, &time).ok().map(|start| {
-                let duration = old
-                    .filter(|e| !e.all_day)
-                    .map(|e| e.end - e.start)
-                    .filter(|d| *d > Duration::zero())
-                    .unwrap_or_else(|| {
-                        Duration::minutes(
-                            patch
-                                .minutes
-                                .or_else(|| old.map(|e| tb::metadata(e).minutes))
-                                .filter(|m| *m > 0)
-                                .unwrap_or(30) as i64,
-                        )
-                    });
-                (start, start + duration, false)
-            })
-        };
-        let Some(result) = result else {
-            draft.error = Some("Invalid due date or time in your time zone".into());
-            return;
-        };
-        Some(result)
-    } else {
-        None
-    };
-    if let Some(value) = patch.title {
-        draft.set_title(value);
-    }
-    if let Some(value) = patch.due {
-        draft.due = value.clone();
-        state.timeblocking.date = value;
-    }
-    if let Some(value) = patch.deadline {
-        draft.deadline = value.clone();
-        state.timeblocking.deadline = value;
-    }
-    if let Some(event) = draft.event.as_mut() {
-        if let Some((start, end, all_day)) = schedule {
-            event.start = start;
-            event.end = end;
-            event.all_day = all_day;
-            state.timeblocking.start_time = if all_day {
-                String::new()
-            } else {
-                start.format("%H:%M").to_string()
-            };
-            state.timeblocking.end_time = if all_day {
-                String::new()
-            } else {
-                end.format("%H:%M").to_string()
-            };
-            state.timeblocking.editing_due_time = false;
-        }
-        if let Some(value) = patch.description {
-            event.details.description = value.clone();
-            state.task_description = iced::widget::text_editor::Content::with_text(&value);
-        }
-        if let Some(data) = event.details.task_data.as_mut() {
-            if let Some(value) = patch.priority {
-                data.metadata.priority = value;
-            }
-            if let Some(value) = patch.minutes {
-                data.metadata.minutes = value;
-            }
-            if let Some(value) = patch.labels {
-                data.metadata.labels = value;
-            }
-            if let Some(value) = patch.projects {
-                data.metadata.projects = value;
-            }
-        }
-    }
-    draft.quick_base = None;
-    draft.quick_applied = None;
-    draft.error = None;
+	let Some(draft) = state.inbox.draft.as_mut().filter(|d| !d.saving) else {
+		return;
+	};
+	// Compute the schedule before changing fields so invalid combinations are atomic.
+	let schedule = if patch.due.is_some() || patch.due_time.is_some() {
+		let day = patch.due.as_deref().unwrap_or(&draft.due);
+		let old = draft.event.as_ref();
+		let time = patch.due_time.clone().unwrap_or_else(|| {
+			old.filter(|e| !e.all_day)
+				.map(|e| e.start.format("%H:%M").to_string())
+				.unwrap_or_default()
+		});
+		let result = if day.is_empty() || time.is_empty() {
+			let day = if day.is_empty() {
+				Some(UNDATED)
+			} else {
+				chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d").ok()
+			};
+			day.map(|day| {
+				let start = calendar::at_clock(day, 0, 0);
+				(start, start + Duration::days(1), true)
+			})
+		} else {
+			crate::voice::due_start(day, &time).ok().map(|start| {
+				let duration = old
+					.filter(|e| !e.all_day)
+					.map(|e| e.end - e.start)
+					.filter(|d| *d > Duration::zero())
+					.unwrap_or_else(|| {
+						Duration::minutes(
+							patch
+								.minutes
+								.or_else(|| old.map(|e| tb::metadata(e).minutes))
+								.filter(|m| *m > 0)
+								.unwrap_or(30) as i64,
+						)
+					});
+				(start, start + duration, false)
+			})
+		};
+		let Some(result) = result else {
+			draft.error = Some("Invalid due date or time in your time zone".into());
+			return;
+		};
+		Some(result)
+	} else {
+		None
+	};
+	if let Some(value) = patch.title {
+		draft.set_title(value);
+	}
+	if let Some(value) = patch.due {
+		draft.due = value.clone();
+		state.timeblocking.date = value;
+	}
+	if let Some(value) = patch.deadline {
+		draft.deadline = value.clone();
+		state.timeblocking.deadline = value;
+	}
+	if let Some(event) = draft.event.as_mut() {
+		if let Some((start, end, all_day)) = schedule {
+			event.start = start;
+			event.end = end;
+			event.all_day = all_day;
+			state.timeblocking.start_time = if all_day {
+				String::new()
+			} else {
+				start.format("%H:%M").to_string()
+			};
+			state.timeblocking.end_time = if all_day {
+				String::new()
+			} else {
+				end.format("%H:%M").to_string()
+			};
+			state.timeblocking.editing_due_time = false;
+		}
+		if let Some(value) = patch.description {
+			event.details.description = value.clone();
+			state.task_description = iced::widget::text_editor::Content::with_text(&value);
+		}
+		if let Some(data) = event.details.task_data.as_mut() {
+			if let Some(value) = patch.priority {
+				data.metadata.priority = value;
+			}
+			if let Some(value) = patch.minutes {
+				data.metadata.minutes = value;
+			}
+			if let Some(value) = patch.labels {
+				data.metadata.labels = value;
+			}
+			if let Some(value) = patch.projects {
+				data.metadata.projects = value;
+			}
+		}
+	}
+	draft.quick_base = None;
+	draft.quick_applied = None;
+	draft.error = None;
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::calendar::Calendar;
+	use super::*;
+	use crate::calendar::Calendar;
 
-    const THREAD: &str = "https://mail.google.com/mail/u/0/#inbox/FMfcgzQgLjNPlfJCVRfnNkPGkLhWClCW";
+	const THREAD: &str = "https://mail.google.com/mail/u/0/#inbox/FMfcgzQgLjNPlfJCVRfnNkPGkLhWClCW";
 
-    fn state() -> State {
-        let mut state = State::blank();
-        let mut snapshot = calendar::sample_snapshot();
-        snapshot.events.clear();
-        snapshot.calendars.push(Calendar {
-            id: "tasks:inbox".into(),
-            name: "Inbox".into(),
-            color: calendar::colors::TASK,
-            primary: false,
-            selected_by_google: true,
-        });
-        state.calendar = calendar::Store::with_snapshot(snapshot);
-        state
-    }
+	fn state() -> State {
+		let mut state = State::blank();
+		let mut snapshot = calendar::sample_snapshot();
+		snapshot.events.clear();
+		snapshot.calendars.push(Calendar {
+			id: "tasks:inbox".into(),
+			name: "Inbox".into(),
+			color: calendar::colors::TASK,
+			primary: false,
+			selected_by_google: true,
+		});
+		state.calendar = calendar::Store::with_snapshot(snapshot);
+		state
+	}
 
-    fn task(id: &str, list: &str, day: NaiveDate) -> Event {
-        let mut task = calendar::sample_snapshot().events.remove(0);
-        task.id = ids::event_id(id);
-        task.calendar_id = ids::calendar_id(list);
-        task.title = id.into();
-        task.all_day = true;
-        task.completed = false;
-        task.start = calendar::at_clock(day, 0, 0);
-        task.end = task.start + Duration::days(1);
-        task.details = Default::default();
-        task
-    }
+	fn task(id: &str, list: &str, day: NaiveDate) -> Event {
+		let mut task = calendar::sample_snapshot().events.remove(0);
+		task.id = ids::event_id(id);
+		task.calendar_id = ids::calendar_id(list);
+		task.title = id.into();
+		task.all_day = true;
+		task.completed = false;
+		task.start = calendar::at_clock(day, 0, 0);
+		task.end = task.start + Duration::days(1);
+		task.details = Default::default();
+		task
+	}
 
-    fn day(text: &str) -> NaiveDate {
-        deadline::parse_date(text).unwrap()
-    }
+	fn day(text: &str) -> NaiveDate {
+		deadline::parse_date(text).unwrap()
+	}
 
-    #[test]
-    fn braced_dates_set_deadlines_and_plain_dates_set_due_dates() {
-        let mut state = state();
-        let _ = update(&mut state, Action::NewTask);
-        let _ = update(&mut state, Action::Title("Call tomorrow {oct 8}".into()));
-        assert_eq!(
-            state.timeblocking.date,
-            (crate::clock::now().date_naive() + Duration::days(1)).to_string()
-        );
-        assert!(state.timeblocking.deadline.ends_with("-10-08"));
-        let title = &state.inbox.draft.as_ref().unwrap().title;
-        let range = crate::task_input::detect(
-            title,
-            crate::clock::now().date_naive(),
-            &state.config.projects,
-        )
-        .pop()
-        .unwrap()
-        .range;
-        let _ = update(&mut state, Action::AcceptToken(range));
-        let _ = update(&mut state, Action::Title("Call".into()));
-        assert!(state.timeblocking.date.is_empty());
-        assert!(state.timeblocking.deadline.ends_with("-10-08"));
-        let mut draft = state.inbox.draft.as_ref().unwrap().clone();
-        draft.due = "tomorrow".into();
-        assert_eq!(
-            validate(&draft).unwrap().due,
-            Some(crate::clock::now().date_naive() + Duration::days(1))
-        );
-    }
+	#[test]
+	fn braced_dates_set_deadlines_and_plain_dates_set_due_dates() {
+		let mut state = state();
+		let _ = update(&mut state, Action::NewTask);
+		let _ = update(&mut state, Action::Title("Call tomorrow {oct 8}".into()));
+		assert_eq!(
+			state.timeblocking.date,
+			(crate::clock::now().date_naive() + Duration::days(1)).to_string()
+		);
+		assert!(state.timeblocking.deadline.ends_with("-10-08"));
+		let title = &state.inbox.draft.as_ref().unwrap().title;
+		let range = crate::task_input::detect(
+			title,
+			crate::clock::now().date_naive(),
+			&state.config.projects,
+		)
+		.pop()
+		.unwrap()
+		.range;
+		let _ = update(&mut state, Action::AcceptToken(range));
+		let _ = update(&mut state, Action::Title("Call".into()));
+		assert!(state.timeblocking.date.is_empty());
+		assert!(state.timeblocking.deadline.ends_with("-10-08"));
+		let mut draft = state.inbox.draft.as_ref().unwrap().clone();
+		draft.due = "tomorrow".into();
+		assert_eq!(
+			validate(&draft).unwrap().due,
+			Some(crate::clock::now().date_naive() + Duration::days(1))
+		);
+	}
 
-    #[test]
-    fn quick_add_previews_roll_back_and_tab_commits_only_its_token() {
-        let mut state = state();
-        let _ = update(&mut state, Action::NewTask);
-        let _ = update(&mut state, Action::Title("Plan @home !1 tomorrow".into()));
-        let draft = state.inbox.draft.as_ref().unwrap();
-        assert_eq!(tb::metadata(draft.event.as_ref().unwrap()).labels, ["home"]);
-        assert!(!state.timeblocking.date.is_empty());
-        let _ = update(&mut state, Action::AcceptToken(5..10));
-        assert_eq!(
-            state.inbox.draft.as_ref().unwrap().title,
-            "Plan  !1 tomorrow"
-        );
-        let _ = update(&mut state, Action::Title("Plan".into()));
-        let draft = state.inbox.draft.as_ref().unwrap();
-        let metadata = tb::metadata(draft.event.as_ref().unwrap());
-        assert_eq!(metadata.labels, ["home"]);
-        assert_eq!(metadata.priority, None);
-        assert!(state.timeblocking.date.is_empty());
-        let _ = update(&mut state, Action::Title("Plan !2".into()));
-        let _ = update(&mut state, Action::Title("Plan !1".into()));
-        assert_eq!(
-            tb::metadata(state.inbox.draft.as_ref().unwrap().event.as_ref().unwrap()).priority,
-            Some(tb::Priority::P1)
-        );
-        let _ = update(&mut state, Action::Title("Plan".into()));
-        assert_eq!(
-            tb::metadata(state.inbox.draft.as_ref().unwrap().event.as_ref().unwrap()).priority,
-            None
-        );
-    }
+	#[test]
+	fn quick_add_previews_roll_back_and_tab_commits_only_its_token() {
+		let mut state = state();
+		let _ = update(&mut state, Action::NewTask);
+		let _ = update(&mut state, Action::Title("Plan @home !1 tomorrow".into()));
+		let draft = state.inbox.draft.as_ref().unwrap();
+		assert_eq!(tb::metadata(draft.event.as_ref().unwrap()).labels, ["home"]);
+		assert!(!state.timeblocking.date.is_empty());
+		let _ = update(&mut state, Action::AcceptToken(5..10));
+		assert_eq!(
+			state.inbox.draft.as_ref().unwrap().title,
+			"Plan  !1 tomorrow"
+		);
+		let _ = update(&mut state, Action::Title("Plan".into()));
+		let draft = state.inbox.draft.as_ref().unwrap();
+		let metadata = tb::metadata(draft.event.as_ref().unwrap());
+		assert_eq!(metadata.labels, ["home"]);
+		assert_eq!(metadata.priority, None);
+		assert!(state.timeblocking.date.is_empty());
+		let _ = update(&mut state, Action::Title("Plan !2".into()));
+		let _ = update(&mut state, Action::Title("Plan !1".into()));
+		assert_eq!(
+			tb::metadata(state.inbox.draft.as_ref().unwrap().event.as_ref().unwrap()).priority,
+			Some(tb::Priority::P1)
+		);
+		let _ = update(&mut state, Action::Title("Plan".into()));
+		assert_eq!(
+			tb::metadata(state.inbox.draft.as_ref().unwrap().event.as_ref().unwrap()).priority,
+			None
+		);
+	}
 
-    #[test]
-    fn dismissed_quick_add_words_survive_edits_tab_and_save_without_metadata() {
-        let mut state = state();
-        let _ = update(&mut state, Action::NewTask);
-        let _ = update(&mut state, Action::Title("Café @home tomorrow !1".into()));
-        let _ = update(&mut state, Action::DismissToken(6..11));
-        let _ = update(&mut state, Action::DismissToken(12..20));
-        let draft = state.inbox.draft.as_ref().unwrap();
-        assert_eq!(draft.title, "Café @home tomorrow !1");
-        assert!(
-            tb::metadata(draft.event.as_ref().unwrap())
-                .labels
-                .is_empty()
-        );
-        assert!(state.timeblocking.date.is_empty());
-        assert_eq!(draft.quick_tokens(&state.config.projects).len(), 1);
+	#[test]
+	fn dismissed_quick_add_words_survive_edits_tab_and_save_without_metadata() {
+		let mut state = state();
+		let _ = update(&mut state, Action::NewTask);
+		let _ = update(&mut state, Action::Title("Café @home tomorrow !1".into()));
+		let _ = update(&mut state, Action::DismissToken(6..11));
+		let _ = update(&mut state, Action::DismissToken(12..20));
+		let draft = state.inbox.draft.as_ref().unwrap();
+		assert_eq!(draft.title, "Café @home tomorrow !1");
+		assert!(
+			tb::metadata(draft.event.as_ref().unwrap())
+				.labels
+				.is_empty()
+		);
+		assert!(state.timeblocking.date.is_empty());
+		assert_eq!(draft.quick_tokens(&state.config.projects).len(), 1);
 
-        let _ = update(
-            &mut state,
-            Action::Title("Plan Café @home tomorrow !1".into()),
-        );
-        let _ = update(
-            &mut state,
-            Action::Title("Plan Café @home tomorrow !1 @home".into()),
-        );
-        // The second occurrence still applies; accepting it must preserve the
-        // dismissal on the first occurrence as its byte position changes.
-        let _ = update(&mut state, Action::AcceptToken(0..4)); // stale/invalid: ignored
-        let draft = state.inbox.draft.as_ref().unwrap();
-        let tokens = draft.quick_tokens(&state.config.projects);
-        assert_eq!(tokens.len(), 2);
-        let _ = update(&mut state, Action::AcceptToken(tokens[0].range.clone()));
-        // Not `Action::Create`: that would write a real task to Google.
-        assert!(prepare_create(&mut state).is_some());
-        let draft = state.inbox.draft.as_ref().unwrap();
-        assert_eq!(draft.title, "Plan Café @home tomorrow");
-        let metadata = tb::metadata(draft.event.as_ref().unwrap());
-        assert_eq!(metadata.labels, ["home"]); // from the second occurrence
-        assert_eq!(metadata.priority, Some(tb::Priority::P1));
-        assert!(draft.due.is_empty());
-    }
+		let _ = update(
+			&mut state,
+			Action::Title("Plan Café @home tomorrow !1".into()),
+		);
+		let _ = update(
+			&mut state,
+			Action::Title("Plan Café @home tomorrow !1 @home".into()),
+		);
+		// The second occurrence still applies; accepting it must preserve the
+		// dismissal on the first occurrence as its byte position changes.
+		let _ = update(&mut state, Action::AcceptToken(0..4)); // stale/invalid: ignored
+		let draft = state.inbox.draft.as_ref().unwrap();
+		let tokens = draft.quick_tokens(&state.config.projects);
+		assert_eq!(tokens.len(), 2);
+		let _ = update(&mut state, Action::AcceptToken(tokens[0].range.clone()));
+		// Not `Action::Create`: that would write a real task to Google.
+		assert!(prepare_create(&mut state).is_some());
+		let draft = state.inbox.draft.as_ref().unwrap();
+		assert_eq!(draft.title, "Plan Café @home tomorrow");
+		let metadata = tb::metadata(draft.event.as_ref().unwrap());
+		assert_eq!(metadata.labels, ["home"]); // from the second occurrence
+		assert_eq!(metadata.priority, Some(tb::Priority::P1));
+		assert!(draft.due.is_empty());
+	}
 
-    #[test]
-    fn editing_a_dismissed_occurrence_allows_detection_again() {
-        let mut state = state();
-        let _ = update(&mut state, Action::NewTask);
-        let _ = update(&mut state, Action::Title("Plan tomorrow tomorrow".into()));
-        let _ = update(&mut state, Action::DismissToken(5..13));
-        assert_eq!(
-            state
-                .inbox
-                .draft
-                .as_ref()
-                .unwrap()
-                .quick_tokens(&state.config.projects)
-                .len(),
-            1
-        );
-        let _ = update(&mut state, Action::DismissToken(14..22));
-        assert!(state.timeblocking.date.is_empty());
-        let _ = update(&mut state, Action::Title("Plan today tomorrow".into()));
-        let draft = state.inbox.draft.as_ref().unwrap();
-        let tokens = draft.quick_tokens(&state.config.projects);
-        assert_eq!(tokens.len(), 1);
-        assert_eq!(&draft.title[tokens[0].range.clone()], "today");
-        assert_eq!(
-            state.timeblocking.date,
-            crate::clock::now().date_naive().to_string()
-        );
-    }
+	#[test]
+	fn editing_a_dismissed_occurrence_allows_detection_again() {
+		let mut state = state();
+		let _ = update(&mut state, Action::NewTask);
+		let _ = update(&mut state, Action::Title("Plan tomorrow tomorrow".into()));
+		let _ = update(&mut state, Action::DismissToken(5..13));
+		assert_eq!(
+			state
+				.inbox
+				.draft
+				.as_ref()
+				.unwrap()
+				.quick_tokens(&state.config.projects)
+				.len(),
+			1
+		);
+		let _ = update(&mut state, Action::DismissToken(14..22));
+		assert!(state.timeblocking.date.is_empty());
+		let _ = update(&mut state, Action::Title("Plan today tomorrow".into()));
+		let draft = state.inbox.draft.as_ref().unwrap();
+		let tokens = draft.quick_tokens(&state.config.projects);
+		assert_eq!(tokens.len(), 1);
+		assert_eq!(&draft.title[tokens[0].range.clone()], "today");
+		assert_eq!(
+			state.timeblocking.date,
+			crate::clock::now().date_naive().to_string()
+		);
+	}
 
-    #[test]
-    fn saving_cleans_syntax_and_trailing_whitespace_before_validation() {
-        let mut state = state();
-        let _ = update(&mut state, Action::NewTask);
-        let _ = update(&mut state, Action::Title("  @home tomorrow !1  ".into()));
-        // Metadata alone cannot accidentally create a nameless task.
-        let _ = update(&mut state, Action::Create);
-        let draft = state.inbox.draft.as_ref().unwrap();
-        assert_eq!(draft.title, "");
-        assert_eq!(draft.error.as_deref(), Some("A task needs a name"));
-        assert_eq!(tb::metadata(draft.event.as_ref().unwrap()).labels, ["home"]);
-        let _ = update(&mut state, Action::Title("Call bank   ".into()));
-        assert_eq!(
-            validate(state.inbox.draft.as_ref().unwrap()).unwrap().title,
-            "Call bank"
-        );
-    }
+	#[test]
+	fn saving_cleans_syntax_and_trailing_whitespace_before_validation() {
+		let mut state = state();
+		let _ = update(&mut state, Action::NewTask);
+		let _ = update(&mut state, Action::Title("  @home tomorrow !1  ".into()));
+		// Metadata alone cannot accidentally create a nameless task.
+		let _ = update(&mut state, Action::Create);
+		let draft = state.inbox.draft.as_ref().unwrap();
+		assert_eq!(draft.title, "");
+		assert_eq!(draft.error.as_deref(), Some("A task needs a name"));
+		assert_eq!(tb::metadata(draft.event.as_ref().unwrap()).labels, ["home"]);
+		let _ = update(&mut state, Action::Title("Call bank   ".into()));
+		assert_eq!(
+			validate(state.inbox.draft.as_ref().unwrap()).unwrap().title,
+			"Call bank"
+		);
+	}
 
-    #[test]
-    fn full_editor_stages_metadata_and_times_without_touching_calendar_tasks() {
-        let mut state = state();
-        let original = state.calendar.events.clone();
-        state.timeblocking.date = "2026-10-01".into();
-        state.timeblocking.busy.insert("task:previous");
-        let project = state.config.projects.add("Work".into());
-        let _ = update(&mut state, Action::NewTask);
-        let _ = update(&mut state, Action::Title("Prepare exam".into()));
-        use tb::Action as T;
-        for action in [
-            T::ProjectAdd(DRAFT_ID.into(), project),
-            T::EditEstimate(DRAFT_ID.into()),
-            T::Estimate("45".into()),
-            T::SaveEstimate(DRAFT_ID.into()),
-            T::AddLabel(DRAFT_ID.into(), "study".into()),
-            T::Priority(DRAFT_ID.into(), Some(tb::Priority::P1)),
-            T::Location(DRAFT_ID.into(), Some(7)),
-            T::Date("2026-11-03".into()),
-            T::Reschedule(DRAFT_ID.into()),
-            T::StartTime("10:00".into()),
-            T::EndTime("11:00".into()),
-            T::ScheduleEntered(DRAFT_ID.into()),
-            T::Deadline("2026-11-04".into()),
-            T::DeadlineTime("14:00".into()),
-            T::DeadlineWithTime(DRAFT_ID.into()),
-        ] {
-            let _ = tb::update(&mut state, action);
-        }
-        let _ = update(
-            &mut state,
-            Action::Description(iced::widget::text_editor::Action::Edit(
-                iced::widget::text_editor::Edit::Insert('!'),
-            )),
-        );
-        let task = state.inbox.draft.as_ref().unwrap().event.as_ref().unwrap();
-        let metadata = tb::metadata(task);
-        assert_eq!(metadata.projects, vec![project]);
-        assert_eq!(metadata.minutes, 45);
-        assert_eq!(metadata.labels, vec!["study"]);
-        assert_eq!(metadata.priority, Some(tb::Priority::P1));
-        assert_eq!(metadata.location, Some(7));
-        assert_eq!(task.details.description, "!");
-        let mut ready = state.inbox.draft.as_ref().unwrap().clone();
-        ready.due = state.timeblocking.date.clone();
-        ready.deadline = state.timeblocking.deadline.clone();
-        let ready = validate(&ready).unwrap();
-        assert_eq!(tb::metadata(ready.event.as_ref().unwrap()), metadata);
-        assert_eq!(ready.deadline.unwrap().value(), "2026-11-04 14:00");
-        assert!(!task.all_day);
-        assert_eq!(task.end - task.start, Duration::hours(1));
-        assert_eq!(state.timeblocking.deadline, "2026-11-04 14:00");
-        assert_eq!(state.calendar.events, original);
-        assert!(state.timeblocking.busy.is_empty());
-        let _ = tb::update(
-            &mut state,
-            tb::Action::SavedMany("task:previous".into(), Err("Offline".into())),
-        );
-        let _ = update(&mut state, Action::Cancel);
-        assert!(state.inbox.draft.is_none());
-        assert!(state.timeblocking.busy.is_empty());
-        assert_eq!(state.timeblocking.date, "2026-10-01");
-        assert_eq!(state.calendar.events, original);
-    }
+	#[test]
+	fn full_editor_stages_metadata_and_times_without_touching_calendar_tasks() {
+		let mut state = state();
+		let original = state.calendar.events.clone();
+		state.timeblocking.date = "2026-10-01".into();
+		state.timeblocking.busy.insert("task:previous");
+		let project = state.config.projects.add("Work".into());
+		let _ = update(&mut state, Action::NewTask);
+		let _ = update(&mut state, Action::Title("Prepare exam".into()));
+		use tb::Action as T;
+		for action in [
+			T::ProjectAdd(DRAFT_ID.into(), project),
+			T::EditEstimate(DRAFT_ID.into()),
+			T::Estimate("45".into()),
+			T::SaveEstimate(DRAFT_ID.into()),
+			T::AddLabel(DRAFT_ID.into(), "study".into()),
+			T::Priority(DRAFT_ID.into(), Some(tb::Priority::P1)),
+			T::Location(DRAFT_ID.into(), Some(7)),
+			T::Date("2026-11-03".into()),
+			T::Reschedule(DRAFT_ID.into()),
+			T::StartTime("10:00".into()),
+			T::EndTime("11:00".into()),
+			T::ScheduleEntered(DRAFT_ID.into()),
+			T::Deadline("2026-11-04".into()),
+			T::DeadlineTime("14:00".into()),
+			T::DeadlineWithTime(DRAFT_ID.into()),
+		] {
+			let _ = tb::update(&mut state, action);
+		}
+		let _ = update(
+			&mut state,
+			Action::Description(iced::widget::text_editor::Action::Edit(
+				iced::widget::text_editor::Edit::Insert('!'),
+			)),
+		);
+		let task = state.inbox.draft.as_ref().unwrap().event.as_ref().unwrap();
+		let metadata = tb::metadata(task);
+		assert_eq!(metadata.projects, vec![project]);
+		assert_eq!(metadata.minutes, 45);
+		assert_eq!(metadata.labels, vec!["study"]);
+		assert_eq!(metadata.priority, Some(tb::Priority::P1));
+		assert_eq!(metadata.location, Some(7));
+		assert_eq!(task.details.description, "!");
+		let mut ready = state.inbox.draft.as_ref().unwrap().clone();
+		ready.due = state.timeblocking.date.clone();
+		ready.deadline = state.timeblocking.deadline.clone();
+		let ready = validate(&ready).unwrap();
+		assert_eq!(tb::metadata(ready.event.as_ref().unwrap()), metadata);
+		assert_eq!(ready.deadline.unwrap().value(), "2026-11-04 14:00");
+		assert!(!task.all_day);
+		assert_eq!(task.end - task.start, Duration::hours(1));
+		assert_eq!(state.timeblocking.deadline, "2026-11-04 14:00");
+		assert_eq!(state.calendar.events, original);
+		assert!(state.timeblocking.busy.is_empty());
+		let _ = tb::update(
+			&mut state,
+			tb::Action::SavedMany("task:previous".into(), Err("Offline".into())),
+		);
+		let _ = update(&mut state, Action::Cancel);
+		assert!(state.inbox.draft.is_none());
+		assert!(state.timeblocking.busy.is_empty());
+		assert_eq!(state.timeblocking.date, "2026-10-01");
+		assert_eq!(state.calendar.events, original);
+	}
 
-    #[test]
-    fn inbox_sorts_both_timestamps_in_both_directions_with_unknowns_last() {
-        let mut state = state();
-        let early = chrono::DateTime::parse_from_rfc3339("2026-10-29T12:00:00-07:00")
-            .unwrap()
-            .to_utc();
-        let late = early + Duration::seconds(1);
-        let mut a = task("a", "inbox", UNDATED);
-        let mut b = task("b", "inbox", UNDATED);
-        for (event, created_at, updated_at) in [(&mut a, early, late), (&mut b, late, early)] {
-            event.details.task_data = Some(task_db::TaskData {
-                id: 100,
-                metadata: tb::Metadata {
-                    created_at: Some(created_at),
-                    ..Default::default()
-                },
-            });
-            event.details.task_updated_at = Some(updated_at);
-        }
-        state.calendar.events = vec![task("unknown", "inbox", UNDATED), b, a];
-        for (sort, expected) in [
-            (InboxSort::CreatedAscending, ["a", "b", "unknown"]),
-            (InboxSort::CreatedDescending, ["b", "a", "unknown"]),
-            (InboxSort::ModifiedAscending, ["b", "a", "unknown"]),
-            (InboxSort::ModifiedDescending, ["a", "b", "unknown"]),
-        ] {
-            state.config.calendar.inbox_sort = sort;
-            assert_eq!(
-                tasks(&state)
-                    .iter()
-                    .map(|e| e.title.as_str())
-                    .collect::<Vec<_>>(),
-                expected
-            );
-            let saved = toml::to_string(&state.config.calendar).unwrap();
-            let restored: crate::config::CalendarSettings = toml::from_str(&saved).unwrap();
-            assert_eq!(restored.inbox_sort, sort);
-        }
-        // Equal timestamps use title then identity, independent of fetch order.
-        state.calendar.events[1].details.task_updated_at = Some(late);
-        state.config.calendar.inbox_sort = InboxSort::ModifiedDescending;
-        assert_eq!(tasks(&state)[0].title, "a");
-        state.calendar.events.reverse();
-        assert_eq!(tasks(&state)[0].title, "a");
-    }
+	#[test]
+	fn inbox_sorts_both_timestamps_in_both_directions_with_unknowns_last() {
+		let mut state = state();
+		let early = chrono::DateTime::parse_from_rfc3339("2026-10-29T12:00:00-07:00")
+			.unwrap()
+			.to_utc();
+		let late = early + Duration::seconds(1);
+		let mut a = task("a", "inbox", UNDATED);
+		let mut b = task("b", "inbox", UNDATED);
+		for (event, created_at, updated_at) in [(&mut a, early, late), (&mut b, late, early)] {
+			event.details.task_data = Some(task_db::TaskData {
+				id: 100,
+				metadata: tb::Metadata {
+					created_at: Some(created_at),
+					..Default::default()
+				},
+			});
+			event.details.task_updated_at = Some(updated_at);
+		}
+		state.calendar.events = vec![task("unknown", "inbox", UNDATED), b, a];
+		for (sort, expected) in [
+			(InboxSort::CreatedAscending, ["a", "b", "unknown"]),
+			(InboxSort::CreatedDescending, ["b", "a", "unknown"]),
+			(InboxSort::ModifiedAscending, ["b", "a", "unknown"]),
+			(InboxSort::ModifiedDescending, ["a", "b", "unknown"]),
+		] {
+			state.config.calendar.inbox_sort = sort;
+			assert_eq!(
+				tasks(&state)
+					.iter()
+					.map(|e| e.title.as_str())
+					.collect::<Vec<_>>(),
+				expected
+			);
+			let saved = toml::to_string(&state.config.calendar).unwrap();
+			let restored: crate::config::CalendarSettings = toml::from_str(&saved).unwrap();
+			assert_eq!(restored.inbox_sort, sort);
+		}
+		// Equal timestamps use title then identity, independent of fetch order.
+		state.calendar.events[1].details.task_updated_at = Some(late);
+		state.config.calendar.inbox_sort = InboxSort::ModifiedDescending;
+		assert_eq!(tasks(&state)[0].title, "a");
+		state.calendar.events.reverse();
+		assert_eq!(tasks(&state)[0].title, "a");
+	}
 
-    #[test]
-    fn today_only_lists_active_tasks_without_a_slot_across_lists() {
-        let mut state = state();
-        let today = crate::clock::now().date_naive();
-        let mut done = task("done", "inbox", today);
-        done.completed = true;
-        let mut timed = task("timed", "projects", today);
-        timed.all_day = false;
-        let mut blocked = task("blocked", "projects", today);
-        blocked.details.task_data = Some(task_db::TaskData {
-            id: 101,
-            metadata: tb::Metadata {
-                block: Some("block".into()),
-                ..Default::default()
-            },
-        });
-        let mut scheduled = task("scheduled", "inbox", today);
-        scheduled.id = "scheduled".into();
-        scheduled.calendar_id = "calendar".into();
-        scheduled.all_day = false;
-        scheduled.details.task_data = Some(task_db::TaskData {
-            id: 102,
-            metadata: tb::Metadata {
-                ..Default::default()
-            },
-        });
-        let mut ignored = task("ignored", "inbox", today);
-        ignored.details.task_data = Some(task_db::TaskData {
-            id: 103,
-            metadata: tb::Metadata {
-                ignored: true,
-                ..Default::default()
-            },
-        });
-        let mut overdue = task("overdue", "inbox", today);
-        overdue.details.description = "".into();
-        overdue
-            .details
-            .task_data
-            .get_or_insert_with(|| timeslay_core::task_db::TaskData {
-                id: 100,
-                metadata: Default::default(),
-            })
-            .metadata
-            .deadline = Some(
-            timeslay_core::calendar::deadline::parse_input(&format!(
-                "{} 00:00",
-                today.pred_opt().unwrap()
-            ))
-            .unwrap(),
-        );
-        let mut event = task("event", "calendar", today);
-        event.id = "event".into();
-        event.calendar_id = "calendar".into();
-        state.calendar.events = vec![
-            task("b", "projects", today),
-            task("a", "inbox", today),
-            task("yesterday", "inbox", today.pred_opt().unwrap()),
-            task("tomorrow", "inbox", today.succ_opt().unwrap()),
-            task("undated", "inbox", UNDATED),
-            done,
-            timed,
-            blocked,
-            scheduled,
-            ignored,
-            overdue,
-            event,
-        ];
-        assert_eq!(
-            today_tasks(&state)
-                .iter()
-                .map(|task| task.title.as_str())
-                .collect::<Vec<_>>(),
-            ["a", "b"]
-        );
-        assert!(
-            overdue_tasks(&state)
-                .iter()
-                .any(|task| task.title == "overdue")
-        );
-    }
+	#[test]
+	fn today_only_lists_active_tasks_without_a_slot_across_lists() {
+		let mut state = state();
+		let today = crate::clock::now().date_naive();
+		let mut done = task("done", "inbox", today);
+		done.completed = true;
+		let mut timed = task("timed", "projects", today);
+		timed.all_day = false;
+		let mut blocked = task("blocked", "projects", today);
+		blocked.details.task_data = Some(task_db::TaskData {
+			id: 101,
+			metadata: tb::Metadata {
+				block: Some("block".into()),
+				..Default::default()
+			},
+		});
+		let mut scheduled = task("scheduled", "inbox", today);
+		scheduled.id = "scheduled".into();
+		scheduled.calendar_id = "calendar".into();
+		scheduled.all_day = false;
+		scheduled.details.task_data = Some(task_db::TaskData {
+			id: 102,
+			metadata: tb::Metadata {
+				..Default::default()
+			},
+		});
+		let mut ignored = task("ignored", "inbox", today);
+		ignored.details.task_data = Some(task_db::TaskData {
+			id: 103,
+			metadata: tb::Metadata {
+				ignored: true,
+				..Default::default()
+			},
+		});
+		let mut overdue = task("overdue", "inbox", today);
+		overdue.details.description = "".into();
+		overdue
+			.details
+			.task_data
+			.get_or_insert_with(|| timeslay_core::task_db::TaskData {
+				id: 100,
+				metadata: Default::default(),
+			})
+			.metadata
+			.deadline = Some(
+			timeslay_core::calendar::deadline::parse_input(&format!(
+				"{} 00:00",
+				today.pred_opt().unwrap()
+			))
+			.unwrap(),
+		);
+		let mut event = task("event", "calendar", today);
+		event.id = "event".into();
+		event.calendar_id = "calendar".into();
+		state.calendar.events = vec![
+			task("b", "projects", today),
+			task("a", "inbox", today),
+			task("yesterday", "inbox", today.pred_opt().unwrap()),
+			task("tomorrow", "inbox", today.succ_opt().unwrap()),
+			task("undated", "inbox", UNDATED),
+			done,
+			timed,
+			blocked,
+			scheduled,
+			ignored,
+			overdue,
+			event,
+		];
+		assert_eq!(
+			today_tasks(&state)
+				.iter()
+				.map(|task| task.title.as_str())
+				.collect::<Vec<_>>(),
+			["a", "b"]
+		);
+		assert!(
+			overdue_tasks(&state)
+				.iter()
+				.any(|task| task.title == "overdue")
+		);
+	}
 
-    #[test]
-    fn overdue_requires_an_explicit_deadline_across_lists() {
-        let mut state = state();
-        let today = day("2026-10-30");
-        let now = calendar::at_clock(today, 12, 0);
-        let mut timed = task("timed", "triaged", today);
-        timed.all_day = false;
-        timed.start = now - Duration::minutes(1);
-        let mut at_now = timed.clone();
-        at_now.id = "task:now".into();
-        at_now.start = now;
-        let mut future = timed.clone();
-        future.id = "task:future".into();
-        future.start = now + Duration::minutes(1);
-        let mut deadline = task("deadline", "inbox", UNDATED);
-        deadline.details.description = "".into();
-        deadline
-            .details
-            .task_data
-            .get_or_insert_with(|| timeslay_core::task_db::TaskData {
-                id: 100,
-                metadata: Default::default(),
-            })
-            .metadata
-            .deadline =
-            Some(timeslay_core::calendar::deadline::parse_input("2026-10-30 11:59").unwrap());
-        let mut later_deadline = deadline.clone();
-        later_deadline.id = "task:later".into();
-        later_deadline.details.description = "".into();
-        later_deadline
-            .details
-            .task_data
-            .get_or_insert_with(|| timeslay_core::task_db::TaskData {
-                id: 100,
-                metadata: Default::default(),
-            })
-            .metadata
-            .deadline =
-            Some(timeslay_core::calendar::deadline::parse_input("2026-10-30 12:01").unwrap());
-        let mut done = task("done", "inbox", today.pred_opt().unwrap());
-        done.completed = true;
-        let mut ignored = task("ignored", "inbox", today.pred_opt().unwrap());
-        ignored.details.task_data = Some(task_db::TaskData {
-            id: 101,
-            metadata: tb::Metadata {
-                ignored: true,
-                ..Default::default()
-            },
-        });
-        let mut event = task("event", "calendar", today.pred_opt().unwrap());
-        event.id = "event".into();
-        event.calendar_id = "calendar".into();
-        state.calendar.events = vec![
-            task("yesterday", "projects", today.pred_opt().unwrap()),
-            task("today", "inbox", today),
-            task("tomorrow", "backlog", today.succ_opt().unwrap()),
-            task("undated", "inbox", UNDATED),
-            timed,
-            at_now,
-            future,
-            deadline,
-            later_deadline,
-            done,
-            ignored,
-            event,
-        ];
-        assert_eq!(
-            overdue_tasks_at(&state, now)
-                .iter()
-                .map(|t| t.title.as_str())
-                .collect::<Vec<_>>(),
-            ["deadline"]
-        );
-        // A planning date never becomes a deadline at midnight.
-        assert!(
-            !overdue_tasks_at(&state, calendar::at_clock(today.succ_opt().unwrap(), 0, 0))
-                .iter()
-                .any(|task| task.title == "today")
-        );
-    }
+	#[test]
+	fn overdue_requires_an_explicit_deadline_across_lists() {
+		let mut state = state();
+		let today = day("2026-10-30");
+		let now = calendar::at_clock(today, 12, 0);
+		let mut timed = task("timed", "triaged", today);
+		timed.all_day = false;
+		timed.start = now - Duration::minutes(1);
+		let mut at_now = timed.clone();
+		at_now.id = "task:now".into();
+		at_now.start = now;
+		let mut future = timed.clone();
+		future.id = "task:future".into();
+		future.start = now + Duration::minutes(1);
+		let mut deadline = task("deadline", "inbox", UNDATED);
+		deadline.details.description = "".into();
+		deadline
+			.details
+			.task_data
+			.get_or_insert_with(|| timeslay_core::task_db::TaskData {
+				id: 100,
+				metadata: Default::default(),
+			})
+			.metadata
+			.deadline = Some(timeslay_core::calendar::deadline::parse_input("2026-10-30 11:59").unwrap());
+		let mut later_deadline = deadline.clone();
+		later_deadline.id = "task:later".into();
+		later_deadline.details.description = "".into();
+		later_deadline
+			.details
+			.task_data
+			.get_or_insert_with(|| timeslay_core::task_db::TaskData {
+				id: 100,
+				metadata: Default::default(),
+			})
+			.metadata
+			.deadline = Some(timeslay_core::calendar::deadline::parse_input("2026-10-30 12:01").unwrap());
+		let mut done = task("done", "inbox", today.pred_opt().unwrap());
+		done.completed = true;
+		let mut ignored = task("ignored", "inbox", today.pred_opt().unwrap());
+		ignored.details.task_data = Some(task_db::TaskData {
+			id: 101,
+			metadata: tb::Metadata {
+				ignored: true,
+				..Default::default()
+			},
+		});
+		let mut event = task("event", "calendar", today.pred_opt().unwrap());
+		event.id = "event".into();
+		event.calendar_id = "calendar".into();
+		state.calendar.events = vec![
+			task("yesterday", "projects", today.pred_opt().unwrap()),
+			task("today", "inbox", today),
+			task("tomorrow", "backlog", today.succ_opt().unwrap()),
+			task("undated", "inbox", UNDATED),
+			timed,
+			at_now,
+			future,
+			deadline,
+			later_deadline,
+			done,
+			ignored,
+			event,
+		];
+		assert_eq!(
+			overdue_tasks_at(&state, now)
+				.iter()
+				.map(|t| t.title.as_str())
+				.collect::<Vec<_>>(),
+			["deadline"]
+		);
+		// A planning date never becomes a deadline at midnight.
+		assert!(
+			!overdue_tasks_at(&state, calendar::at_clock(today.succ_opt().unwrap(), 0, 0))
+				.iter()
+				.any(|task| task.title == "today")
+		);
+	}
 
-    #[test]
-    fn only_undated_tasks_on_the_inbox_list_are_untriaged() {
-        let mut state = state();
-        let mut done = task("done", "inbox", UNDATED);
-        done.completed = true;
-        state.calendar.events = vec![
-            task("fresh", "inbox", UNDATED),
-            task("planned", "inbox", day("2026-11-02")),
-            task("elsewhere", "projects", UNDATED),
-            done,
-        ];
-        let titles: Vec<_> = tasks(&state).iter().map(|t| t.title.as_str()).collect();
-        assert_eq!(titles, ["fresh"]);
-    }
+	#[test]
+	fn only_undated_tasks_on_the_inbox_list_are_untriaged() {
+		let mut state = state();
+		let mut done = task("done", "inbox", UNDATED);
+		done.completed = true;
+		state.calendar.events = vec![
+			task("fresh", "inbox", UNDATED),
+			task("planned", "inbox", day("2026-11-02")),
+			task("elsewhere", "projects", UNDATED),
+			done,
+		];
+		let titles: Vec<_> = tasks(&state).iter().map(|t| t.title.as_str()).collect();
+		assert_eq!(titles, ["fresh"]);
+	}
 
-    #[test]
-    fn a_task_given_a_block_or_a_schedule_is_triaged() {
-        let mut state = state();
-        let mut blocked = task("blocked", "inbox", UNDATED);
-        let mut data = crate::task_db::TaskData {
-            id: 100,
-            metadata: Default::default(),
-        };
-        data.metadata.block = Some("work/block".into());
-        blocked.details.task_data = Some(data);
-        state.calendar.events = vec![blocked];
-        assert!(tasks(&state).is_empty());
-    }
+	#[test]
+	fn a_task_given_a_block_or_a_schedule_is_triaged() {
+		let mut state = state();
+		let mut blocked = task("blocked", "inbox", UNDATED);
+		let mut data = crate::task_db::TaskData {
+			id: 100,
+			metadata: Default::default(),
+		};
+		data.metadata.block = Some("work/block".into());
+		blocked.details.task_data = Some(data);
+		state.calendar.events = vec![blocked];
+		assert!(tasks(&state).is_empty());
+	}
 
-    #[test]
-    fn triaged_tasks_are_the_ones_on_the_triaged_list() {
-        let mut state = state();
-        state.calendar.calendars.push(Calendar {
-            id: "tasks:triaged".into(),
-            name: "Triaged".into(),
-            color: calendar::colors::TASK,
-            primary: false,
-            selected_by_google: true,
-        });
-        let mut ready = task("ready", "triaged", UNDATED);
-        ready.title = "Research outline".into();
-        state.calendar.events = vec![task("fresh", "inbox", UNDATED), ready];
-        assert_eq!(
-            triaged_tasks(&state)
-                .iter()
-                .map(|task| task.title.as_str())
-                .collect::<Vec<_>>(),
-            ["Research outline"]
-        );
+	#[test]
+	fn triaged_tasks_are_the_ones_on_the_triaged_list() {
+		let mut state = state();
+		state.calendar.calendars.push(Calendar {
+			id: "tasks:triaged".into(),
+			name: "Triaged".into(),
+			color: calendar::colors::TASK,
+			primary: false,
+			selected_by_google: true,
+		});
+		let mut ready = task("ready", "triaged", UNDATED);
+		ready.title = "Research outline".into();
+		state.calendar.events = vec![task("fresh", "inbox", UNDATED), ready];
+		assert_eq!(
+			triaged_tasks(&state)
+				.iter()
+				.map(|task| task.title.as_str())
+				.collect::<Vec<_>>(),
+			["Research outline"]
+		);
 
-        // A chosen list replaces the one named Triaged.
-        state.config.calendar.triaged_list = Some("tasks:mine".into());
-        state.calendar.events.push(task("mine", "mine", UNDATED));
-        assert_eq!(triaged_tasks(&state).len(), 1);
-    }
+		// A chosen list replaces the one named Triaged.
+		state.config.calendar.triaged_list = Some("tasks:mine".into());
+		state.calendar.events.push(task("mine", "mine", UNDATED));
+		assert_eq!(triaged_tasks(&state).len(), 1);
+	}
 
-    #[test]
-    fn a_chosen_list_replaces_the_one_named_inbox() {
-        let mut state = state();
-        state.calendar.events = vec![task("a", "inbox", UNDATED), task("b", "mine", UNDATED)];
-        state.config.calendar.inbox_list = Some("tasks:mine".into());
-        let titles: Vec<_> = tasks(&state).iter().map(|t| t.title.clone()).collect();
-        assert_eq!(titles, ["b"]);
-        state.config.calendar.inbox_list = Some("mine".into());
-        assert_eq!(tasks(&state).len(), 1);
-    }
+	#[test]
+	fn a_chosen_list_replaces_the_one_named_inbox() {
+		let mut state = state();
+		state.calendar.events = vec![task("a", "inbox", UNDATED), task("b", "mine", UNDATED)];
+		state.config.calendar.inbox_list = Some("tasks:mine".into());
+		let titles: Vec<_> = tasks(&state).iter().map(|t| t.title.clone()).collect();
+		assert_eq!(titles, ["b"]);
+		state.config.calendar.inbox_list = Some("mine".into());
+		assert_eq!(tasks(&state).len(), 1);
+	}
 
-    #[test]
-    fn the_list_a_task_was_just_created_on_counts_before_a_sync() {
-        let mut state = state();
-        state.calendar.calendars.clear();
-        state.calendar.events = vec![task("a", "new-list", UNDATED)];
-        assert!(tasks(&state).is_empty());
-        let event = task("b", "new-list", UNDATED);
-        let _ = created(&mut state, Ok(event));
-        assert_eq!(tasks(&state).len(), 2);
-    }
+	#[test]
+	fn the_list_a_task_was_just_created_on_counts_before_a_sync() {
+		let mut state = state();
+		state.calendar.calendars.clear();
+		state.calendar.events = vec![task("a", "new-list", UNDATED)];
+		assert!(tasks(&state).is_empty());
+		let event = task("b", "new-list", UNDATED);
+		let _ = created(&mut state, Ok(event));
+		assert_eq!(tasks(&state).len(), 2);
+	}
 
-    #[test]
-    fn the_new_something_popup_opens_and_closes() {
-        let mut state = state();
-        let _ = update(&mut state, Action::NewTask);
-        assert!(state.inbox.draft.is_some());
-        let _ = update(&mut state, Action::Title("Call the bank".into()));
-        let _ = update(&mut state, Action::Cancel);
-        assert!(state.inbox.draft.is_none());
-        let _ = update(&mut state, Action::NewTask);
-        assert_eq!(state.inbox.draft.as_ref().unwrap().title, "");
-    }
+	#[test]
+	fn the_new_something_popup_opens_and_closes() {
+		let mut state = state();
+		let _ = update(&mut state, Action::NewTask);
+		assert!(state.inbox.draft.is_some());
+		let _ = update(&mut state, Action::Title("Call the bank".into()));
+		let _ = update(&mut state, Action::Cancel);
+		assert!(state.inbox.draft.is_none());
+		let _ = update(&mut state, Action::NewTask);
+		assert_eq!(state.inbox.draft.as_ref().unwrap().title, "");
+	}
 
-    #[test]
-    fn a_pasted_link_is_read_and_a_typed_one_waits() {
-        let mut state = state();
-        let _ = update(&mut state, Action::NewTask);
-        let _ = update(&mut state, Action::Title(THREAD.into()));
-        let draft = state.inbox.draft.as_ref().unwrap();
-        assert!(draft.fetching);
-        assert_eq!(draft.source.as_ref().unwrap().url, THREAD);
+	#[test]
+	fn a_pasted_link_is_read_and_a_typed_one_waits() {
+		let mut state = state();
+		let _ = update(&mut state, Action::NewTask);
+		let _ = update(&mut state, Action::Title(THREAD.into()));
+		let draft = state.inbox.draft.as_ref().unwrap();
+		assert!(draft.fetching);
+		assert_eq!(draft.source.as_ref().unwrap().url, THREAD);
 
-        let mut state = self::state();
-        let _ = update(&mut state, Action::NewTask);
-        // One more character at a time is typing, not pasting.
-        state.inbox.draft.as_mut().unwrap().title = THREAD[..THREAD.len() - 1].into();
-        let _ = update(&mut state, Action::Title(THREAD.into()));
-        let draft = state.inbox.draft.as_ref().unwrap();
-        assert!(!draft.fetching);
-        assert!(draft.source.is_some());
-    }
+		let mut state = self::state();
+		let _ = update(&mut state, Action::NewTask);
+		// One more character at a time is typing, not pasting.
+		state.inbox.draft.as_mut().unwrap().title = THREAD[..THREAD.len() - 1].into();
+		let _ = update(&mut state, Action::Title(THREAD.into()));
+		let draft = state.inbox.draft.as_ref().unwrap();
+		assert!(!draft.fetching);
+		assert!(draft.source.is_some());
+	}
 
-    fn details(title: &str) -> integrations::Details {
-        integrations::Details {
-            title: title.into(),
-            deadline: None,
-            due: None,
-        }
-    }
+	fn details(title: &str) -> integrations::Details {
+		integrations::Details {
+			title: title.into(),
+			deadline: None,
+			due: None,
+		}
+	}
 
-    #[test]
-    fn what_an_integration_finds_fills_only_what_was_left_empty() {
-        let mut state = state();
-        let _ = update(&mut state, Action::NewTask);
-        let _ = update(&mut state, Action::Title(THREAD.into()));
-        let _ = update(&mut state, Action::Due("2026-11-03".into()));
-        let lookup = state.inbox.lookups;
-        let found = integrations::Details {
-            title: "Quarterly report".into(),
-            deadline: Some(deadline::parse_input("2026-11-10 17:00").unwrap()),
-            due: Some(day("2026-11-04")),
-        };
-        let _ = update(&mut state, Action::Fetched(lookup, Ok(found)));
-        let draft = state.inbox.draft.as_ref().unwrap();
-        assert!(!draft.fetching);
-        assert_eq!(draft.title, "Quarterly report");
-        assert_eq!(draft.deadline, "2026-11-10 17:00");
-        assert_eq!(draft.due, "2026-11-03");
-        assert!(draft.source.is_some());
-    }
+	#[test]
+	fn what_an_integration_finds_fills_only_what_was_left_empty() {
+		let mut state = state();
+		let _ = update(&mut state, Action::NewTask);
+		let _ = update(&mut state, Action::Title(THREAD.into()));
+		let _ = update(&mut state, Action::Due("2026-11-03".into()));
+		let lookup = state.inbox.lookups;
+		let found = integrations::Details {
+			title: "Quarterly report".into(),
+			deadline: Some(deadline::parse_input("2026-11-10 17:00").unwrap()),
+			due: Some(day("2026-11-04")),
+		};
+		let _ = update(&mut state, Action::Fetched(lookup, Ok(found)));
+		let draft = state.inbox.draft.as_ref().unwrap();
+		assert!(!draft.fetching);
+		assert_eq!(draft.title, "Quarterly report");
+		assert_eq!(draft.deadline, "2026-11-10 17:00");
+		assert_eq!(draft.due, "2026-11-03");
+		assert!(draft.source.is_some());
+	}
 
-    #[test]
-    fn a_title_the_person_wrote_is_not_replaced_by_a_late_answer() {
-        let mut state = state();
-        let _ = update(&mut state, Action::NewTask);
-        let _ = update(&mut state, Action::Title(THREAD.into()));
-        let lookup = state.inbox.lookups;
-        let _ = update(&mut state, Action::Title("My own words".into()));
-        let _ = update(
-            &mut state,
-            Action::Fetched(lookup, Ok(details("Subject line"))),
-        );
-        let draft = state.inbox.draft.as_ref().unwrap();
-        assert_eq!(draft.title, "My own words");
-        assert!(draft.source.is_some());
-    }
+	#[test]
+	fn a_title_the_person_wrote_is_not_replaced_by_a_late_answer() {
+		let mut state = state();
+		let _ = update(&mut state, Action::NewTask);
+		let _ = update(&mut state, Action::Title(THREAD.into()));
+		let lookup = state.inbox.lookups;
+		let _ = update(&mut state, Action::Title("My own words".into()));
+		let _ = update(
+			&mut state,
+			Action::Fetched(lookup, Ok(details("Subject line"))),
+		);
+		let draft = state.inbox.draft.as_ref().unwrap();
+		assert_eq!(draft.title, "My own words");
+		assert!(draft.source.is_some());
+	}
 
-    #[test]
-    fn an_answer_for_an_older_link_or_a_closed_popup_is_ignored() {
-        let mut state = state();
-        let _ = update(&mut state, Action::NewTask);
-        let _ = update(&mut state, Action::Title(THREAD.into()));
-        let stale = state.inbox.lookups;
-        let _ = update(&mut state, Action::Cancel);
-        let _ = update(&mut state, Action::Fetched(stale, Ok(details("Old"))));
-        assert!(state.inbox.draft.is_none());
-        let _ = update(&mut state, Action::NewTask);
-        let _ = update(&mut state, Action::Fetched(stale, Ok(details("Old"))));
-        assert_eq!(state.inbox.draft.as_ref().unwrap().title, "");
-    }
+	#[test]
+	fn an_answer_for_an_older_link_or_a_closed_popup_is_ignored() {
+		let mut state = state();
+		let _ = update(&mut state, Action::NewTask);
+		let _ = update(&mut state, Action::Title(THREAD.into()));
+		let stale = state.inbox.lookups;
+		let _ = update(&mut state, Action::Cancel);
+		let _ = update(&mut state, Action::Fetched(stale, Ok(details("Old"))));
+		assert!(state.inbox.draft.is_none());
+		let _ = update(&mut state, Action::NewTask);
+		let _ = update(&mut state, Action::Fetched(stale, Ok(details("Old"))));
+		assert_eq!(state.inbox.draft.as_ref().unwrap().title, "");
+	}
 
-    #[test]
-    fn a_failed_read_keeps_the_link_and_says_why() {
-        let mut state = state();
-        let _ = update(&mut state, Action::NewTask);
-        let _ = update(&mut state, Action::Title(THREAD.into()));
-        let lookup = state.inbox.lookups;
-        let _ = update(
-            &mut state,
-            Action::Fetched(lookup, Err("Reconnect Google".into())),
-        );
-        let draft = state.inbox.draft.as_ref().unwrap();
-        assert_eq!(draft.title, THREAD);
-        assert_eq!(draft.error.as_deref(), Some("Reconnect Google"));
-        assert!(!draft.fetching);
-    }
+	#[test]
+	fn a_failed_read_keeps_the_link_and_says_why() {
+		let mut state = state();
+		let _ = update(&mut state, Action::NewTask);
+		let _ = update(&mut state, Action::Title(THREAD.into()));
+		let lookup = state.inbox.lookups;
+		let _ = update(
+			&mut state,
+			Action::Fetched(lookup, Err("Reconnect Google".into())),
+		);
+		let draft = state.inbox.draft.as_ref().unwrap();
+		assert_eq!(draft.title, THREAD);
+		assert_eq!(draft.error.as_deref(), Some("Reconnect Google"));
+		assert!(!draft.fetching);
+	}
 
-    #[test]
-    fn the_popup_checks_its_fields_before_anything_is_sent() {
-        let mut draft = Draft::default();
-        assert_eq!(
-            validate(&draft).err().as_deref(),
-            Some("A task needs a name")
-        );
-        draft.title = "Pay rent".into();
-        assert!(validate(&draft).is_ok());
-        draft.deadline = "soon".into();
-        assert!(validate(&draft).unwrap_err().contains("YYYY-MM-DD"));
-        draft.deadline = "2026-11-01 09:00".into();
-        draft.due = "nonsense".into();
-        assert_eq!(
-            validate(&draft).err().as_deref(),
-            Some("Enter a due date as YYYY-MM-DD or a date like tomorrow")
-        );
-        draft.due = "2026-10-30".into();
-        let task = validate(&draft).unwrap();
-        assert_eq!(task.due, Some(day("2026-10-30")));
-        assert_eq!(task.deadline.unwrap().value(), "2026-11-01 09:00");
-        assert!(task.source.is_none());
-        draft.title = format!("  {THREAD} ");
-        assert_eq!(validate(&draft).unwrap().source.unwrap().url, THREAD);
-        draft.title = "x".repeat(MAX_TITLE_CHARS + 1);
-        assert!(validate(&draft).unwrap_err().contains("at most"));
-    }
+	#[test]
+	fn the_popup_checks_its_fields_before_anything_is_sent() {
+		let mut draft = Draft::default();
+		assert_eq!(
+			validate(&draft).err().as_deref(),
+			Some("A task needs a name")
+		);
+		draft.title = "Pay rent".into();
+		assert!(validate(&draft).is_ok());
+		draft.deadline = "soon".into();
+		assert!(validate(&draft).unwrap_err().contains("YYYY-MM-DD"));
+		draft.deadline = "2026-11-01 09:00".into();
+		draft.due = "nonsense".into();
+		assert_eq!(
+			validate(&draft).err().as_deref(),
+			Some("Enter a due date as YYYY-MM-DD or a date like tomorrow")
+		);
+		draft.due = "2026-10-30".into();
+		let task = validate(&draft).unwrap();
+		assert_eq!(task.due, Some(day("2026-10-30")));
+		assert_eq!(task.deadline.unwrap().value(), "2026-11-01 09:00");
+		assert!(task.source.is_none());
+		draft.title = format!("  {THREAD} ");
+		assert_eq!(validate(&draft).unwrap().source.unwrap().url, THREAD);
+		draft.title = "x".repeat(MAX_TITLE_CHARS + 1);
+		assert!(validate(&draft).unwrap_err().contains("at most"));
+	}
 
-    #[test]
-    fn an_invalid_task_stays_in_the_popup_with_its_error() {
-        let mut state = state();
-        let _ = update(&mut state, Action::NewTask);
-        let _ = update(&mut state, Action::Create);
-        let draft = state.inbox.draft.as_ref().unwrap();
-        assert!(!draft.saving);
-        assert_eq!(draft.error.as_deref(), Some("A task needs a name"));
-    }
+	#[test]
+	fn an_invalid_task_stays_in_the_popup_with_its_error() {
+		let mut state = state();
+		let _ = update(&mut state, Action::NewTask);
+		let _ = update(&mut state, Action::Create);
+		let draft = state.inbox.draft.as_ref().unwrap();
+		assert!(!draft.saving);
+		assert_eq!(draft.error.as_deref(), Some("A task needs a name"));
+	}
 
-    #[test]
-    fn a_created_task_joins_the_inbox_and_closes_the_popup() {
-        let mut state = state();
-        let _ = update(&mut state, Action::NewTask);
-        let revision = state.timeblocking.revision;
-        let _ = created(&mut state, Ok(task("new", "inbox", UNDATED)));
-        assert!(state.inbox.draft.is_none());
-        assert_eq!(state.timeblocking.revision, revision + 1);
-        assert_eq!(tasks(&state).len(), 1);
+	#[test]
+	fn a_created_task_joins_the_inbox_and_closes_the_popup() {
+		let mut state = state();
+		let _ = update(&mut state, Action::NewTask);
+		let revision = state.timeblocking.revision;
+		let _ = created(&mut state, Ok(task("new", "inbox", UNDATED)));
+		assert!(state.inbox.draft.is_none());
+		assert_eq!(state.timeblocking.revision, revision + 1);
+		assert_eq!(tasks(&state).len(), 1);
 
-        let _ = update(&mut state, Action::NewTask);
-        let _ = created(&mut state, Err("Google: nope".into()));
-        let draft = state.inbox.draft.as_ref().unwrap();
-        assert_eq!(draft.error.as_deref(), Some("Google: nope"));
-        assert!(!draft.saving);
-    }
+		let _ = update(&mut state, Action::NewTask);
+		let _ = created(&mut state, Err("Google: nope".into()));
+		let draft = state.inbox.draft.as_ref().unwrap();
+		assert_eq!(draft.error.as_deref(), Some("Google: nope"));
+		assert!(!draft.saving);
+	}
 
-    #[test]
-    fn the_day_chooser_opens_per_task_and_rejects_bad_days() {
-        let mut state = state();
-        let _ = update(&mut state, Action::ChooseDay("task:a".into()));
-        assert_eq!(state.inbox.scheduling.as_deref(), Some("task:a"));
-        let _ = update(&mut state, Action::ChooseDay("task:b".into()));
-        assert_eq!(state.inbox.scheduling.as_deref(), Some("task:b"));
-        let _ = update(&mut state, Action::ChooseDay("task:b".into()));
-        assert_eq!(state.inbox.scheduling, None);
+	#[test]
+	fn the_day_chooser_opens_per_task_and_rejects_bad_days() {
+		let mut state = state();
+		let _ = update(&mut state, Action::ChooseDay("task:a".into()));
+		assert_eq!(state.inbox.scheduling.as_deref(), Some("task:a"));
+		let _ = update(&mut state, Action::ChooseDay("task:b".into()));
+		assert_eq!(state.inbox.scheduling.as_deref(), Some("task:b"));
+		let _ = update(&mut state, Action::ChooseDay("task:b".into()));
+		assert_eq!(state.inbox.scheduling, None);
 
-        let _ = update(&mut state, Action::ChooseDay("task:a".into()));
-        let _ = update(&mut state, Action::Date("next week".into()));
-        let _ = update(&mut state, Action::ScheduleTyped("task:a".into()));
-        assert_eq!(state.inbox.scheduling.as_deref(), Some("task:a"));
-        assert!(state.inbox.error.as_deref().unwrap().contains("YYYY-MM-DD"));
-    }
+		let _ = update(&mut state, Action::ChooseDay("task:a".into()));
+		let _ = update(&mut state, Action::Date("next week".into()));
+		let _ = update(&mut state, Action::ScheduleTyped("task:a".into()));
+		assert_eq!(state.inbox.scheduling.as_deref(), Some("task:a"));
+		assert!(state.inbox.error.as_deref().unwrap().contains("YYYY-MM-DD"));
+	}
 
-    #[test]
-    fn choosing_a_day_hands_the_task_to_scheduling() {
-        let mut state = state();
-        state.calendar.events = vec![task("a", "inbox", UNDATED)];
-        let _ = update(&mut state, Action::ChooseDay("task:a".into()));
-        let _ = update(
-            &mut state,
-            Action::ScheduleOn("task:a".into(), day("2026-11-03")),
-        );
-        assert_eq!(state.inbox.scheduling, None);
-        // The write is in flight, so the task is held until Google answers.
-        assert!(state.timeblocking.busy.contains_task("task:a"));
-    }
+	#[test]
+	fn choosing_a_day_hands_the_task_to_scheduling() {
+		let mut state = state();
+		state.calendar.events = vec![task("a", "inbox", UNDATED)];
+		let _ = update(&mut state, Action::ChooseDay("task:a".into()));
+		let _ = update(
+			&mut state,
+			Action::ScheduleOn("task:a".into(), day("2026-11-03")),
+		);
+		assert_eq!(state.inbox.scheduling, None);
+		// The write is in flight, so the task is held until Google answers.
+		assert!(state.timeblocking.busy.contains_task("task:a"));
+	}
 
-    #[test]
-    fn the_quick_days_are_today_tomorrow_and_the_next_monday() {
-        // A Monday, a Wednesday and a Sunday.
-        for (today, monday) in [
-            ("2026-10-26", "2026-11-02"),
-            ("2026-10-28", "2026-11-02"),
-            ("2026-11-01", "2026-11-02"),
-        ] {
-            let days = quick_days(day(today));
-            assert_eq!(days[0].1, day(today));
-            assert_eq!(days[1].1, day(today) + Duration::days(1));
-            assert_eq!(days[2].1, day(monday));
-        }
-    }
+	#[test]
+	fn the_quick_days_are_today_tomorrow_and_the_next_monday() {
+		// A Monday, a Wednesday and a Sunday.
+		for (today, monday) in [
+			("2026-10-26", "2026-11-02"),
+			("2026-10-28", "2026-11-02"),
+			("2026-11-01", "2026-11-02"),
+		] {
+			let days = quick_days(day(today));
+			assert_eq!(days[0].1, day(today));
+			assert_eq!(days[1].1, day(today) + Duration::days(1));
+			assert_eq!(days[2].1, day(monday));
+		}
+	}
 
-    #[test]
-    fn the_month_picker_opens_on_this_month_and_steps_through_the_others() {
-        let mut state = state();
-        let this_month = calendar::first_of_month(calendar::day_at(
-            crate::clock::now(),
-            state.config.calendar.day_start_hour(),
-        ));
-        let _ = update(&mut state, Action::TogglePicker("task:a".into()));
-        assert_eq!(state.inbox.picker, Some(("task:a".into(), this_month)));
-        let _ = update(&mut state, Action::PickerShift(1));
-        let _ = update(&mut state, Action::PickerShift(1));
-        let _ = update(&mut state, Action::PickerShift(-3));
-        let last_month = this_month - chrono::Months::new(1);
-        assert_eq!(state.inbox.picker, Some(("task:a".into(), last_month)));
-        // Another task starts again from this month; the same one closes it.
-        let _ = update(&mut state, Action::TogglePicker("task:b".into()));
-        assert_eq!(state.inbox.picker, Some(("task:b".into(), this_month)));
-        let _ = update(&mut state, Action::TogglePicker("task:b".into()));
-        assert_eq!(state.inbox.picker, None);
-        // Nothing to step while it is closed.
-        let _ = update(&mut state, Action::PickerShift(1));
-        assert_eq!(state.inbox.picker, None);
-    }
+	#[test]
+	fn the_month_picker_opens_on_this_month_and_steps_through_the_others() {
+		let mut state = state();
+		let this_month = calendar::first_of_month(calendar::day_at(
+			crate::clock::now(),
+			state.config.calendar.day_start_hour(),
+		));
+		let _ = update(&mut state, Action::TogglePicker("task:a".into()));
+		assert_eq!(state.inbox.picker, Some(("task:a".into(), this_month)));
+		let _ = update(&mut state, Action::PickerShift(1));
+		let _ = update(&mut state, Action::PickerShift(1));
+		let _ = update(&mut state, Action::PickerShift(-3));
+		let last_month = this_month - chrono::Months::new(1);
+		assert_eq!(state.inbox.picker, Some(("task:a".into(), last_month)));
+		// Another task starts again from this month; the same one closes it.
+		let _ = update(&mut state, Action::TogglePicker("task:b".into()));
+		assert_eq!(state.inbox.picker, Some(("task:b".into(), this_month)));
+		let _ = update(&mut state, Action::TogglePicker("task:b".into()));
+		assert_eq!(state.inbox.picker, None);
+		// Nothing to step while it is closed.
+		let _ = update(&mut state, Action::PickerShift(1));
+		assert_eq!(state.inbox.picker, None);
+	}
 
-    #[test]
-    fn a_day_picked_in_the_month_plans_the_task_and_closes_the_picker() {
-        let mut state = state();
-        state.calendar.events = vec![task("a", "inbox", UNDATED)];
-        let _ = update(&mut state, Action::TogglePicker("task:a".into()));
-        let _ = update(
-            &mut state,
-            Action::ScheduleOn("task:a".into(), day("2026-11-12")),
-        );
-        assert_eq!(state.inbox.picker, None);
-        assert!(state.timeblocking.busy.contains_task("task:a"));
-    }
+	#[test]
+	fn a_day_picked_in_the_month_plans_the_task_and_closes_the_picker() {
+		let mut state = state();
+		state.calendar.events = vec![task("a", "inbox", UNDATED)];
+		let _ = update(&mut state, Action::TogglePicker("task:a".into()));
+		let _ = update(
+			&mut state,
+			Action::ScheduleOn("task:a".into(), day("2026-11-12")),
+		);
+		assert_eq!(state.inbox.picker, None);
+		assert!(state.timeblocking.busy.contains_task("task:a"));
+	}
 
-    #[test]
-    fn the_list_choice_is_remembered() {
-        let mut state = state();
-        let _ = update(&mut state, Action::List(Some("tasks:mine".into())));
-        assert_eq!(
-            state.config.calendar.inbox_list.as_deref(),
-            Some("tasks:mine")
-        );
-        let _ = update(&mut state, Action::List(None));
-        assert_eq!(state.config.calendar.inbox_list, None);
-    }
+	#[test]
+	fn the_list_choice_is_remembered() {
+		let mut state = state();
+		let _ = update(&mut state, Action::List(Some("tasks:mine".into())));
+		assert_eq!(
+			state.config.calendar.inbox_list.as_deref(),
+			Some("tasks:mine")
+		);
+		let _ = update(&mut state, Action::List(None));
+		assert_eq!(state.config.calendar.inbox_list, None);
+	}
 }

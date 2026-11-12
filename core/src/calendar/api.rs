@@ -20,181 +20,181 @@ pub mod incremental;
 /// body with the response body, or with an HTTP status and message.
 #[cfg(test)]
 pub(crate) type Transport =
-    Box<dyn FnMut(&str, &str, Option<&str>) -> Result<String, (u16, String)>>;
+	Box<dyn FnMut(&str, &str, Option<&str>) -> Result<String, (u16, String)>>;
 
 #[cfg(test)]
 thread_local! {
-    static TRANSPORT: std::cell::RefCell<Option<Transport>> = const { std::cell::RefCell::new(None) };
+	static TRANSPORT: std::cell::RefCell<Option<Transport>> = const { std::cell::RefCell::new(None) };
 }
 
 /// Runs `body` with this thread's Google Calendar calls answered by
 /// `transport` instead of Google.
 #[cfg(test)]
 pub(crate) fn with_transport<T>(transport: Transport, body: impl FnOnce() -> T) -> T {
-    TRANSPORT.with(|slot| *slot.borrow_mut() = Some(transport));
-    let result = body();
-    TRANSPORT.with(|slot| *slot.borrow_mut() = None);
-    result
+	TRANSPORT.with(|slot| *slot.borrow_mut() = Some(transport));
+	let result = body();
+	TRANSPORT.with(|slot| *slot.borrow_mut() = None);
+	result
 }
 
 /// The test stand-in's answer, when one is installed on this thread.
 #[cfg(test)]
 pub(crate) fn faked(
-    method: &str,
-    url: &str,
-    body: Option<&str>,
+	method: &str,
+	url: &str,
+	body: Option<&str>,
 ) -> Option<Result<String, (u16, String)>> {
-    TRANSPORT.with(|slot| {
-        slot.borrow_mut()
-            .as_mut()
-            .map(|transport| transport(method, url, body))
-    })
+	TRANSPORT.with(|slot| {
+		slot.borrow_mut()
+			.as_mut()
+			.map(|transport| transport(method, url, body))
+	})
 }
 
 #[cfg(test)]
 fn faked_google(
-    method: &str,
-    url: &str,
-    body: Option<&str>,
+	method: &str,
+	url: &str,
+	body: Option<&str>,
 ) -> Option<Result<String, GoogleError>> {
-    faked(method, url, body).map(|answer| {
-        answer
-            .map_err(|(status, detail)| GoogleError::from_status("Google Calendar", status, detail))
-    })
+	faked(method, url, body).map(|answer| {
+		answer
+			.map_err(|(status, detail)| GoogleError::from_status("Google Calendar", status, detail))
+	})
 }
 
 const CALENDAR_LIST: &str = "https://www.googleapis.com/calendar/v3/users/me/calendarList";
 pub const EVENTS: &str = "https://www.googleapis.com/calendar/v3/calendars";
 
 pub fn agent() -> &'static ureq::Agent {
-    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
-    AGENT.get_or_init(|| {
-        ureq::AgentBuilder::new()
-            .timeout_connect(std::time::Duration::from_secs(10))
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-    })
+	static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+	AGENT.get_or_init(|| {
+		ureq::AgentBuilder::new()
+			.timeout_connect(std::time::Duration::from_secs(10))
+			.timeout(std::time::Duration::from_secs(30))
+			.build()
+	})
 }
 
 #[derive(Debug, Deserialize)]
 struct CalendarList {
-    #[serde(default)]
-    items: Vec<CalendarListEntry>,
-    #[serde(default, rename = "nextPageToken")]
-    next_page_token: Option<String>,
+	#[serde(default)]
+	items: Vec<CalendarListEntry>,
+	#[serde(default, rename = "nextPageToken")]
+	next_page_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct CalendarListEntry {
-    id: String,
-    #[serde(default)]
-    summary: String,
-    #[serde(default, rename = "backgroundColor")]
-    background_color: Option<String>,
-    #[serde(default, rename = "colorId")]
-    color_id: Option<String>,
-    #[serde(default)]
-    selected: Option<bool>,
-    #[serde(default)]
-    primary: Option<bool>,
+	id: String,
+	#[serde(default)]
+	summary: String,
+	#[serde(default, rename = "backgroundColor")]
+	background_color: Option<String>,
+	#[serde(default, rename = "colorId")]
+	color_id: Option<String>,
+	#[serde(default)]
+	selected: Option<bool>,
+	#[serde(default)]
+	primary: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
 struct EventList {
-    #[serde(default, rename = "defaultReminders")]
-    default_reminders: Vec<super::event_options::Reminder>,
-    #[serde(default)]
-    items: Vec<EventEntry>,
-    #[serde(default, rename = "nextPageToken")]
-    next_page_token: Option<String>,
-    /// On the last page of a full listing or of a list of changes: where the
-    /// next incremental sync carries on from.
-    #[serde(default, rename = "nextSyncToken")]
-    next_sync_token: Option<String>,
+	#[serde(default, rename = "defaultReminders")]
+	default_reminders: Vec<super::event_options::Reminder>,
+	#[serde(default)]
+	items: Vec<EventEntry>,
+	#[serde(default, rename = "nextPageToken")]
+	next_page_token: Option<String>,
+	/// On the last page of a full listing or of a list of changes: where the
+	/// next incremental sync carries on from.
+	#[serde(default, rename = "nextSyncToken")]
+	next_sync_token: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 struct EventEntry {
-    #[serde(flatten)]
-    options: super::event_options::EventOptions,
-    #[serde(default)]
-    id: String,
-    #[serde(default)]
-    summary: String,
-    #[serde(default)]
-    description: String,
-    #[serde(default)]
-    location: String,
-    #[serde(default, rename = "htmlLink")]
-    html_link: String,
-    #[serde(default, rename = "hangoutLink")]
-    hangout_link: String,
-    #[serde(default)]
-    start: Option<EventTime>,
-    #[serde(default)]
-    end: Option<EventTime>,
-    #[serde(default, rename = "colorId")]
-    color_id: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    organizer: Option<Person>,
-    #[serde(default)]
-    attendees: Vec<Person>,
-    #[serde(default, rename = "conferenceData")]
-    conference: Option<Conference>,
-    #[serde(default, rename = "guestsCanModify")]
-    guests_can_modify: Option<bool>,
-    #[serde(default, rename = "guestsCanInviteOthers")]
-    guests_can_invite_others: Option<bool>,
-    #[serde(default, rename = "guestsCanSeeOtherGuests")]
-    guests_can_see_other_guests: Option<bool>,
-    #[serde(default, rename = "extendedProperties")]
-    extended_properties: serde_json::Value,
-    #[serde(default)]
-    recurrence: Vec<String>,
-    #[serde(default, rename = "recurringEventId")]
-    recurring_event_id: Option<String>,
-    #[serde(default, rename = "originalStartTime")]
-    original_start_time: Option<EventTime>,
+	#[serde(flatten)]
+	options: super::event_options::EventOptions,
+	#[serde(default)]
+	id: String,
+	#[serde(default)]
+	summary: String,
+	#[serde(default)]
+	description: String,
+	#[serde(default)]
+	location: String,
+	#[serde(default, rename = "htmlLink")]
+	html_link: String,
+	#[serde(default, rename = "hangoutLink")]
+	hangout_link: String,
+	#[serde(default)]
+	start: Option<EventTime>,
+	#[serde(default)]
+	end: Option<EventTime>,
+	#[serde(default, rename = "colorId")]
+	color_id: Option<String>,
+	#[serde(default)]
+	status: Option<String>,
+	#[serde(default)]
+	organizer: Option<Person>,
+	#[serde(default)]
+	attendees: Vec<Person>,
+	#[serde(default, rename = "conferenceData")]
+	conference: Option<Conference>,
+	#[serde(default, rename = "guestsCanModify")]
+	guests_can_modify: Option<bool>,
+	#[serde(default, rename = "guestsCanInviteOthers")]
+	guests_can_invite_others: Option<bool>,
+	#[serde(default, rename = "guestsCanSeeOtherGuests")]
+	guests_can_see_other_guests: Option<bool>,
+	#[serde(default, rename = "extendedProperties")]
+	extended_properties: serde_json::Value,
+	#[serde(default)]
+	recurrence: Vec<String>,
+	#[serde(default, rename = "recurringEventId")]
+	recurring_event_id: Option<String>,
+	#[serde(default, rename = "originalStartTime")]
+	original_start_time: Option<EventTime>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 struct Person {
-    #[serde(default)]
-    email: String,
-    #[serde(default, rename = "displayName")]
-    display_name: String,
-    #[serde(default, rename = "responseStatus")]
-    response_status: String,
-    #[serde(default, rename = "self")]
-    own: bool,
-    #[serde(default)]
-    resource: bool,
-    #[serde(default)]
-    optional: bool,
+	#[serde(default)]
+	email: String,
+	#[serde(default, rename = "displayName")]
+	display_name: String,
+	#[serde(default, rename = "responseStatus")]
+	response_status: String,
+	#[serde(default, rename = "self")]
+	own: bool,
+	#[serde(default)]
+	resource: bool,
+	#[serde(default)]
+	optional: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
 struct Conference {
-    #[serde(default, rename = "entryPoints")]
-    entry_points: Vec<EntryPoint>,
+	#[serde(default, rename = "entryPoints")]
+	entry_points: Vec<EntryPoint>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 struct EntryPoint {
-    #[serde(default, rename = "entryPointType")]
-    kind: String,
-    #[serde(default)]
-    uri: String,
+	#[serde(default, rename = "entryPointType")]
+	kind: String,
+	#[serde(default)]
+	uri: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct EventTime {
-    #[serde(default, rename = "dateTime")]
-    date_time: Option<String>,
-    #[serde(default)]
-    date: Option<String>,
+	#[serde(default, rename = "dateTime")]
+	date_time: Option<String>,
+	#[serde(default)]
+	date: Option<String>,
 }
 
 /// Pulls every calendar and the events of `day` into a [`Snapshot`].
@@ -202,21 +202,21 @@ struct EventTime {
 /// The window is anchored to the boundary rather than to midnight, so a day
 /// that ends at 3am still includes the small hours of the next morning.
 pub fn fetch_day(
-    access_token: &str,
-    disabled: &[String],
-    day: NaiveDate,
-    day_end_hour: u32,
-    app_calendar: Option<&str>,
+	access_token: &str,
+	disabled: &[String],
+	day: NaiveDate,
+	day_end_hour: u32,
+	app_calendar: Option<&str>,
 ) -> Result<Snapshot, String> {
-    fetch_range(
-        access_token,
-        disabled,
-        day,
-        day,
-        day,
-        day_end_hour,
-        app_calendar,
-    )
+	fetch_range(
+		access_token,
+		disabled,
+		day,
+		day,
+		day,
+		day_end_hour,
+		app_calendar,
+	)
 }
 
 /// Every calendar, the events between `first` and `last`, and the tasks.
@@ -225,186 +225,186 @@ pub fn fetch_day(
 /// Google only for what changed since the last sync and answers from the
 /// local copy. Otherwise every call fetches the whole range again.
 pub fn fetch_range(
-    access_token: &str,
-    disabled: &[String],
-    day: NaiveDate,
-    first: NaiveDate,
-    last: NaiveDate,
-    day_end_hour: u32,
-    app_calendar: Option<&str>,
+	access_token: &str,
+	disabled: &[String],
+	day: NaiveDate,
+	first: NaiveDate,
+	last: NaiveDate,
+	day_end_hour: u32,
+	app_calendar: Option<&str>,
 ) -> Result<Snapshot, String> {
-    if incremental::enabled() {
-        return incremental::fetch_range(
-            access_token,
-            day,
-            first,
-            last,
-            day_end_hour,
-            app_calendar,
-        );
-    }
-    let fetch_started = crate::clock::now();
-    let mut calendars = fetch_calendars(access_token)?;
-    // Every event TimeSlay writes lives on one calendar. Find it by name, or
-    // create it the first time it is missing.
-    let _app_calendar = resolve_app_calendar(access_token, &mut calendars, app_calendar);
-    // Task refresh and independent calendar requests overlap. Bound concurrency
-    // so an account with many calendars does not open an unbounded worker pool.
-    let _ = disabled;
-    let (mut events, task_result) = std::thread::scope(|scope| -> Result<_, String> {
-        let tasks = scope.spawn(|| fetch_tasks(access_token, day, _app_calendar.as_deref()));
-        let mut events = Vec::new();
-        for chunk in calendars.chunks(4) {
-            let workers: Vec<_> = chunk
-                .iter()
-                .map(|calendar| {
-                    scope.spawn(move || {
-                        fetch_events(access_token, calendar, first, last, day_end_hour)
-                    })
-                })
-                .collect();
-            for worker in workers {
-                events.extend(worker.join().map_err(|_| "Calendar worker failed")??);
-            }
-        }
-        Ok((events, tasks.join().map_err(|_| "Tasks worker failed")?))
-    })?;
-    // Calendar owns every dated task; no cross-service mirror reconciliation.
-    // Retain non-recurring tasks outside this window for task lists and block planning.
-    if let Some(calendar) = calendars
-        .iter()
-        .find(|c| Some(&c.id) == _app_calendar.as_ref())
-    {
-        let mut page: Option<String> = None;
-        loop {
-            let url = format!(
-                "{EVENTS}/{}/events?privateExtendedProperty=ttKind%3Dtask&singleEvents=false&maxResults=2500{}",
-                urlencoding::encode(&calendar.id),
-                page.as_ref()
-                    .map(|p| format!("&pageToken={}", urlencoding::encode(p)))
-                    .unwrap_or_default()
-            );
-            let result: EventList = get(&url, access_token)?;
-            for mut entry in result.items {
-                if !entry.recurrence.is_empty()
-                    || entry.recurring_event_id.is_some()
-                    || entry.status.as_deref() == Some("cancelled")
-                {
-                    continue;
-                }
-                entry.options.default_reminders = result.default_reminders.clone();
-                if let Some(event) =
-                    parse_event_in_range(entry, calendar, NaiveDate::MIN, NaiveDate::MAX)
-                {
-                    if !events
-                        .iter()
-                        .any(|e| e.id == event.id && e.calendar_id == event.calendar_id)
-                    {
-                        events.push(event);
-                    }
-                }
-            }
-            page = result.next_page_token;
-            if page.is_none() {
-                break;
-            }
-        }
-    }
-    finish(
-        access_token,
-        calendars,
-        events,
-        task_result,
-        Range {
-            day,
-            first,
-            last,
-            day_end_hour,
-            fetched_at: fetch_started,
-        },
-    )
+	if incremental::enabled() {
+		return incremental::fetch_range(
+			access_token,
+			day,
+			first,
+			last,
+			day_end_hour,
+			app_calendar,
+		);
+	}
+	let fetch_started = crate::clock::now();
+	let mut calendars = fetch_calendars(access_token)?;
+	// Every event TimeSlay writes lives on one calendar. Find it by name, or
+	// create it the first time it is missing.
+	let _app_calendar = resolve_app_calendar(access_token, &mut calendars, app_calendar);
+	// Task refresh and independent calendar requests overlap. Bound concurrency
+	// so an account with many calendars does not open an unbounded worker pool.
+	let _ = disabled;
+	let (mut events, task_result) = std::thread::scope(|scope| -> Result<_, String> {
+		let tasks = scope.spawn(|| fetch_tasks(access_token, day, _app_calendar.as_deref()));
+		let mut events = Vec::new();
+		for chunk in calendars.chunks(4) {
+			let workers: Vec<_> = chunk
+				.iter()
+				.map(|calendar| {
+					scope.spawn(move || {
+						fetch_events(access_token, calendar, first, last, day_end_hour)
+					})
+				})
+				.collect();
+			for worker in workers {
+				events.extend(worker.join().map_err(|_| "Calendar worker failed")??);
+			}
+		}
+		Ok((events, tasks.join().map_err(|_| "Tasks worker failed")?))
+	})?;
+	// Calendar owns every dated task; no cross-service mirror reconciliation.
+	// Retain non-recurring tasks outside this window for task lists and block planning.
+	if let Some(calendar) = calendars
+		.iter()
+		.find(|c| Some(&c.id) == _app_calendar.as_ref())
+	{
+		let mut page: Option<String> = None;
+		loop {
+			let url = format!(
+				"{EVENTS}/{}/events?privateExtendedProperty=ttKind%3Dtask&singleEvents=false&maxResults=2500{}",
+				urlencoding::encode(&calendar.id),
+				page.as_ref()
+					.map(|p| format!("&pageToken={}", urlencoding::encode(p)))
+					.unwrap_or_default()
+			);
+			let result: EventList = get(&url, access_token)?;
+			for mut entry in result.items {
+				if !entry.recurrence.is_empty()
+					|| entry.recurring_event_id.is_some()
+					|| entry.status.as_deref() == Some("cancelled")
+				{
+					continue;
+				}
+				entry.options.default_reminders = result.default_reminders.clone();
+				if let Some(event) =
+					parse_event_in_range(entry, calendar, NaiveDate::MIN, NaiveDate::MAX)
+				{
+					if !events
+						.iter()
+						.any(|e| e.id == event.id && e.calendar_id == event.calendar_id)
+					{
+						events.push(event);
+					}
+				}
+			}
+			page = result.next_page_token;
+			if page.is_none() {
+				break;
+			}
+		}
+	}
+	finish(
+		access_token,
+		calendars,
+		events,
+		task_result,
+		Range {
+			day,
+			first,
+			last,
+			day_end_hour,
+			fetched_at: fetch_started,
+		},
+	)
 }
 
 /// The days a fetch was for, and when it began.
 struct Range {
-    day: NaiveDate,
-    first: NaiveDate,
-    last: NaiveDate,
-    day_end_hour: u32,
-    fetched_at: DateTime<Local>,
+	day: NaiveDate,
+	first: NaiveDate,
+	last: NaiveDate,
+	day_end_hour: u32,
+	fetched_at: DateTime<Local>,
 }
 
 /// What every fetch does with Google's answer, however it got it: adds the
 /// tasks, lays the local edits over the result, records what Google now
 /// holds, and sorts it into a [`Snapshot`].
 fn finish(
-    access_token: &str,
-    mut calendars: Vec<Calendar>,
-    mut events: Vec<Event>,
-    task_result: Result<FetchedTasks, GoogleError>,
-    range: Range,
+	access_token: &str,
+	mut calendars: Vec<Calendar>,
+	mut events: Vec<Event>,
+	task_result: Result<FetchedTasks, GoogleError>,
+	range: Range,
 ) -> Result<Snapshot, String> {
-    let Range {
-        day,
-        first,
-        last,
-        day_end_hour,
-        fetched_at: fetch_started,
-    } = range;
-    let tasks_loaded = task_result.is_ok();
-    let (task_calendars, task_events, notice) = match task_result {
-        Ok(tasks) => tasks,
-        Err(error) => (Vec::new(), Vec::new(), Some(tasks_notice(&error))),
-    };
-    events.extend(task_events);
-    if let Some(path) = crate::task_db::path() {
-        reconcile_task_metadata_and_overlay(&path, &mut events, fetch_started, |event, data| {
-            super::task_metadata::save(access_token, event, data)
-        })?;
-        super::operations::observe_range(&path, &events, first, last, fetch_started, day_end_hour)?;
-    }
-    super::operations::cache_tasks(&events, tasks_loaded)?;
-    // Changes made elsewhere (Google's site, another device) may have left
-    // time blocks out of step.
-    super::operations::request_reconcile();
-    calendars.extend(task_calendars);
-    events.sort_by(|left, right| left.start.cmp(&right.start).then(right.end.cmp(&left.end)));
+	let Range {
+		day,
+		first,
+		last,
+		day_end_hour,
+		fetched_at: fetch_started,
+	} = range;
+	let tasks_loaded = task_result.is_ok();
+	let (task_calendars, task_events, notice) = match task_result {
+		Ok(tasks) => tasks,
+		Err(error) => (Vec::new(), Vec::new(), Some(tasks_notice(&error))),
+	};
+	events.extend(task_events);
+	if let Some(path) = crate::task_db::path() {
+		reconcile_task_metadata_and_overlay(&path, &mut events, fetch_started, |event, data| {
+			super::task_metadata::save(access_token, event, data)
+		})?;
+		super::operations::observe_range(&path, &events, first, last, fetch_started, day_end_hour)?;
+	}
+	super::operations::cache_tasks(&events, tasks_loaded)?;
+	// Changes made elsewhere (Google's site, another device) may have left
+	// time blocks out of step.
+	super::operations::request_reconcile();
+	calendars.extend(task_calendars);
+	events.sort_by(|left, right| left.start.cmp(&right.start).then(right.end.cmp(&left.end)));
 
-    Ok(Snapshot {
-        calendars,
-        events,
-        day,
-        fetched_at: fetch_started,
-        notice,
-    })
+	Ok(Snapshot {
+		calendars,
+		events,
+		day,
+		fetched_at: fetch_started,
+		notice,
+	})
 }
 
 /// Publish changes from the remote merge while events still carry Google IDs.
 /// The overlay substitutes stable local UI IDs and pending edits; neither may
 /// be sent directly to Google by this reconciliation pass.
 fn reconcile_task_metadata_and_overlay(
-    path: &std::path::Path,
-    events: &mut Vec<Event>,
-    fetched_at: DateTime<Local>,
-    mut publish: impl FnMut(&Event, &crate::task_db::TaskData) -> Result<(), String>,
+	path: &std::path::Path,
+	events: &mut Vec<Event>,
+	fetched_at: DateTime<Local>,
+	mut publish: impl FnMut(&Event, &crate::task_db::TaskData) -> Result<(), String>,
 ) -> Result<(), String> {
-    let mut database = crate::task_db::Database::open(path)?;
-    for event in events.iter().filter(|event| event.is_task()) {
-        // A concurrent Calendar response must not publish its older membership
-        // over an edit still on its way to Google.
-        if database.pending_task_data(event)?.is_some() {
-            continue;
-        }
-        if let Some(data) = &event.details.task_data
-            && database.lookup(event)?.as_ref() != Some(data)
-        {
-            if !event.is_calendar_task() {
-                publish(event, data)?;
-            }
-            database.save(event, data)?;
-        }
-    }
-    super::operations::overlay(path, events, Some(fetched_at))
+	let mut database = crate::task_db::Database::open(path)?;
+	for event in events.iter().filter(|event| event.is_task()) {
+		// A concurrent Calendar response must not publish its older membership
+		// over an edit still on its way to Google.
+		if database.pending_task_data(event)?.is_some() {
+			continue;
+		}
+		if let Some(data) = &event.details.task_data
+			&& database.lookup(event)?.as_ref() != Some(data)
+		{
+			if !event.is_calendar_task() {
+				publish(event, data)?;
+			}
+			database.save(event, data)?;
+		}
+	}
+	super::operations::overlay(path, events, Some(fetched_at))
 }
 
 /// The id of the app's TimeSlay calendar: the remembered id while it still
@@ -412,128 +412,128 @@ fn reconcile_task_metadata_and_overlay(
 /// one. Creation is best-effort so a read-only token still syncs; the calendar
 /// is then made on the first scheduling operation instead.
 fn resolve_app_calendar(
-    access_token: &str,
-    calendars: &mut Vec<Calendar>,
-    known: Option<&str>,
+	access_token: &str,
+	calendars: &mut Vec<Calendar>,
+	known: Option<&str>,
 ) -> Option<String> {
-    if let Some(id) = known
-        && calendars.iter().any(|calendar| calendar.id == id)
-    {
-        return Some(id.to_owned());
-    }
-    if let Some(calendar) = calendars.iter().find(|calendar| {
-        !calendar.is_task_list() && CalendarSettings::is_app_calendar_name(&calendar.name)
-    }) {
-        return Some(calendar.id.clone());
-    }
-    match super::scheduled::app_calendar(access_token) {
-        Ok(id) => {
-            calendars.push(Calendar {
-                id: id.clone(),
-                name: CalendarSettings::APP_CALENDAR_NAME.to_owned(),
-                color: colors::TIME_BLOCK,
-                primary: false,
-                selected_by_google: true,
-            });
-            Some(id)
-        }
-        Err(error) => {
-            log::warn!("could not create the TimeSlay calendar: {error}");
-            None
-        }
-    }
+	if let Some(id) = known
+		&& calendars.iter().any(|calendar| calendar.id == id)
+	{
+		return Some(id.to_owned());
+	}
+	if let Some(calendar) = calendars.iter().find(|calendar| {
+		!calendar.is_task_list() && CalendarSettings::is_app_calendar_name(&calendar.name)
+	}) {
+		return Some(calendar.id.clone());
+	}
+	match super::scheduled::app_calendar(access_token) {
+		Ok(id) => {
+			calendars.push(Calendar {
+				id: id.clone(),
+				name: CalendarSettings::APP_CALENDAR_NAME.to_owned(),
+				color: colors::TIME_BLOCK,
+				primary: false,
+				selected_by_google: true,
+			});
+			Some(id)
+		}
+		Err(error) => {
+			log::warn!("could not create the TimeSlay calendar: {error}");
+			None
+		}
+	}
 }
 
 fn fetch_calendars(access_token: &str) -> Result<Vec<Calendar>, String> {
-    let mut list: CalendarList = get(CALENDAR_LIST, access_token)?;
-    while let Some(token) = list.next_page_token.take() {
-        let next: CalendarList = get(
-            &format!("{CALENDAR_LIST}?pageToken={}", urlencoding::encode(&token)),
-            access_token,
-        )?;
-        list.items.extend(next.items);
-        list.next_page_token = next.next_page_token;
-    }
+	let mut list: CalendarList = get(CALENDAR_LIST, access_token)?;
+	while let Some(token) = list.next_page_token.take() {
+		let next: CalendarList = get(
+			&format!("{CALENDAR_LIST}?pageToken={}", urlencoding::encode(&token)),
+			access_token,
+		)?;
+		list.items.extend(next.items);
+		list.next_page_token = next.next_page_token;
+	}
 
-    let mut calendars: Vec<Calendar> = list
-        .items
-        .into_iter()
-        .map(|entry| {
-            let color = entry
-                .background_color
-                .as_deref()
-                .and_then(|value| hex::parse(value).ok())
-                .or_else(|| entry.color_id.as_deref().and_then(colors::calendar))
-                .unwrap_or(colors::DEFAULT_EVENT);
+	let mut calendars: Vec<Calendar> = list
+		.items
+		.into_iter()
+		.map(|entry| {
+			let color = entry
+				.background_color
+				.as_deref()
+				.and_then(|value| hex::parse(value).ok())
+				.or_else(|| entry.color_id.as_deref().and_then(colors::calendar))
+				.unwrap_or(colors::DEFAULT_EVENT);
 
-            Calendar {
-                id: entry.id,
-                name: if entry.summary.is_empty() {
-                    "Untitled".to_owned()
-                } else {
-                    entry.summary
-                },
-                color,
-                primary: entry.primary.unwrap_or(false),
-                selected_by_google: entry.selected.unwrap_or(true),
-            }
-        })
-        .collect();
+			Calendar {
+				id: entry.id,
+				name: if entry.summary.is_empty() {
+					"Untitled".to_owned()
+				} else {
+					entry.summary
+				},
+				color,
+				primary: entry.primary.unwrap_or(false),
+				selected_by_google: entry.selected.unwrap_or(true),
+			}
+		})
+		.collect();
 
-    calendars.sort_by(|left, right| {
-        right
-            .primary
-            .cmp(&left.primary)
-            .then(left.name.cmp(&right.name))
-    });
-    Ok(calendars)
+	calendars.sort_by(|left, right| {
+		right
+			.primary
+			.cmp(&left.primary)
+			.then(left.name.cmp(&right.name))
+	});
+	Ok(calendars)
 }
 
 fn fetch_events(
-    access_token: &str,
-    calendar: &Calendar,
-    day: NaiveDate,
-    last: NaiveDate,
-    day_end_hour: u32,
+	access_token: &str,
+	calendar: &Calendar,
+	day: NaiveDate,
+	last: NaiveDate,
+	day_end_hour: u32,
 ) -> Result<Vec<Event>, String> {
-    let (time_min, _) = day_bounds(day, day_end_hour);
-    let (_, time_max) = day_bounds(last, day_end_hour);
-    let calendar_id = urlencoding::encode(&calendar.id);
-    let mut page_token: Option<String> = None;
-    let mut events = Vec::new();
+	let (time_min, _) = day_bounds(day, day_end_hour);
+	let (_, time_max) = day_bounds(last, day_end_hour);
+	let calendar_id = urlencoding::encode(&calendar.id);
+	let mut page_token: Option<String> = None;
+	let mut events = Vec::new();
 
-    loop {
-        let mut url = format!(
-            "{EVENTS}/{calendar_id}/events?singleEvents=true&orderBy=startTime&maxResults=250&timeMin={}&timeMax={}",
-            urlencoding::encode(&time_min),
-            urlencoding::encode(&time_max),
-        );
-        if let Some(token) = &page_token {
-            url.push_str("&pageToken=");
-            url.push_str(&urlencoding::encode(token));
-        }
+	loop {
+		let mut url = format!(
+			"{EVENTS}/{calendar_id}/events?singleEvents=true&orderBy=startTime&maxResults=250&timeMin={}&timeMax={}",
+			urlencoding::encode(&time_min),
+			urlencoding::encode(&time_max),
+		);
+		if let Some(token) = &page_token {
+			url.push_str("&pageToken=");
+			url.push_str(&urlencoding::encode(token));
+		}
 
-        let list: EventList = get(&url, access_token)?;
+		let list: EventList = get(&url, access_token)?;
 
-        for mut entry in list.items {
-            entry.options.default_reminders = list.default_reminders.clone();
+		for mut entry in list.items {
+			entry.options.default_reminders = list.default_reminders.clone();
 
-            if entry.status.as_deref() == Some("cancelled") {
-                continue;
-            }
+			if entry.status.as_deref() == Some("cancelled") {
+				continue;
+			}
 
-            if let Some(event) = parse_event_in_range(entry, calendar, day, last) {
-                events.push(event);
-            }
-        }
+			if let Some(event) = parse_event_in_range(entry, calendar, day, last) {
+				events.push(event);
+			}
+		}
 
-        match list.next_page_token {
-            Some(next) => page_token = Some(next),
-            None => break,
-        }
-    }
+		match list.next_page_token {
+			Some(next) => page_token = Some(next),
+			None => break,
+		}
+	}
 
-    Ok(events)
+	Ok(events)
 }
 
 /// Every occurrence of the series `series_id` on `calendar` between the
@@ -541,50 +541,50 @@ fn fetch_events(
 /// that no longer exists has no occurrences. Blocking: run it off the UI
 /// thread.
 pub fn fetch_series_instances(
-    access_token: &str,
-    calendar: &Calendar,
-    series_id: &str,
-    first: NaiveDate,
-    last: NaiveDate,
-    day_end_hour: u32,
+	access_token: &str,
+	calendar: &Calendar,
+	series_id: &str,
+	first: NaiveDate,
+	last: NaiveDate,
+	day_end_hour: u32,
 ) -> Result<Vec<Event>, GoogleError> {
-    let (time_min, _) = day_bounds(first, day_end_hour);
-    let (_, time_max) = day_bounds(last, day_end_hour);
-    let mut page_token: Option<String> = None;
-    let mut events = Vec::new();
-    loop {
-        let mut url = format!(
-            "{EVENTS}/{}/events/{}/instances?maxResults=2500&timeMin={}&timeMax={}",
-            urlencoding::encode(&calendar.id),
-            urlencoding::encode(series_id),
-            urlencoding::encode(&time_min),
-            urlencoding::encode(&time_max),
-        );
-        if let Some(token) = &page_token {
-            url.push_str("&pageToken=");
-            url.push_str(&urlencoding::encode(token));
-        }
-        let list: EventList = match get(&url, access_token) {
-            Ok(list) => list,
-            // Deleted outright: nothing of the series is left to show.
-            Err(error) if matches!(error.status, Some(404 | 410)) => return Ok(Vec::new()),
-            Err(error) => return Err(error),
-        };
-        for mut entry in list.items {
-            entry.options.default_reminders = list.default_reminders.clone();
-            if entry.status.as_deref() == Some("cancelled") {
-                continue;
-            }
-            if let Some(event) = parse_event_in_range(entry, calendar, first, last) {
-                events.push(event);
-            }
-        }
-        match list.next_page_token {
-            Some(next) => page_token = Some(next),
-            None => break,
-        }
-    }
-    Ok(events)
+	let (time_min, _) = day_bounds(first, day_end_hour);
+	let (_, time_max) = day_bounds(last, day_end_hour);
+	let mut page_token: Option<String> = None;
+	let mut events = Vec::new();
+	loop {
+		let mut url = format!(
+			"{EVENTS}/{}/events/{}/instances?maxResults=2500&timeMin={}&timeMax={}",
+			urlencoding::encode(&calendar.id),
+			urlencoding::encode(series_id),
+			urlencoding::encode(&time_min),
+			urlencoding::encode(&time_max),
+		);
+		if let Some(token) = &page_token {
+			url.push_str("&pageToken=");
+			url.push_str(&urlencoding::encode(token));
+		}
+		let list: EventList = match get(&url, access_token) {
+			Ok(list) => list,
+			// Deleted outright: nothing of the series is left to show.
+			Err(error) if matches!(error.status, Some(404 | 410)) => return Ok(Vec::new()),
+			Err(error) => return Err(error),
+		};
+		for mut entry in list.items {
+			entry.options.default_reminders = list.default_reminders.clone();
+			if entry.status.as_deref() == Some("cancelled") {
+				continue;
+			}
+			if let Some(event) = parse_event_in_range(entry, calendar, first, last) {
+				events.push(event);
+			}
+		}
+		match list.next_page_token {
+			Some(next) => page_token = Some(next),
+			None => break,
+		}
+	}
+	Ok(events)
 }
 
 pub const TASK_LISTS: &str = "https://tasks.googleapis.com/tasks/v1/users/@me/lists";
@@ -592,11 +592,11 @@ pub const TASKS: &str = "https://tasks.googleapis.com/tasks/v1/lists";
 
 #[derive(Default)]
 struct TaskCache {
-    token: String,
-    lists: std::collections::HashMap<String, CachedTasks>,
+	token: String,
+	lists: std::collections::HashMap<String, CachedTasks>,
 }
 struct CachedTasks {
-    items: std::collections::HashMap<String, TaskEntry>,
+	items: std::collections::HashMap<String, TaskEntry>,
 }
 
 static TASK_CACHE: std::sync::Mutex<Option<TaskCache>> = std::sync::Mutex::new(None);
@@ -607,105 +607,105 @@ static TASK_CACHE: std::sync::Mutex<Option<TaskCache>> = std::sync::Mutex::new(N
 /// a deletion on the list that was left, so merging incremental updates kept a
 /// ghost there and Delete asked Google for a task on the wrong list.
 fn cached_task_items(access_token: &str, list: &str) -> Result<Vec<TaskEntry>, String> {
-    let mut guard = TASK_CACHE.lock().map_err(|_| "Task cache is unavailable")?;
-    let cache = guard.get_or_insert_with(TaskCache::default);
-    if cache.token != access_token {
-        cache.token = access_token.to_owned();
-        cache.lists.clear();
-    }
-    let mut page_token: Option<String> = None;
-    let mut tasks = Vec::new();
-    loop {
-        let mut url = format!(
-            "{TASKS}/{}/tasks?showCompleted=true&showHidden=true&showDeleted=true&maxResults=100",
-            urlencoding::encode(list)
-        );
-        if let Some(token) = &page_token {
-            url.push_str("&pageToken=");
-            url.push_str(&urlencoding::encode(token));
-        }
-        let page: TaskPage = get(&url, access_token)?;
-        tasks.extend(page.items);
-        page_token = page.next_page_token;
-        if page_token.is_none() {
-            break;
-        }
-    }
-    adopt_list(&mut cache.lists, list, tasks);
-    Ok(cache
-        .lists
-        .get(list)
-        .map(|cached| cached.items.values().cloned().collect())
-        .unwrap_or_default())
+	let mut guard = TASK_CACHE.lock().map_err(|_| "Task cache is unavailable")?;
+	let cache = guard.get_or_insert_with(TaskCache::default);
+	if cache.token != access_token {
+		cache.token = access_token.to_owned();
+		cache.lists.clear();
+	}
+	let mut page_token: Option<String> = None;
+	let mut tasks = Vec::new();
+	loop {
+		let mut url = format!(
+			"{TASKS}/{}/tasks?showCompleted=true&showHidden=true&showDeleted=true&maxResults=100",
+			urlencoding::encode(list)
+		);
+		if let Some(token) = &page_token {
+			url.push_str("&pageToken=");
+			url.push_str(&urlencoding::encode(token));
+		}
+		let page: TaskPage = get(&url, access_token)?;
+		tasks.extend(page.items);
+		page_token = page.next_page_token;
+		if page_token.is_none() {
+			break;
+		}
+	}
+	adopt_list(&mut cache.lists, list, tasks);
+	Ok(cache
+		.lists
+		.get(list)
+		.map(|cached| cached.items.values().cloned().collect())
+		.unwrap_or_default())
 }
 
 /// `list` now contains exactly the live tasks in `tasks`. The same task id on
 /// any other list is a move, so it is dropped there.
 fn adopt_list(
-    lists: &mut std::collections::HashMap<String, CachedTasks>,
-    list: &str,
-    tasks: Vec<TaskEntry>,
+	lists: &mut std::collections::HashMap<String, CachedTasks>,
+	list: &str,
+	tasks: Vec<TaskEntry>,
 ) {
-    let mut items = std::collections::HashMap::new();
-    for task in tasks {
-        if task.deleted || task.id.is_empty() {
-            continue;
-        }
-        items.insert(task.id.clone(), task);
-    }
-    let ids: Vec<String> = items.keys().cloned().collect();
-    lists.insert(list.to_owned(), CachedTasks { items });
-    for (other, cached) in lists.iter_mut() {
-        if other == list {
-            continue;
-        }
-        for id in &ids {
-            cached.items.remove(id);
-        }
-    }
+	let mut items = std::collections::HashMap::new();
+	for task in tasks {
+		if task.deleted || task.id.is_empty() {
+			continue;
+		}
+		items.insert(task.id.clone(), task);
+	}
+	let ids: Vec<String> = items.keys().cloned().collect();
+	lists.insert(list.to_owned(), CachedTasks { items });
+	for (other, cached) in lists.iter_mut() {
+		if other == list {
+			continue;
+		}
+		for id in &ids {
+			cached.items.remove(id);
+		}
+	}
 }
 
 fn forget_cached_task(task_id: &str) {
-    incremental::forget_task(task_id);
-    let Ok(mut guard) = TASK_CACHE.lock() else {
-        return;
-    };
-    if let Some(cache) = guard.as_mut() {
-        for cached in cache.lists.values_mut() {
-            cached.items.remove(task_id);
-        }
-    }
+	incremental::forget_task(task_id);
+	let Ok(mut guard) = TASK_CACHE.lock() else {
+		return;
+	};
+	if let Some(cache) = guard.as_mut() {
+		for cached in cache.lists.values_mut() {
+			cached.items.remove(task_id);
+		}
+	}
 }
 
 /// A habit event as Google Calendar stores it: the master of a recurring
 /// series on the app's TimeSlay calendar.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HabitEvent {
-    pub id: String,
-    pub calendar_id: String,
-    pub title: String,
-    pub notes: String,
-    pub start: DateTime<Local>,
-    pub end: DateTime<Local>,
-    pub recurrence: Vec<String>,
-    pub color_id: Option<String>,
-    /// The habit this event counts towards.
-    pub habit_id: Option<String>,
+	pub id: String,
+	pub calendar_id: String,
+	pub title: String,
+	pub notes: String,
+	pub start: DateTime<Local>,
+	pub end: DateTime<Local>,
+	pub recurrence: Vec<String>,
+	pub color_id: Option<String>,
+	/// The habit this event counts towards.
+	pub habit_id: Option<String>,
 }
 
 /// One occurrence that was marked complete.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HabitCompletion {
-    /// The series master, or the event itself when it does not repeat.
-    pub series_id: String,
-    pub day: NaiveDate,
+	/// The series master, or the event itself when it does not repeat.
+	pub series_id: String,
+	pub day: NaiveDate,
 }
 
 /// Everything the calendar holds about habit events.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct HabitListing {
-    pub series: Vec<HabitEvent>,
-    pub completions: Vec<HabitCompletion>,
+	pub series: Vec<HabitEvent>,
+	pub completions: Vec<HabitCompletion>,
 }
 
 /// Every habit master on the app's TimeSlay calendar.
@@ -715,344 +715,344 @@ pub struct HabitListing {
 /// event rather than one expanded instance per occurrence. The Habits tab
 /// groups these series and opens them in the shared calendar editor.
 pub fn fetch_habits(access_token: &str, calendar: Option<&str>) -> Result<Vec<HabitEvent>, String> {
-    fetch_habit_listing(access_token, calendar).map(|listing| listing.series)
+	fetch_habit_listing(access_token, calendar).map(|listing| listing.series)
 }
 
 /// The same masters, along with the occurrences marked complete. Those were
 /// patched individually, so Google lists them as exceptions to their series.
 pub fn fetch_habit_listing(
-    access_token: &str,
-    calendar: Option<&str>,
+	access_token: &str,
+	calendar: Option<&str>,
 ) -> Result<HabitListing, String> {
-    let Some(calendar_id) = app_calendar_id(access_token, calendar)? else {
-        return Ok(HabitListing::default());
-    };
-    let mut page_token: Option<String> = None;
-    let mut habits = Vec::new();
-    let mut completions = Vec::new();
-    loop {
-        let mut url = format!(
-            "{EVENTS}/{}/events?singleEvents=false&maxResults=250&privateExtendedProperty=ttKind%3Dhabit",
-            urlencoding::encode(&calendar_id)
-        );
-        if let Some(token) = &page_token {
-            url.push_str("&pageToken=");
-            url.push_str(&urlencoding::encode(token));
-        }
-        let page: EventList = get(&url, access_token)?;
-        for mut entry in page.items {
-            entry.options.default_reminders = page.default_reminders.clone();
+	let Some(calendar_id) = app_calendar_id(access_token, calendar)? else {
+		return Ok(HabitListing::default());
+	};
+	let mut page_token: Option<String> = None;
+	let mut habits = Vec::new();
+	let mut completions = Vec::new();
+	loop {
+		let mut url = format!(
+			"{EVENTS}/{}/events?singleEvents=false&maxResults=250&privateExtendedProperty=ttKind%3Dhabit",
+			urlencoding::encode(&calendar_id)
+		);
+		if let Some(token) = &page_token {
+			url.push_str("&pageToken=");
+			url.push_str(&urlencoding::encode(token));
+		}
+		let page: EventList = get(&url, access_token)?;
+		for mut entry in page.items {
+			entry.options.default_reminders = page.default_reminders.clone();
 
-            if entry.status.as_deref() == Some("cancelled") {
-                continue;
-            }
-            if let Some(completion) = habit_completion(&entry) {
-                completions.push(completion);
-            }
-            if entry.recurring_event_id.is_none()
-                && let Some(habit) = parse_habit(entry, &calendar_id)
-            {
-                habits.push(habit);
-            }
-        }
-        page_token = page.next_page_token;
-        if page_token.is_none() {
-            break;
-        }
-    }
-    habits.sort_by(|left, right| {
-        left.title
-            .to_lowercase()
-            .cmp(&right.title.to_lowercase())
-            .then(left.start.cmp(&right.start))
-    });
-    Ok(HabitListing {
-        series: habits,
-        completions,
-    })
+			if entry.status.as_deref() == Some("cancelled") {
+				continue;
+			}
+			if let Some(completion) = habit_completion(&entry) {
+				completions.push(completion);
+			}
+			if entry.recurring_event_id.is_none()
+				&& let Some(habit) = parse_habit(entry, &calendar_id)
+			{
+				habits.push(habit);
+			}
+		}
+		page_token = page.next_page_token;
+		if page_token.is_none() {
+			break;
+		}
+	}
+	habits.sort_by(|left, right| {
+		left.title
+			.to_lowercase()
+			.cmp(&right.title.to_lowercase())
+			.then(left.start.cmp(&right.start))
+	});
+	Ok(HabitListing {
+		series: habits,
+		completions,
+	})
 }
 
 fn habit_completion(entry: &EventEntry) -> Option<HabitCompletion> {
-    if entry.extended_properties["private"]["ttCompleted"].as_str() != Some("true") {
-        return None;
-    }
-    let start = parse_date_time(entry.start.as_ref()?.date_time.as_deref()?)?;
-    Some(HabitCompletion {
-        series_id: entry
-            .recurring_event_id
-            .clone()
-            .unwrap_or_else(|| entry.id.clone()),
-        day: start.date_naive(),
-    })
+	if entry.extended_properties["private"]["ttCompleted"].as_str() != Some("true") {
+		return None;
+	}
+	let start = parse_date_time(entry.start.as_ref()?.date_time.as_deref()?)?;
+	Some(HabitCompletion {
+		series_id: entry
+			.recurring_event_id
+			.clone()
+			.unwrap_or_else(|| entry.id.clone()),
+		day: start.date_naive(),
+	})
 }
 
 /// Sets or clears the habit a series counts towards. Google merges private
 /// properties on a PATCH, so a null removes only this key.
 pub fn link_habit_event(
-    access_token: &str,
-    calendar_id: &str,
-    event_id: &str,
-    habit_id: Option<&str>,
+	access_token: &str,
+	calendar_id: &str,
+	event_id: &str,
+	habit_id: Option<&str>,
 ) -> Result<(), GoogleError> {
-    let url = format!(
-        "{EVENTS}/{}/events/{}",
-        urlencoding::encode(calendar_id),
-        urlencoding::encode(event_id)
-    );
-    let body = serde_json::json!({
-        "extendedProperties": { "private": { crate::habits::LINK_PROPERTY: habit_id } }
-    });
-    patch(
-        &url,
-        access_token,
-        &body.to_string(),
-        "Google Calendar habit",
-    )
+	let url = format!(
+		"{EVENTS}/{}/events/{}",
+		urlencoding::encode(calendar_id),
+		urlencoding::encode(event_id)
+	);
+	let body = serde_json::json!({
+		"extendedProperties": { "private": { crate::habits::LINK_PROPERTY: habit_id } }
+	});
+	patch(
+		&url,
+		access_token,
+		&body.to_string(),
+		"Google Calendar habit",
+	)
 }
 
 /// The TimeSlay calendar id, or `None` when the calendar does not exist yet.
 /// Merely listing habits does not create a calendar.
 fn app_calendar_id(access_token: &str, calendar: Option<&str>) -> Result<Option<String>, String> {
-    match calendar {
-        Some(id) => Ok(Some(id.to_owned())),
-        None => super::scheduled::find_app_calendar(access_token),
-    }
+	match calendar {
+		Some(id) => Ok(Some(id.to_owned())),
+		None => super::scheduled::find_app_calendar(access_token),
+	}
 }
 
 /// Creates a habit on the TimeSlay calendar, creating that calendar when this
 /// is the first one. Returns the master event Google assigned an id to.
 pub fn insert_habit(
-    access_token: &str,
-    calendar: Option<&str>,
-    body: &serde_json::Value,
+	access_token: &str,
+	calendar: Option<&str>,
+	body: &serde_json::Value,
 ) -> Result<HabitEvent, String> {
-    let calendar_id = match calendar {
-        Some(id) => id.to_owned(),
-        None => super::scheduled::app_calendar(access_token)?,
-    };
-    let url = format!("{EVENTS}/{}/events", urlencoding::encode(&calendar_id));
-    let mut body = body.clone();
-    if let Some(id) = super::operations::insert_id() {
-        body["id"] = id.into();
-    }
-    let response = match post(
-        &url,
-        access_token,
-        &body.to_string(),
-        "Google Calendar habit",
-    ) {
-        Ok(value) => value,
-        Err(error) if error.status == Some(409) && body["id"].is_string() => {
-            get::<serde_json::Value>(
-                &format!("{url}/{}", body["id"].as_str().unwrap()),
-                access_token,
-            )?
-            .to_string()
-        }
-        Err(error) => return Err(error.into()),
-    };
-    let created: EventEntry = serde_json::from_str(&response)
-        .map_err(|error| format!("Google Calendar habit response: {error}"))?;
-    // As for any new series: only its first occurrence is shown until Google
-    // is asked for the rest (see `insert_event`).
-    if !created.recurrence.is_empty() && !created.id.is_empty() {
-        super::series::note(&calendar_id, &created.id, vec![calendar_id.clone()]);
-    }
-    parse_habit(created, &calendar_id)
-        .ok_or_else(|| "Google Calendar did not return the new habit".to_owned())
+	let calendar_id = match calendar {
+		Some(id) => id.to_owned(),
+		None => super::scheduled::app_calendar(access_token)?,
+	};
+	let url = format!("{EVENTS}/{}/events", urlencoding::encode(&calendar_id));
+	let mut body = body.clone();
+	if let Some(id) = super::operations::insert_id() {
+		body["id"] = id.into();
+	}
+	let response = match post(
+		&url,
+		access_token,
+		&body.to_string(),
+		"Google Calendar habit",
+	) {
+		Ok(value) => value,
+		Err(error) if error.status == Some(409) && body["id"].is_string() => {
+			get::<serde_json::Value>(
+				&format!("{url}/{}", body["id"].as_str().unwrap()),
+				access_token,
+			)?
+			.to_string()
+		}
+		Err(error) => return Err(error.into()),
+	};
+	let created: EventEntry = serde_json::from_str(&response)
+		.map_err(|error| format!("Google Calendar habit response: {error}"))?;
+	// As for any new series: only its first occurrence is shown until Google
+	// is asked for the rest (see `insert_event`).
+	if !created.recurrence.is_empty() && !created.id.is_empty() {
+		super::series::note(&calendar_id, &created.id, vec![calendar_id.clone()]);
+	}
+	parse_habit(created, &calendar_id)
+		.ok_or_else(|| "Google Calendar did not return the new habit".to_owned())
 }
 
 /// Deletes a habit master and with it every occurrence in its series.
 pub fn delete_habit(
-    access_token: &str,
-    calendar_id: &str,
-    event_id: &str,
+	access_token: &str,
+	calendar_id: &str,
+	event_id: &str,
 ) -> Result<(), GoogleError> {
-    let url = format!(
-        "{EVENTS}/{}/events/{}",
-        urlencoding::encode(calendar_id),
-        urlencoding::encode(event_id),
-    );
-    delete(&url, access_token, "Google Calendar habit")
+	let url = format!(
+		"{EVENTS}/{}/events/{}",
+		urlencoding::encode(calendar_id),
+		urlencoding::encode(event_id),
+	);
+	delete(&url, access_token, "Google Calendar habit")
 }
 
 /// The JSON body Google Calendar expects for a habit. `recurrence` is the raw
 /// RFC 5545 array: `RRULE:`, `RDATE:` and `EXDATE:` lines.
 pub fn habit_body(
-    title: &str,
-    notes: &str,
-    start: DateTime<Local>,
-    end: DateTime<Local>,
-    recurrence: &[String],
-    _color_id: Option<&str>,
+	title: &str,
+	notes: &str,
+	start: DateTime<Local>,
+	end: DateTime<Local>,
+	recurrence: &[String],
+	_color_id: Option<&str>,
 ) -> serde_json::Value {
-    let zone = iana_time_zone::get_timezone().ok();
-    let time = |when: DateTime<Local>| {
-        let mut value = serde_json::json!({
-            "dateTime": when.with_timezone(&Local).to_rfc3339(),
-        });
-        if let Some(zone) = &zone {
-            value["timeZone"] = serde_json::Value::String(zone.clone());
-        }
-        value
-    };
-    let mut body = serde_json::json!({
-        "summary": title,
-        "description": super::event_description(notes),
-        "start": time(start),
-        "end": time(end),
-        "extendedProperties": { "private": { "ttKind": "habit" } },
-    });
-    // Always send the array, even when it is empty: a PATCH that omits it
-    // would leave an existing recurrence in place.
-    body["recurrence"] = serde_json::Value::Array(
-        recurrence
-            .iter()
-            .map(|line| serde_json::Value::String(line.clone()))
-            .collect(),
-    );
-    // Leave Google color overrides untouched when updating a habit. New
-    // habits inherit the calendar color in Google and the habit color here.
-    body
+	let zone = iana_time_zone::get_timezone().ok();
+	let time = |when: DateTime<Local>| {
+		let mut value = serde_json::json!({
+			"dateTime": when.with_timezone(&Local).to_rfc3339(),
+		});
+		if let Some(zone) = &zone {
+			value["timeZone"] = serde_json::Value::String(zone.clone());
+		}
+		value
+	};
+	let mut body = serde_json::json!({
+		"summary": title,
+		"description": super::event_description(notes),
+		"start": time(start),
+		"end": time(end),
+		"extendedProperties": { "private": { "ttKind": "habit" } },
+	});
+	// Always send the array, even when it is empty: a PATCH that omits it
+	// would leave an existing recurrence in place.
+	body["recurrence"] = serde_json::Value::Array(
+		recurrence
+			.iter()
+			.map(|line| serde_json::Value::String(line.clone()))
+			.collect(),
+	);
+	// Leave Google color overrides untouched when updating a habit. New
+	// habits inherit the calendar color in Google and the habit color here.
+	body
 }
 
 fn parse_habit(entry: EventEntry, calendar_id: &str) -> Option<HabitEvent> {
-    let start = parse_date_time(entry.start.as_ref()?.date_time.as_deref()?)?;
-    let end = parse_date_time(entry.end.as_ref()?.date_time.as_deref()?)?;
-    let notes = plain_text(&entry.description);
-    let notes = notes.as_str();
-    Some(HabitEvent {
-        id: entry.id,
-        calendar_id: calendar_id.to_owned(),
-        title: if entry.summary.is_empty() {
-            "(No title)".to_owned()
-        } else {
-            entry.summary
-        },
-        notes: notes.trim_end().to_owned(),
-        start,
-        end,
-        habit_id: entry.extended_properties["private"][crate::habits::LINK_PROPERTY]
-            .as_str()
-            .map(str::to_owned),
-        recurrence: entry.recurrence,
-        color_id: entry.color_id,
-    })
+	let start = parse_date_time(entry.start.as_ref()?.date_time.as_deref()?)?;
+	let end = parse_date_time(entry.end.as_ref()?.date_time.as_deref()?)?;
+	let notes = plain_text(&entry.description);
+	let notes = notes.as_str();
+	Some(HabitEvent {
+		id: entry.id,
+		calendar_id: calendar_id.to_owned(),
+		title: if entry.summary.is_empty() {
+			"(No title)".to_owned()
+		} else {
+			entry.summary
+		},
+		notes: notes.trim_end().to_owned(),
+		start,
+		end,
+		habit_id: entry.extended_properties["private"][crate::habits::LINK_PROPERTY]
+			.as_str()
+			.map(str::to_owned),
+		recurrence: entry.recurrence,
+		color_id: entry.color_id,
+	})
 }
 
 #[derive(Debug, Deserialize)]
 struct TaskLists {
-    #[serde(default)]
-    items: Vec<TaskListEntry>,
-    #[serde(default, rename = "nextPageToken")]
-    next_page_token: Option<String>,
+	#[serde(default)]
+	items: Vec<TaskListEntry>,
+	#[serde(default, rename = "nextPageToken")]
+	next_page_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct TaskListEntry {
-    id: String,
-    #[serde(default)]
-    title: String,
+	id: String,
+	#[serde(default)]
+	title: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct TaskPage {
-    #[serde(default)]
-    items: Vec<TaskEntry>,
-    #[serde(default, rename = "nextPageToken")]
-    next_page_token: Option<String>,
+	#[serde(default)]
+	items: Vec<TaskEntry>,
+	#[serde(default, rename = "nextPageToken")]
+	next_page_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
 struct TaskEntry {
-    #[serde(default)]
-    updated: Option<DateTime<Utc>>,
-    #[serde(default)]
-    deleted: bool,
-    #[serde(default)]
-    id: String,
-    #[serde(default)]
-    title: String,
-    #[serde(default)]
-    notes: String,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    due: Option<String>,
-    #[serde(default, rename = "webViewLink")]
-    web_view_link: String,
+	#[serde(default)]
+	updated: Option<DateTime<Utc>>,
+	#[serde(default)]
+	deleted: bool,
+	#[serde(default)]
+	id: String,
+	#[serde(default)]
+	title: String,
+	#[serde(default)]
+	notes: String,
+	#[serde(default)]
+	status: Option<String>,
+	#[serde(default)]
+	due: Option<String>,
+	#[serde(default, rename = "webViewLink")]
+	web_view_link: String,
 }
 
 /// A task as the habits migration sees it, without the refresh cache.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskListItem {
-    pub id: String,
-    pub title: String,
-    pub notes: String,
-    pub completed: bool,
-    pub due: Option<NaiveDate>,
+	pub id: String,
+	pub title: String,
+	pub notes: String,
+	pub completed: bool,
+	pub due: Option<NaiveDate>,
 }
 
 /// The name and ID of every Google Tasks list.
 pub fn fetch_task_lists(access_token: &str) -> Result<Vec<(String, String)>, GoogleError> {
-    let mut url = format!("{TASK_LISTS}?maxResults=100");
-    let mut lists = Vec::new();
-    loop {
-        let page: TaskLists = get(&url, access_token)?;
-        lists.extend(page.items.into_iter().map(|list| {
-            let name = if list.title.is_empty() {
-                "Tasks".to_owned()
-            } else {
-                list.title
-            };
-            (name, list.id)
-        }));
-        let Some(token) = page.next_page_token else {
-            break;
-        };
-        url = format!(
-            "{TASK_LISTS}?maxResults=100&pageToken={}",
-            urlencoding::encode(&token)
-        );
-    }
-    Ok(lists)
+	let mut url = format!("{TASK_LISTS}?maxResults=100");
+	let mut lists = Vec::new();
+	loop {
+		let page: TaskLists = get(&url, access_token)?;
+		lists.extend(page.items.into_iter().map(|list| {
+			let name = if list.title.is_empty() {
+				"Tasks".to_owned()
+			} else {
+				list.title
+			};
+			(name, list.id)
+		}));
+		let Some(token) = page.next_page_token else {
+			break;
+		};
+		url = format!(
+			"{TASK_LISTS}?maxResults=100&pageToken={}",
+			urlencoding::encode(&token)
+		);
+	}
+	Ok(lists)
 }
 
 /// Every task in `list_id`, including completed and hidden ones. Deleted
 /// tombstones are left out because there is nothing to migrate or remove.
 pub fn fetch_task_list(
-    access_token: &str,
-    list_id: &str,
+	access_token: &str,
+	list_id: &str,
 ) -> Result<Vec<TaskListItem>, GoogleError> {
-    let mut url = format!(
-        "{TASKS}/{}/tasks?showCompleted=true&showHidden=true&maxResults=100",
-        urlencoding::encode(list_id)
-    );
-    let mut items = Vec::new();
-    loop {
-        let page: TaskPage = get(&url, access_token)?;
-        items.extend(
-            page.items
-                .into_iter()
-                .filter(|task| !task.deleted && !task.id.is_empty())
-                .map(|task| TaskListItem {
-                    id: task.id,
-                    title: task.title,
-                    notes: task.notes,
-                    completed: task.status.as_deref() == Some("completed"),
-                    due: task.due.as_deref().and_then(task_due_date),
-                }),
-        );
-        let Some(token) = page.next_page_token else {
-            break;
-        };
-        url = format!(
-            "{TASKS}/{}/tasks?showCompleted=true&showHidden=true&maxResults=100&pageToken={}",
-            urlencoding::encode(list_id),
-            urlencoding::encode(&token)
-        );
-    }
-    Ok(items)
+	let mut url = format!(
+		"{TASKS}/{}/tasks?showCompleted=true&showHidden=true&maxResults=100",
+		urlencoding::encode(list_id)
+	);
+	let mut items = Vec::new();
+	loop {
+		let page: TaskPage = get(&url, access_token)?;
+		items.extend(
+			page.items
+				.into_iter()
+				.filter(|task| !task.deleted && !task.id.is_empty())
+				.map(|task| TaskListItem {
+					id: task.id,
+					title: task.title,
+					notes: task.notes,
+					completed: task.status.as_deref() == Some("completed"),
+					due: task.due.as_deref().and_then(task_due_date),
+				}),
+		);
+		let Some(token) = page.next_page_token else {
+			break;
+		};
+		url = format!(
+			"{TASKS}/{}/tasks?showCompleted=true&showHidden=true&maxResults=100&pageToken={}",
+			urlencoding::encode(list_id),
+			urlencoding::encode(&token)
+		);
+	}
+	Ok(items)
 }
 
 /// Task lists become calendars you can toggle, and each task due on `day`
@@ -1062,142 +1062,142 @@ pub fn fetch_task_list(
 type FetchedTasks = (Vec<Calendar>, Vec<Event>, Option<String>);
 
 fn fetch_tasks(
-    access_token: &str,
-    day: NaiveDate,
-    app_calendar: Option<&str>,
+	access_token: &str,
+	day: NaiveDate,
+	app_calendar: Option<&str>,
 ) -> Result<FetchedTasks, GoogleError> {
-    let mut lists: TaskLists = get(&format!("{TASK_LISTS}?maxResults=100"), access_token)?;
-    while let Some(token) = lists.next_page_token.take() {
-        let next: TaskLists = get(
-            &format!(
-                "{TASK_LISTS}?maxResults=100&pageToken={}",
-                urlencoding::encode(&token)
-            ),
-            access_token,
-        )?;
-        lists.items.extend(next.items);
-        lists.next_page_token = next.next_page_token;
-    }
-    let color = colors::TASK;
-    let mut calendars = Vec::new();
-    let mut events = Vec::new();
+	let mut lists: TaskLists = get(&format!("{TASK_LISTS}?maxResults=100"), access_token)?;
+	while let Some(token) = lists.next_page_token.take() {
+		let next: TaskLists = get(
+			&format!(
+				"{TASK_LISTS}?maxResults=100&pageToken={}",
+				urlencoding::encode(&token)
+			),
+			access_token,
+		)?;
+		lists.items.extend(next.items);
+		lists.next_page_token = next.next_page_token;
+	}
+	let color = colors::TASK;
+	let mut calendars = Vec::new();
+	let mut events = Vec::new();
 
-    for list in lists.items {
-        let name = if list.title.is_empty() {
-            "Tasks".to_owned()
-        } else {
-            list.title
-        };
-        let id = format!("tasks:{}", list.id);
-        calendars.push(Calendar {
-            id: id.clone(),
-            name,
-            color,
-            primary: false,
-            selected_by_google: true,
-        });
+	for list in lists.items {
+		let name = if list.title.is_empty() {
+			"Tasks".to_owned()
+		} else {
+			list.title
+		};
+		let id = format!("tasks:{}", list.id);
+		calendars.push(Calendar {
+			id: id.clone(),
+			name,
+			color,
+			primary: false,
+			selected_by_google: true,
+		});
 
-        events.extend(fetch_task_items(
-            access_token,
-            &list.id,
-            &id,
-            color,
-            day,
-            app_calendar,
-        )?);
-    }
+		events.extend(fetch_task_items(
+			access_token,
+			&list.id,
+			&id,
+			color,
+			day,
+			app_calendar,
+		)?);
+	}
 
-    Ok((calendars, events, None))
+	Ok((calendars, events, None))
 }
 
 fn fetch_task_items(
-    access_token: &str,
-    list_id: &str,
-    calendar_id: &str,
-    color: Color,
-    _day: NaiveDate,
-    app_calendar: Option<&str>,
+	access_token: &str,
+	list_id: &str,
+	calendar_id: &str,
+	color: Color,
+	_day: NaiveDate,
+	app_calendar: Option<&str>,
 ) -> Result<Vec<Event>, GoogleError> {
-    let tasks = cached_task_items(access_token, list_id)?;
-    task_events(access_token, tasks, calendar_id, color, app_calendar)
+	let tasks = cached_task_items(access_token, list_id)?;
+	task_events(access_token, tasks, calendar_id, color, app_calendar)
 }
 
 /// The chips for the tasks of one list, with their local metadata. A task
 /// with a due date is moved onto the calendar.
 fn task_events(
-    access_token: &str,
-    tasks: Vec<TaskEntry>,
-    calendar_id: &str,
-    color: Color,
-    app_calendar: Option<&str>,
+	access_token: &str,
+	tasks: Vec<TaskEntry>,
+	calendar_id: &str,
+	color: Color,
+	app_calendar: Option<&str>,
 ) -> Result<Vec<Event>, GoogleError> {
-    let mut database = crate::task_db::open()?;
-    let mut events = Vec::new();
-    for task in tasks {
-        let due = task
-            .due
-            .as_deref()
-            .and_then(task_due_date)
-            .unwrap_or(crate::timeblocking::UNDATED);
-        if let Some(mut event) = parse_task(task, calendar_id, color, due) {
-            let data = super::task_metadata::load(&mut database, &event, |data| {
-                super::task_metadata::save(access_token, &event, data)
-            })?;
-            event.details.description =
-                super::task_metadata::prose(&event.details.description).to_owned();
-            event.details.task_data = Some(data);
-            if due != crate::timeblocking::UNDATED {
-                event = crate::task_edit::save(
-                    event,
-                    &CalendarSettings {
-                        app_calendar: app_calendar.map(str::to_owned),
-                        ..Default::default()
-                    },
-                    crate::task_edit::Change::Day(due),
-                    0,
-                    crate::task_edit::google_access,
-                )?;
-            }
-            events.push(event);
-        }
-    }
+	let mut database = crate::task_db::open()?;
+	let mut events = Vec::new();
+	for task in tasks {
+		let due = task
+			.due
+			.as_deref()
+			.and_then(task_due_date)
+			.unwrap_or(crate::timeblocking::UNDATED);
+		if let Some(mut event) = parse_task(task, calendar_id, color, due) {
+			let data = super::task_metadata::load(&mut database, &event, |data| {
+				super::task_metadata::save(access_token, &event, data)
+			})?;
+			event.details.description =
+				super::task_metadata::prose(&event.details.description).to_owned();
+			event.details.task_data = Some(data);
+			if due != crate::timeblocking::UNDATED {
+				event = crate::task_edit::save(
+					event,
+					&CalendarSettings {
+						app_calendar: app_calendar.map(str::to_owned),
+						..Default::default()
+					},
+					crate::task_edit::Change::Day(due),
+					0,
+					crate::task_edit::google_access,
+				)?;
+			}
+			events.push(event);
+		}
+	}
 
-    Ok(events)
+	Ok(events)
 }
 
 fn parse_task(task: TaskEntry, calendar_id: &str, color: Color, day: NaiveDate) -> Option<Event> {
-    let due = task
-        .due
-        .as_deref()
-        .and_then(task_due_date)
-        .unwrap_or(crate::timeblocking::UNDATED);
-    if task.deleted || task.id.is_empty() || due != day {
-        return None;
-    }
+	let due = task
+		.due
+		.as_deref()
+		.and_then(task_due_date)
+		.unwrap_or(crate::timeblocking::UNDATED);
+	if task.deleted || task.id.is_empty() || due != day {
+		return None;
+	}
 
-    let completed = task.status.as_deref() == Some("completed");
-    let link = task_link(&task);
-    let title = if task.title.is_empty() {
-        "(No title)".to_owned()
-    } else {
-        task.title
-    };
-    Some(Event {
-        id: format!("task:{}", task.id),
-        calendar_id: calendar_id.to_owned(),
-        title,
-        start: date_at(day, 0, 0),
-        end: date_at(day.succ_opt().unwrap_or(day), 0, 0),
-        all_day: true,
-        color,
-        completed,
-        details: crate::calendar::Details {
-            task_updated_at: task.updated,
-            description: task.notes,
-            link,
-            ..crate::calendar::Details::default()
-        },
-    })
+	let completed = task.status.as_deref() == Some("completed");
+	let link = task_link(&task);
+	let title = if task.title.is_empty() {
+		"(No title)".to_owned()
+	} else {
+		task.title
+	};
+	Some(Event {
+		id: format!("task:{}", task.id),
+		calendar_id: calendar_id.to_owned(),
+		title,
+		start: date_at(day, 0, 0),
+		end: date_at(day.succ_opt().unwrap_or(day), 0, 0),
+		all_day: true,
+		color,
+		completed,
+		details: crate::calendar::Details {
+			task_updated_at: task.updated,
+			description: task.notes,
+			link,
+			..crate::calendar::Details::default()
+		},
+	})
 }
 
 /// Flips a task between complete and not in Google Tasks.
@@ -1205,23 +1205,23 @@ fn parse_task(task: TaskEntry, calendar_id: &str, color: Color, day: NaiveDate) 
 /// Requires the read/write tasks scope. Blocking: call it from
 /// the app's `blocking::run`.
 pub fn set_task_completed(
-    access_token: &str,
-    list_id: &str,
-    task_id: &str,
-    completed: bool,
+	access_token: &str,
+	list_id: &str,
+	task_id: &str,
+	completed: bool,
 ) -> Result<(), GoogleError> {
-    let url = format!(
-        "{TASKS}/{}/tasks/{}",
-        urlencoding::encode(list_id),
-        urlencoding::encode(task_id),
-    );
-    let body = if completed {
-        r#"{"status":"completed"}"#
-    } else {
-        r#"{"status":"needsAction"}"#
-    };
+	let url = format!(
+		"{TASKS}/{}/tasks/{}",
+		urlencoding::encode(list_id),
+		urlencoding::encode(task_id),
+	);
+	let body = if completed {
+		r#"{"status":"completed"}"#
+	} else {
+		r#"{"status":"needsAction"}"#
+	};
 
-    patch(&url, access_token, body, "Google Tasks")
+	patch(&url, access_token, body, "Google Tasks")
 }
 
 /// Deletes one Google Task.
@@ -1230,186 +1230,186 @@ pub fn set_task_completed(
 /// no longer on that list, and Google answers "Task not found"; the other
 /// lists are checked before the chip is treated as already gone.
 pub fn delete_task(access_token: &str, list_id: &str, task_id: &str) -> Result<(), GoogleError> {
-    if task_id.is_empty() {
-        return Err("Invalid task".to_owned().into());
-    }
-    let lists = task_list_ids(access_token)?;
-    let Some(list) = live_list(list_id, &lists, |list| {
-        task_presence(access_token, list, task_id)
-    })?
-    else {
-        forget_cached_task(task_id);
-        return Ok(());
-    };
-    delete(&task_item_url(list, task_id), access_token, "Google Tasks")?;
-    forget_cached_task(task_id);
-    Ok(())
+	if task_id.is_empty() {
+		return Err("Invalid task".to_owned().into());
+	}
+	let lists = task_list_ids(access_token)?;
+	let Some(list) = live_list(list_id, &lists, |list| {
+		task_presence(access_token, list, task_id)
+	})?
+	else {
+		forget_cached_task(task_id);
+		return Ok(());
+	};
+	delete(&task_item_url(list, task_id), access_token, "Google Tasks")?;
+	forget_cached_task(task_id);
+	Ok(())
 }
 
 fn task_item_url(list_id: &str, task_id: &str) -> String {
-    format!(
-        "{TASKS}/{}/tasks/{}",
-        urlencoding::encode(list_id),
-        urlencoding::encode(task_id)
-    )
+	format!(
+		"{TASKS}/{}/tasks/{}",
+		urlencoding::encode(list_id),
+		urlencoding::encode(task_id)
+	)
 }
 
 fn task_list_ids(access_token: &str) -> Result<Vec<String>, GoogleError> {
-    let mut url = format!("{TASK_LISTS}?maxResults=100");
-    let mut ids = Vec::new();
-    loop {
-        let page: TaskLists = get(&url, access_token)?;
-        ids.extend(page.items.into_iter().map(|list| list.id));
-        let Some(token) = page.next_page_token else {
-            break;
-        };
-        url = format!(
-            "{TASK_LISTS}?maxResults=100&pageToken={}",
-            urlencoding::encode(&token)
-        );
-    }
-    Ok(ids)
+	let mut url = format!("{TASK_LISTS}?maxResults=100");
+	let mut ids = Vec::new();
+	loop {
+		let page: TaskLists = get(&url, access_token)?;
+		ids.extend(page.items.into_iter().map(|list| list.id));
+		let Some(token) = page.next_page_token else {
+			break;
+		};
+		url = format!(
+			"{TASK_LISTS}?maxResults=100&pageToken={}",
+			urlencoding::encode(&token)
+		);
+	}
+	Ok(ids)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TaskPresence {
-    Live,
-    Gone,
+	Live,
+	Gone,
 }
 
 /// The list a delete should use. `preferred` wins when the task is still
 /// there; otherwise the first other list that still has it. `None` means the
 /// task is already gone from every list.
 fn live_list<'a>(
-    preferred: &'a str,
-    lists: &'a [String],
-    mut presence: impl FnMut(&str) -> Result<TaskPresence, GoogleError>,
+	preferred: &'a str,
+	lists: &'a [String],
+	mut presence: impl FnMut(&str) -> Result<TaskPresence, GoogleError>,
 ) -> Result<Option<&'a str>, GoogleError> {
-    // Cached or locally created tasks can still name a placeholder or a
-    // deleted list. Only query IDs belonging to the connected account.
-    if lists.iter().any(|list| list == preferred) && presence(preferred)? == TaskPresence::Live {
-        return Ok(Some(preferred));
-    }
-    for list in lists {
-        if list == preferred {
-            continue;
-        }
-        if presence(list)? == TaskPresence::Live {
-            return Ok(Some(list.as_str()));
-        }
-    }
-    Ok(None)
+	// Cached or locally created tasks can still name a placeholder or a
+	// deleted list. Only query IDs belonging to the connected account.
+	if lists.iter().any(|list| list == preferred) && presence(preferred)? == TaskPresence::Live {
+		return Ok(Some(preferred));
+	}
+	for list in lists {
+		if list == preferred {
+			continue;
+		}
+		if presence(list)? == TaskPresence::Live {
+			return Ok(Some(list.as_str()));
+		}
+	}
+	Ok(None)
 }
 
 fn task_presence(
-    access_token: &str,
-    list_id: &str,
-    task_id: &str,
+	access_token: &str,
+	list_id: &str,
+	task_id: &str,
 ) -> Result<TaskPresence, GoogleError> {
-    match lookup_task(access_token, list_id, task_id)? {
-        Some(task) if !task.deleted => Ok(TaskPresence::Live),
-        _ => Ok(TaskPresence::Gone),
-    }
+	match lookup_task(access_token, list_id, task_id)? {
+		Some(task) if !task.deleted => Ok(TaskPresence::Live),
+		_ => Ok(TaskPresence::Gone),
+	}
 }
 
 fn lookup_task(
-    access_token: &str,
-    list_id: &str,
-    task_id: &str,
+	access_token: &str,
+	list_id: &str,
+	task_id: &str,
 ) -> Result<Option<TaskEntry>, GoogleError> {
-    let result = agent()
-        .get(&task_item_url(list_id, task_id))
-        .set("Authorization", &format!("Bearer {access_token}"))
-        .set("Accept", "application/json")
-        .call();
-    match google::send("Google Tasks", result) {
-        Ok(response) => response
-            .into_json()
-            .map(Some)
-            .map_err(|error| GoogleError::transport("Google Tasks response", error)),
-        Err(error) if error.status == Some(404) => Ok(None),
-        Err(error) => Err(error),
-    }
+	let result = agent()
+		.get(&task_item_url(list_id, task_id))
+		.set("Authorization", &format!("Bearer {access_token}"))
+		.set("Accept", "application/json")
+		.call();
+	match google::send("Google Tasks", result) {
+		Ok(response) => response
+			.into_json()
+			.map(Some)
+			.map_err(|error| GoogleError::transport("Google Tasks response", error)),
+		Err(error) if error.status == Some(404) => Ok(None),
+		Err(error) => Err(error),
+	}
 }
 
 /// A task Google has just created. The id is what later writes use.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreatedTask {
-    pub updated_at: Option<DateTime<Utc>>,
-    pub id: String,
-    pub title: String,
-    pub link: String,
+	pub updated_at: Option<DateTime<Utc>>,
+	pub id: String,
+	pub title: String,
+	pub link: String,
 }
 
 /// Creates a task with `title` on `list_id` and returns the identity Google assigned.
 ///
 /// Blocking: call it from the app's `blocking::run`.
 pub fn insert_task(access_token: &str, list_id: &str, title: &str) -> Result<CreatedTask, String> {
-    insert_task_with(
-        access_token,
-        list_id,
-        &NewTask {
-            title,
-            notes: "",
-            due: None,
-        },
-    )
+	insert_task_with(
+		access_token,
+		list_id,
+		&NewTask {
+			title,
+			notes: "",
+			due: None,
+		},
+	)
 }
 
 /// Everything a task can be created with.
 pub struct NewTask<'a> {
-    pub title: &'a str,
-    /// Empty leaves the task without notes.
-    pub notes: &'a str,
-    /// The day it is planned for, which is what makes it leave the inbox.
-    pub due: Option<NaiveDate>,
+	pub title: &'a str,
+	/// Empty leaves the task without notes.
+	pub notes: &'a str,
+	/// The day it is planned for, which is what makes it leave the inbox.
+	pub due: Option<NaiveDate>,
 }
 
 impl NewTask<'_> {
-    fn body(&self) -> serde_json::Value {
-        let mut body = serde_json::json!({ "title": self.title });
-        if !self.notes.is_empty() {
-            body["notes"] = self.notes.into();
-        }
-        if let Some(day) = self.due {
-            // Tasks stores a day as midnight UTC, whatever the time zone.
-            body["due"] = format!("{day}T00:00:00.000Z").into();
-        }
-        body
-    }
+	fn body(&self) -> serde_json::Value {
+		let mut body = serde_json::json!({ "title": self.title });
+		if !self.notes.is_empty() {
+			body["notes"] = self.notes.into();
+		}
+		if let Some(day) = self.due {
+			// Tasks stores a day as midnight UTC, whatever the time zone.
+			body["due"] = format!("{day}T00:00:00.000Z").into();
+		}
+		body
+	}
 }
 
 /// Creates a task on `list_id` and returns the identity Google assigned.
 ///
 /// Blocking: call it from the app's `blocking::run`.
 pub fn insert_task_with(
-    access_token: &str,
-    list_id: &str,
-    task: &NewTask<'_>,
+	access_token: &str,
+	list_id: &str,
+	task: &NewTask<'_>,
 ) -> Result<CreatedTask, String> {
-    let url = format!("{TASKS}/{}/tasks", urlencoding::encode(list_id));
-    let response = post(&url, access_token, &task.body().to_string(), "Google Tasks")?;
-    created_task(&response, task.title)
+	let url = format!("{TASKS}/{}/tasks", urlencoding::encode(list_id));
+	let response = post(&url, access_token, &task.body().to_string(), "Google Tasks")?;
+	created_task(&response, task.title)
 }
 
 fn created_task(response: &str, title: &str) -> Result<CreatedTask, String> {
-    let created: TaskEntry = serde_json::from_str(response)
-        .map_err(|error| format!("Google Tasks response: {error}"))?;
-    if created.id.is_empty() {
-        return Err("Google Tasks did not return the new task".to_owned());
-    }
-    let link = task_link(&created);
-    let title = if created.title.is_empty() {
-        title.to_owned()
-    } else {
-        created.title
-    };
-    Ok(CreatedTask {
-        updated_at: created.updated,
-        id: created.id,
-        title,
-        link,
-    })
+	let created: TaskEntry = serde_json::from_str(response)
+		.map_err(|error| format!("Google Tasks response: {error}"))?;
+	if created.id.is_empty() {
+		return Err("Google Tasks did not return the new task".to_owned());
+	}
+	let link = task_link(&created);
+	let title = if created.title.is_empty() {
+		title.to_owned()
+	} else {
+		created.title
+	};
+	Ok(CreatedTask {
+		updated_at: created.updated,
+		id: created.id,
+		title,
+		link,
+	})
 }
 
 /// Moves an event's start and end on Google's side.
@@ -1420,153 +1420,153 @@ fn created_task(response: &str, title: &str) -> Result<CreatedTask, String> {
 /// the app's `blocking::run`.
 /// Patch only this occurrence; preserve all existing extended properties.
 pub fn patch_habit_completed(access_token: &str, event: &Event) -> Result<(), GoogleError> {
-    let url = format!(
-        "{EVENTS}/{}/events/{}",
-        urlencoding::encode(&event.calendar_id),
-        urlencoding::encode(&event.id)
-    );
-    let current: serde_json::Value = get(&url, access_token)?;
-    let mut properties = current["extendedProperties"].clone();
-    if !properties.is_object() {
-        properties = serde_json::json!({});
-    }
-    if !properties["private"].is_object() {
-        properties["private"] = serde_json::json!({});
-    }
-    properties["private"]["ttCompleted"] = event.completed.to_string().into();
-    properties["private"]["ttCompletedAt"] = event
-        .details
-        .habit_completed_at
-        .map(|when| serde_json::Value::String(when.to_rfc3339()))
-        .unwrap_or(serde_json::Value::Null);
-    patch(
-        &url,
-        access_token,
-        &serde_json::json!({"extendedProperties": properties}).to_string(),
-        "Google Calendar",
-    )
+	let url = format!(
+		"{EVENTS}/{}/events/{}",
+		urlencoding::encode(&event.calendar_id),
+		urlencoding::encode(&event.id)
+	);
+	let current: serde_json::Value = get(&url, access_token)?;
+	let mut properties = current["extendedProperties"].clone();
+	if !properties.is_object() {
+		properties = serde_json::json!({});
+	}
+	if !properties["private"].is_object() {
+		properties["private"] = serde_json::json!({});
+	}
+	properties["private"]["ttCompleted"] = event.completed.to_string().into();
+	properties["private"]["ttCompletedAt"] = event
+		.details
+		.habit_completed_at
+		.map(|when| serde_json::Value::String(when.to_rfc3339()))
+		.unwrap_or(serde_json::Value::Null);
+	patch(
+		&url,
+		access_token,
+		&serde_json::json!({"extendedProperties": properties}).to_string(),
+		"Google Calendar",
+	)
 }
 
 pub fn patch_event_time(
-    access_token: &str,
-    calendar_id: &str,
-    event_id: &str,
-    start: DateTime<Local>,
-    end: DateTime<Local>,
-    notify: bool,
+	access_token: &str,
+	calendar_id: &str,
+	event_id: &str,
+	start: DateTime<Local>,
+	end: DateTime<Local>,
+	notify: bool,
 ) -> Result<(), GoogleError> {
-    let url = format!(
-        "{EVENTS}/{}/events/{}?sendUpdates={}",
-        urlencoding::encode(calendar_id),
-        urlencoding::encode(event_id),
-        if notify { "all" } else { "none" },
-    );
-    let body = serde_json::json!({
+	let url = format!(
+		"{EVENTS}/{}/events/{}?sendUpdates={}",
+		urlencoding::encode(calendar_id),
+		urlencoding::encode(event_id),
+		if notify { "all" } else { "none" },
+	);
+	let body = serde_json::json!({
         "start": { "dateTime": start.with_timezone(&Utc).to_rfc3339(), "timeZone": iana_time_zone::get_timezone().map_err(|e|e.to_string())? },
         "end": { "dateTime": end.with_timezone(&Utc).to_rfc3339(), "timeZone": iana_time_zone::get_timezone().map_err(|e|e.to_string())? },
     })
     .to_string();
 
-    patch(&url, access_token, &body, "Google Calendar")
+	patch(&url, access_token, &body, "Google Calendar")
 }
 
 /// Sets an event's location on Google and nothing else. An empty location
 /// clears it. Blocking: call it from the app's `blocking::run`.
 pub fn patch_event_location(
-    access_token: &str,
-    calendar_id: &str,
-    event_id: &str,
-    location: &str,
+	access_token: &str,
+	calendar_id: &str,
+	event_id: &str,
+	location: &str,
 ) -> Result<(), GoogleError> {
-    let url = format!(
-        "{EVENTS}/{}/events/{}",
-        urlencoding::encode(calendar_id),
-        urlencoding::encode(event_id),
-    );
-    let body = serde_json::json!({ "location": location }).to_string();
+	let url = format!(
+		"{EVENTS}/{}/events/{}",
+		urlencoding::encode(calendar_id),
+		urlencoding::encode(event_id),
+	);
+	let body = serde_json::json!({ "location": location }).to_string();
 
-    patch(&url, access_token, &body, "Google Calendar")
+	patch(&url, access_token, &body, "Google Calendar")
 }
 
 /// Load an event for the editor, retaining its calendar's default reminders.
 /// Blocking: call it from the app's `blocking::run`.
 pub fn fetch_event(access_token: &str, original: &Event, id: &str) -> Result<Event, String> {
-    let url = format!(
-        "{EVENTS}/{}/events/{}",
-        urlencoding::encode(&original.calendar_id),
-        urlencoding::encode(id)
-    );
-    let entry: EventEntry = get(&url, access_token)?;
-    editor_event(entry, original)
+	let url = format!(
+		"{EVENTS}/{}/events/{}",
+		urlencoding::encode(&original.calendar_id),
+		urlencoding::encode(id)
+	);
+	let entry: EventEntry = get(&url, access_token)?;
+	editor_event(entry, original)
 }
 
 /// Resolve a master opened from Habits to an instance so saving "current"
 /// cannot accidentally patch every occurrence in the series.
 pub fn fetch_first_occurrence(access_token: &str, master: &Event) -> Result<Event, String> {
-    let url = format!(
-        "{EVENTS}/{}/events/{}/instances?maxResults=1",
-        urlencoding::encode(&master.calendar_id),
-        urlencoding::encode(&master.id),
-    );
-    let page: EventList = get(&url, access_token)?;
-    let entry = page
-        .items
-        .into_iter()
-        .next()
-        .ok_or("This habit has no occurrences to edit")?;
-    editor_event(entry, master)
+	let url = format!(
+		"{EVENTS}/{}/events/{}/instances?maxResults=1",
+		urlencoding::encode(&master.calendar_id),
+		urlencoding::encode(&master.id),
+	);
+	let page: EventList = get(&url, access_token)?;
+	let entry = page
+		.items
+		.into_iter()
+		.next()
+		.ok_or("This habit has no occurrences to edit")?;
+	editor_event(entry, master)
 }
 
 fn editor_event(mut entry: EventEntry, original: &Event) -> Result<Event, String> {
-    entry.options.default_reminders = original.details.options.default_reminders.clone();
-    let calendar = Calendar {
-        id: original.calendar_id.clone(),
-        name: String::new(),
-        color: original.color,
-        primary: false,
-        selected_by_google: true,
-    };
-    parse_event(entry, &calendar, original.start.date_naive())
-        .ok_or_else(|| "Could not read habit series".into())
+	entry.options.default_reminders = original.details.options.default_reminders.clone();
+	let calendar = Calendar {
+		id: original.calendar_id.clone(),
+		name: String::new(),
+		color: original.color,
+		primary: false,
+		selected_by_google: true,
+	};
+	parse_event(entry, &calendar, original.start.date_naive())
+		.ok_or_else(|| "Could not read habit series".into())
 }
 
 /// Answers an invitation. Only the user's own entry is sent, which is what
 /// `attendeesOmitted` is for: a guest may not be able to see the rest of the
 /// list, and must not overwrite it. Blocking: call it from `blocking::run`.
 pub fn reply_to_event(
-    access_token: &str,
-    calendar_id: &str,
-    event_id: &str,
-    email: &str,
-    response: super::meeting::Response,
+	access_token: &str,
+	calendar_id: &str,
+	event_id: &str,
+	email: &str,
+	response: super::meeting::Response,
 ) -> Result<(), GoogleError> {
-    let url = format!(
-        "{EVENTS}/{}/events/{}?sendUpdates=all",
-        urlencoding::encode(calendar_id),
-        urlencoding::encode(event_id),
-    );
-    patch(
-        &url,
-        access_token,
-        &reply_body(email, response).to_string(),
-        "Google Calendar",
-    )
+	let url = format!(
+		"{EVENTS}/{}/events/{}?sendUpdates=all",
+		urlencoding::encode(calendar_id),
+		urlencoding::encode(event_id),
+	);
+	patch(
+		&url,
+		access_token,
+		&reply_body(email, response).to_string(),
+		"Google Calendar",
+	)
 }
 
 fn reply_body(email: &str, response: super::meeting::Response) -> serde_json::Value {
-    serde_json::json!({
-        "attendeesOmitted": true,
-        "attendees": [{ "email": email, "responseStatus": response.api_value() }],
-    })
+	serde_json::json!({
+		"attendeesOmitted": true,
+		"attendees": [{ "email": email, "responseStatus": response.api_value() }],
+	})
 }
 
 /// What the app needs to know once an edit has reached Google.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Saved {
-    /// The event's page on Google Calendar.
-    pub link: String,
-    /// The user asked for Zoom and the event still has no Zoom link.
-    pub zoom_needed: bool,
+	/// The event's page on Google Calendar.
+	pub link: String,
+	/// The user asked for Zoom and the event still has no Zoom link.
+	pub zoom_needed: bool,
 }
 
 /// Whether Google should email guests about an edit. Saving a form with nothing
@@ -1574,172 +1574,172 @@ pub struct Saved {
 /// meeting still to be added means the email is better sent with its link, when
 /// the user saves on Google Calendar and it offers to.
 fn notifies_guests(
-    original: &Event,
-    draft: &super::EditDraft,
-    description: &str,
-    written: super::meeting::Written,
+	original: &Event,
+	draft: &super::EditDraft,
+	description: &str,
+	written: super::meeting::Written,
 ) -> bool {
-    let changed = written.guests_changed
-        || written.conference_changed
-        || draft.recurrence_changed
-        || draft.title != original.title
-        || draft.start != original.start
-        || draft.end != original.end
-        || description != original.details.description.as_str();
-    // A guest who may only invite others still has to reach those they invite.
-    draft.meeting.notify
-        && (draft.meeting.can_manage || written.guests_changed)
-        && written.has_guests
-        && changed
-        && !written.zoom_needed
+	let changed = written.guests_changed
+		|| written.conference_changed
+		|| draft.recurrence_changed
+		|| draft.title != original.title
+		|| draft.start != original.start
+		|| draft.end != original.end
+		|| description != original.details.description.as_str();
+	// A guest who may only invite others still has to reach those they invite.
+	draft.meeting.notify
+		&& (draft.meeting.can_manage || written.guests_changed)
+		&& written.has_guests
+		&& changed
+		&& !written.zoom_needed
 }
 
 /// Sends an event patch, and reports a conference Google could not create.
 fn patch_event_changes(
-    url: &str,
-    access_token: &str,
-    changes: &serde_json::Value,
-    notify: bool,
+	url: &str,
+	access_token: &str,
+	changes: &serde_json::Value,
+	notify: bool,
 ) -> Result<(), GoogleError> {
-    let address = format!("{url}{}", super::meeting::write_query(changes, notify));
-    let result = agent()
-        .request("PATCH", &address)
-        .set("Authorization", &format!("Bearer {access_token}"))
-        .set("Content-Type", "application/json")
-        .send_string(&changes.to_string());
-    let response: serde_json::Value = google::send("Google Calendar", result)?
-        .into_json()
-        .map_err(|error| GoogleError::transport("Google Calendar response", error))?;
-    match super::meeting::conference_failure(&response) {
-        Some(reason) => Err(reason.to_owned().into()),
-        None => Ok(()),
-    }
+	let address = format!("{url}{}", super::meeting::write_query(changes, notify));
+	let result = agent()
+		.request("PATCH", &address)
+		.set("Authorization", &format!("Bearer {access_token}"))
+		.set("Content-Type", "application/json")
+		.send_string(&changes.to_string());
+	let response: serde_json::Value = google::send("Google Calendar", result)?
+		.into_json()
+		.map_err(|error| GoogleError::transport("Google Calendar response", error))?;
+	match super::meeting::conference_failure(&response) {
+		Some(reason) => Err(reason.to_owned().into()),
+		None => Ok(()),
+	}
 }
 
 /// The event's page once it has moved, as the link names its calendar.
 fn link_after_move(
-    access_token: &str,
-    destination: &str,
-    event_id: &str,
+	access_token: &str,
+	destination: &str,
+	event_id: &str,
 ) -> Result<String, GoogleError> {
-    let url = format!(
-        "{EVENTS}/{}/events/{}",
-        urlencoding::encode(destination),
-        urlencoding::encode(event_id),
-    );
-    let moved: EventEntry = get(&url, access_token)?;
-    Ok(moved.html_link)
+	let url = format!(
+		"{EVENTS}/{}/events/{}",
+		urlencoding::encode(destination),
+		urlencoding::encode(event_id),
+	);
+	let moved: EventEntry = get(&url, access_token)?;
+	Ok(moved.html_link)
 }
 
 #[allow(clippy::too_many_arguments)]
 pub fn patch_event(
-    access_token: &str,
-    calendar_id: &str,
-    event_id: &str,
-    title: &str,
-    description: &str,
-    color_id: Option<&str>,
-    start: DateTime<Local>,
-    end: DateTime<Local>,
-    recurrence: Option<&[String]>,
-    projects: &[u64],
-    all_day: bool,
-    labels: &[String],
-    options: Option<&super::event_options::EventOptions>,
+	access_token: &str,
+	calendar_id: &str,
+	event_id: &str,
+	title: &str,
+	description: &str,
+	color_id: Option<&str>,
+	start: DateTime<Local>,
+	end: DateTime<Local>,
+	recurrence: Option<&[String]>,
+	projects: &[u64],
+	all_day: bool,
+	labels: &[String],
+	options: Option<&super::event_options::EventOptions>,
 ) -> Result<(), GoogleError> {
-    let url = format!(
-        "{EVENTS}/{}/events/{}",
-        urlencoding::encode(calendar_id),
-        urlencoding::encode(event_id),
-    );
-    let body = event_patch_body(
-        title,
-        description,
-        color_id,
-        start,
-        end,
-        recurrence,
-        projects,
-        all_day,
-        labels,
-        options,
-    )?;
-    patch(&url, access_token, &body.to_string(), "Google Calendar")
+	let url = format!(
+		"{EVENTS}/{}/events/{}",
+		urlencoding::encode(calendar_id),
+		urlencoding::encode(event_id),
+	);
+	let body = event_patch_body(
+		title,
+		description,
+		color_id,
+		start,
+		end,
+		recurrence,
+		projects,
+		all_day,
+		labels,
+		options,
+	)?;
+	patch(&url, access_token, &body.to_string(), "Google Calendar")
 }
 
 #[allow(clippy::too_many_arguments)]
 fn event_patch_body(
-    title: &str,
-    description: &str,
-    color_id: Option<&str>,
-    start: DateTime<Local>,
-    end: DateTime<Local>,
-    recurrence: Option<&[String]>,
-    projects: &[u64],
-    all_day: bool,
-    labels: &[String],
-    options: Option<&super::event_options::EventOptions>,
+	title: &str,
+	description: &str,
+	color_id: Option<&str>,
+	start: DateTime<Local>,
+	end: DateTime<Local>,
+	recurrence: Option<&[String]>,
+	projects: &[u64],
+	all_day: bool,
+	labels: &[String],
+	options: Option<&super::event_options::EventOptions>,
 ) -> Result<serde_json::Value, String> {
-    let mut body = serde_json::json!({
-        "summary": title,
-        "start": { "dateTime": start.with_timezone(&Utc).to_rfc3339(), "timeZone": iana_time_zone::get_timezone().map_err(|e|e.to_string())? },
-        "end": { "dateTime": end.with_timezone(&Utc).to_rfc3339(), "timeZone": iana_time_zone::get_timezone().map_err(|e|e.to_string())? },
-    });
-    if let Some(options) = options {
-        options.write(&mut body)?;
-    }
-    body["description"] = serde_json::Value::String(description.to_owned());
-    super::projects::write(&mut body, projects)?;
-    body["extendedProperties"]["private"]["ttLabels"] = serde_json::to_string(labels)
-        .map_err(|e| e.to_string())?
-        .into();
-    // Display defaults belong to TimeSlay. Omitting colorId also preserves
-    // any explicit Google color when editing an existing event.
-    let _ = color_id;
-    if all_day {
-        body["start"] = serde_json::json!({ "date": start.date_naive().to_string() });
-        body["end"] = serde_json::json!({ "date": end.date_naive().to_string() });
-    }
-    // Always send the array when the caller owns the recurrence, even when
-    // empty: omitting it on a PATCH would leave an earlier recurrence in
-    // place when the user turned it off. An expanded instance passes `None`
-    // so editing one occurrence does not rewrite its series.
-    if let Some(recurrence) = recurrence {
-        body["recurrence"] = serde_json::Value::Array(
-            recurrence
-                .iter()
-                .map(|line| serde_json::Value::String(line.clone()))
-                .collect(),
-        );
-    }
+	let mut body = serde_json::json!({
+		"summary": title,
+		"start": { "dateTime": start.with_timezone(&Utc).to_rfc3339(), "timeZone": iana_time_zone::get_timezone().map_err(|e|e.to_string())? },
+		"end": { "dateTime": end.with_timezone(&Utc).to_rfc3339(), "timeZone": iana_time_zone::get_timezone().map_err(|e|e.to_string())? },
+	});
+	if let Some(options) = options {
+		options.write(&mut body)?;
+	}
+	body["description"] = serde_json::Value::String(description.to_owned());
+	super::projects::write(&mut body, projects)?;
+	body["extendedProperties"]["private"]["ttLabels"] = serde_json::to_string(labels)
+		.map_err(|e| e.to_string())?
+		.into();
+	// Display defaults belong to TimeSlay. Omitting colorId also preserves
+	// any explicit Google color when editing an existing event.
+	let _ = color_id;
+	if all_day {
+		body["start"] = serde_json::json!({ "date": start.date_naive().to_string() });
+		body["end"] = serde_json::json!({ "date": end.date_naive().to_string() });
+	}
+	// Always send the array when the caller owns the recurrence, even when
+	// empty: omitting it on a PATCH would leave an earlier recurrence in
+	// place when the user turned it off. An expanded instance passes `None`
+	// so editing one occurrence does not rewrite its series.
+	if let Some(recurrence) = recurrence {
+		body["recurrence"] = serde_json::Value::Array(
+			recurrence
+				.iter()
+				.map(|line| serde_json::Value::String(line.clone()))
+				.collect(),
+		);
+	}
 
-    Ok(body)
+	Ok(body)
 }
 
 fn move_event_url(source: &str, event_id: &str, destination: &str) -> String {
-    format!(
-        "{EVENTS}/{}/events/{}/move?destination={}",
-        urlencoding::encode(source),
-        urlencoding::encode(event_id),
-        urlencoding::encode(destination),
-    )
+	format!(
+		"{EVENTS}/{}/events/{}/move?destination={}",
+		urlencoding::encode(source),
+		urlencoding::encode(event_id),
+		urlencoding::encode(destination),
+	)
 }
 
 /// Moves an event, or a whole series by its master's id, to another calendar.
 /// Google keeps the event's id. It refuses to move a single occurrence.
 fn move_event(
-    access_token: &str,
-    source: &str,
-    event_id: &str,
-    destination: &str,
+	access_token: &str,
+	source: &str,
+	event_id: &str,
+	destination: &str,
 ) -> Result<(), GoogleError> {
-    post(
-        &move_event_url(source, event_id, destination),
-        access_token,
-        "",
-        "Google Calendar",
-    )
-    .map(|_| ())
+	post(
+		&move_event_url(source, event_id, destination),
+		access_token,
+		"",
+		"Google Calendar",
+	)
+	.map(|_| ())
 }
 
 /// Writes a single occurrence, its whole series, or a new series from here,
@@ -1748,382 +1748,381 @@ fn move_event(
 /// The fields are written before the move, so retrying after a refused move
 /// repeats harmless writes rather than looking on the wrong calendar.
 pub fn save_event_scope(
-    access_token: &str,
-    original: &Event,
-    draft: &super::EditDraft,
-    scope: super::SaveScope,
-    description: &str,
-    color_id: Option<&str>,
+	access_token: &str,
+	original: &Event,
+	draft: &super::EditDraft,
+	scope: super::SaveScope,
+	description: &str,
+	color_id: Option<&str>,
 ) -> Result<Saved, GoogleError> {
-    use super::SaveScope;
-    let source = original.calendar_id.as_str();
-    let destination = draft.calendar_id.as_str();
-    let moving = source != destination;
-    let url = format!("{EVENTS}/{}/events", urlencoding::encode(source));
-    let instance_url = format!("{url}/{}", urlencoding::encode(&original.id));
-    let instance: serde_json::Value = get(&instance_url, access_token)?;
-    let series_id = instance["recurringEventId"].as_str();
-    if moving && scope == SaveScope::Current && series_id.is_some() {
-        return Err(
+	use super::SaveScope;
+	let source = original.calendar_id.as_str();
+	let destination = draft.calendar_id.as_str();
+	let moving = source != destination;
+	let url = format!("{EVENTS}/{}/events", urlencoding::encode(source));
+	let instance_url = format!("{url}/{}", urlencoding::encode(&original.id));
+	let instance: serde_json::Value = get(&instance_url, access_token)?;
+	let series_id = instance["recurringEventId"].as_str();
+	if moving && scope == SaveScope::Current && series_id.is_some() {
+		return Err(
             "One occurrence can't change calendar. Save all events, or the current and future ones."
                 .to_owned()
                 .into(),
         );
-    }
-    let recurrence = draft.recurrence_lines()?;
-    let mut changes = event_patch_body(
-        &draft.title,
-        description,
-        color_id,
-        draft.start,
-        draft.end,
-        if series_id.is_none() {
-            Some(&recurrence)
-        } else {
-            None
-        },
-        &draft.projects.ids,
-        draft.all_day,
-        &draft.labels,
-        Some(&draft.options),
-    )?;
-    if original.is_calendar_task() {
-        let mut data = original
-            .details
-            .task_data
-            .clone()
-            .ok_or("Missing calendar task metadata")?;
-        data.metadata.deadline = draft.deadline()?;
-        data.metadata.projects = draft.projects.ids.clone();
-        data.metadata.labels = draft.labels.clone();
-        data.metadata.minutes = if draft.all_day {
-            data.metadata.minutes
-        } else {
-            (draft.end - draft.start).num_minutes().clamp(0, 10080) as u32
-        };
-        super::calendar_tasks::write_data(&mut changes, &data)?;
-    }
-    let request_id = super::meeting::request_id()?;
-    let calendars = if moving {
-        vec![source.to_owned(), destination.to_owned()]
-    } else {
-        vec![source.to_owned()]
-    };
-    if scope == SaveScope::Current || series_id.is_none() {
-        let written = draft
-            .meeting
-            .write(&mut changes, Some(&instance), &request_id);
-        let notify = notifies_guests(original, draft, description, written);
-        patch_event_changes(&instance_url, access_token, &changes, notify)?;
-        let mut link = instance["htmlLink"].as_str().unwrap_or_default().to_owned();
-        if moving {
-            move_event(access_token, source, &original.id, destination)?;
-            if written.zoom_needed {
-                link = link_after_move(access_token, destination, &original.id)?;
-            }
-        }
-        // The event is itself a series, or has just become or stopped being
-        // one: its occurrences on other days changed with it.
-        if series_id.is_none()
-            && (!recurrence.is_empty() || !original.details.recurrence.is_empty())
-        {
-            super::series::note(destination, &original.id, calendars);
-        }
-        return Ok(Saved {
-            link,
-            zoom_needed: written.zoom_needed,
-        });
-    }
-    let series_id = series_id.unwrap();
-    let master_url = format!("{url}/{}", urlencoding::encode(series_id));
-    let master: serde_json::Value = get(&master_url, access_token)?;
-    let master_start = json_event_start(&master["start"])?;
-    let boundary = json_event_start(&instance["originalStartTime"])?;
-    let all = scope == SaveScope::All || boundary <= master_start;
-    let original_lines: Vec<String> = serde_json::from_value(master["recurrence"].clone())
-        .map_err(|error| format!("Could not read series recurrence: {error}"))?;
-    let mut future_lines = if draft.recurrence_changed {
-        recurrence
-    } else {
-        original_lines.clone()
-    };
-    let mut past_lines = Vec::new();
-    if !all {
-        let prior_count = if original_lines.iter().any(|line| line.contains("COUNT=")) {
-            count_prior_instances(access_token, &master_url, boundary)?
-        } else {
-            0
-        };
-        let split = split_recurrence(&original_lines, boundary, prior_count, original.all_day)?;
-        past_lines = split.0;
-        if !draft.recurrence_changed {
-            future_lines = split.1;
-        }
-    }
-    changes["recurrence"] = serde_json::json!(future_lines);
-    let start = if scope == SaveScope::All {
-        Local
-            .from_local_datetime(
-                &(master_start.naive_local()
-                    + (draft.start.naive_local() - original.start.naive_local())),
-            )
-            .earliest()
-            .ok_or("The new series time does not exist in this timezone")?
-    } else {
-        draft.start
-    };
-    let end = start + (draft.end - draft.start);
-    if draft.all_day {
-        changes["start"] = serde_json::json!({"date": start.date_naive().to_string()});
-        changes["end"] = serde_json::json!({"date": end.date_naive().to_string()});
-    } else {
-        // A recurring event needs an IANA zone to keep its wall time over DST.
-        let zone = master["start"]["timeZone"]
-            .as_str()
-            .map(str::to_owned)
-            .unwrap_or_else(|| iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".into()));
-        changes["start"] = serde_json::json!({"dateTime": start.to_rfc3339(), "timeZone": zone});
-        changes["end"] = serde_json::json!({"dateTime": end.to_rfc3339(), "timeZone": zone});
-    }
-    // Preserve private metadata belonging to other features and integrations.
-    let mut properties = master["extendedProperties"].clone();
-    if !properties.is_object() {
-        properties = serde_json::json!({});
-    }
-    for (key, value) in changes["extendedProperties"]["private"]
-        .as_object()
-        .into_iter()
-        .flatten()
-    {
-        properties["private"][key] = value.clone();
-    }
-    changes["extendedProperties"] = properties;
-    let written = draft
-        .meeting
-        .write(&mut changes, Some(&master), &request_id);
-    let notify = notifies_guests(original, draft, description, written);
-    if all {
-        patch_event_changes(&master_url, access_token, &changes, notify)?;
-        let mut link = master["htmlLink"].as_str().unwrap_or_default().to_owned();
-        if moving {
-            move_event(access_token, source, series_id, destination)?;
-            if written.zoom_needed {
-                link = link_after_move(access_token, destination, series_id)?;
-            }
-        }
-        super::series::note(destination, series_id, calendars);
-        return Ok(Saved {
-            link,
-            zoom_needed: written.zoom_needed,
-        });
-    }
-    // Clone writable fields so guests, location, reminders and conferencing survive.
-    let mut replacement = master.clone();
-    for key in [
-        "id",
-        "etag",
-        "kind",
-        "htmlLink",
-        "created",
-        "updated",
-        "iCalUID",
-        "sequence",
-        "organizer",
-        "creator",
-        "recurringEventId",
-        "originalStartTime",
-        "hangoutLink",
-        "status",
-    ] {
-        replacement.as_object_mut().unwrap().remove(key);
-    }
-    for (key, value) in changes.as_object().unwrap() {
-        replacement[key] = value.clone();
-    }
-    // Tasks repeating with the old series must find the new one.
-    let mut ancestry = split_from(&replacement["extendedProperties"]);
-    ancestry.push(format!("{source}/{series_id}"));
-    replacement["extendedProperties"]["private"][SPLIT_FROM] = serde_json::to_string(&ancestry)
-        .map_err(|e| e.to_string())?
-        .into();
-    // The new series starts out on the destination; the old one just ends. The
-    // conference it copied only survives if Google is asked to read it.
-    let query = super::meeting::write_query(&replacement, notify);
-    let response = post(
-        &format!(
-            "{EVENTS}/{}/events{query}",
-            urlencoding::encode(destination)
-        ),
-        access_token,
-        &replacement.to_string(),
-        "Google Calendar",
-    )?;
-    let created: CreatedEvent =
-        serde_json::from_str(&response).map_err(|error| error.to_string())?;
-    if created.id.is_empty() {
-        return Err("Google Calendar did not return the new series".into());
-    }
-    let truncated = serde_json::json!({"recurrence": past_lines});
-    if let Err(error) = patch(
-        &master_url,
-        access_token,
-        &truncated.to_string(),
-        "Google Calendar",
-    ) {
-        if let Err(rollback) = delete_event(access_token, destination, &created.id) {
-            return Err(GoogleError {
-                detail: format!(
-                    "{error}. Could not remove the replacement series: {rollback}. Refresh before retrying."
-                ),
-                context: String::new(),
-                ..error
-            });
-        }
-        return Err(error);
-    }
-    // The old series now ends before this occurrence; the new one carries on.
-    super::series::note(source, series_id, vec![source.to_owned()]);
-    super::series::note(destination, &created.id, vec![destination.to_owned()]);
-    Ok(Saved {
-        link: created.html_link,
-        zoom_needed: written.zoom_needed,
-    })
+	}
+	let recurrence = draft.recurrence_lines()?;
+	let mut changes = event_patch_body(
+		&draft.title,
+		description,
+		color_id,
+		draft.start,
+		draft.end,
+		if series_id.is_none() {
+			Some(&recurrence)
+		} else {
+			None
+		},
+		&draft.projects.ids,
+		draft.all_day,
+		&draft.labels,
+		Some(&draft.options),
+	)?;
+	if original.is_calendar_task() {
+		let mut data = original
+			.details
+			.task_data
+			.clone()
+			.ok_or("Missing calendar task metadata")?;
+		data.metadata.deadline = draft.deadline()?;
+		data.metadata.projects = draft.projects.ids.clone();
+		data.metadata.labels = draft.labels.clone();
+		data.metadata.minutes = if draft.all_day {
+			data.metadata.minutes
+		} else {
+			(draft.end - draft.start).num_minutes().clamp(0, 10080) as u32
+		};
+		super::calendar_tasks::write_data(&mut changes, &data)?;
+	}
+	let request_id = super::meeting::request_id()?;
+	let calendars = if moving {
+		vec![source.to_owned(), destination.to_owned()]
+	} else {
+		vec![source.to_owned()]
+	};
+	if scope == SaveScope::Current || series_id.is_none() {
+		let written = draft
+			.meeting
+			.write(&mut changes, Some(&instance), &request_id);
+		let notify = notifies_guests(original, draft, description, written);
+		patch_event_changes(&instance_url, access_token, &changes, notify)?;
+		let mut link = instance["htmlLink"].as_str().unwrap_or_default().to_owned();
+		if moving {
+			move_event(access_token, source, &original.id, destination)?;
+			if written.zoom_needed {
+				link = link_after_move(access_token, destination, &original.id)?;
+			}
+		}
+		// The event is itself a series, or has just become or stopped being
+		// one: its occurrences on other days changed with it.
+		if series_id.is_none()
+			&& (!recurrence.is_empty() || !original.details.recurrence.is_empty())
+		{
+			super::series::note(destination, &original.id, calendars);
+		}
+		return Ok(Saved {
+			link,
+			zoom_needed: written.zoom_needed,
+		});
+	}
+	let series_id = series_id.unwrap();
+	let master_url = format!("{url}/{}", urlencoding::encode(series_id));
+	let master: serde_json::Value = get(&master_url, access_token)?;
+	let master_start = json_event_start(&master["start"])?;
+	let boundary = json_event_start(&instance["originalStartTime"])?;
+	let all = scope == SaveScope::All || boundary <= master_start;
+	let original_lines: Vec<String> = serde_json::from_value(master["recurrence"].clone())
+		.map_err(|error| format!("Could not read series recurrence: {error}"))?;
+	let mut future_lines = if draft.recurrence_changed {
+		recurrence
+	} else {
+		original_lines.clone()
+	};
+	let mut past_lines = Vec::new();
+	if !all {
+		let prior_count = if original_lines.iter().any(|line| line.contains("COUNT=")) {
+			count_prior_instances(access_token, &master_url, boundary)?
+		} else {
+			0
+		};
+		let split = split_recurrence(&original_lines, boundary, prior_count, original.all_day)?;
+		past_lines = split.0;
+		if !draft.recurrence_changed {
+			future_lines = split.1;
+		}
+	}
+	changes["recurrence"] = serde_json::json!(future_lines);
+	let start = if scope == SaveScope::All {
+		Local
+			.from_local_datetime(
+				&(master_start.naive_local()
+					+ (draft.start.naive_local() - original.start.naive_local())),
+			)
+			.earliest()
+			.ok_or("The new series time does not exist in this timezone")?
+	} else {
+		draft.start
+	};
+	let end = start + (draft.end - draft.start);
+	if draft.all_day {
+		changes["start"] = serde_json::json!({"date": start.date_naive().to_string()});
+		changes["end"] = serde_json::json!({"date": end.date_naive().to_string()});
+	} else {
+		// A recurring event needs an IANA zone to keep its wall time over DST.
+		let zone = master["start"]["timeZone"]
+			.as_str()
+			.map(str::to_owned)
+			.unwrap_or_else(|| iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".into()));
+		changes["start"] = serde_json::json!({"dateTime": start.to_rfc3339(), "timeZone": zone});
+		changes["end"] = serde_json::json!({"dateTime": end.to_rfc3339(), "timeZone": zone});
+	}
+	// Preserve private metadata belonging to other features and integrations.
+	let mut properties = master["extendedProperties"].clone();
+	if !properties.is_object() {
+		properties = serde_json::json!({});
+	}
+	for (key, value) in changes["extendedProperties"]["private"]
+		.as_object()
+		.into_iter()
+		.flatten()
+	{
+		properties["private"][key] = value.clone();
+	}
+	changes["extendedProperties"] = properties;
+	let written = draft
+		.meeting
+		.write(&mut changes, Some(&master), &request_id);
+	let notify = notifies_guests(original, draft, description, written);
+	if all {
+		patch_event_changes(&master_url, access_token, &changes, notify)?;
+		let mut link = master["htmlLink"].as_str().unwrap_or_default().to_owned();
+		if moving {
+			move_event(access_token, source, series_id, destination)?;
+			if written.zoom_needed {
+				link = link_after_move(access_token, destination, series_id)?;
+			}
+		}
+		super::series::note(destination, series_id, calendars);
+		return Ok(Saved {
+			link,
+			zoom_needed: written.zoom_needed,
+		});
+	}
+	// Clone writable fields so guests, location, reminders and conferencing survive.
+	let mut replacement = master.clone();
+	for key in [
+		"id",
+		"etag",
+		"kind",
+		"htmlLink",
+		"created",
+		"updated",
+		"iCalUID",
+		"sequence",
+		"organizer",
+		"creator",
+		"recurringEventId",
+		"originalStartTime",
+		"hangoutLink",
+		"status",
+	] {
+		replacement.as_object_mut().unwrap().remove(key);
+	}
+	for (key, value) in changes.as_object().unwrap() {
+		replacement[key] = value.clone();
+	}
+	// Tasks repeating with the old series must find the new one.
+	let mut ancestry = split_from(&replacement["extendedProperties"]);
+	ancestry.push(format!("{source}/{series_id}"));
+	replacement["extendedProperties"]["private"][SPLIT_FROM] = serde_json::to_string(&ancestry)
+		.map_err(|e| e.to_string())?
+		.into();
+	// The new series starts out on the destination; the old one just ends. The
+	// conference it copied only survives if Google is asked to read it.
+	let query = super::meeting::write_query(&replacement, notify);
+	let response = post(
+		&format!(
+			"{EVENTS}/{}/events{query}",
+			urlencoding::encode(destination)
+		),
+		access_token,
+		&replacement.to_string(),
+		"Google Calendar",
+	)?;
+	let created: CreatedEvent =
+		serde_json::from_str(&response).map_err(|error| error.to_string())?;
+	if created.id.is_empty() {
+		return Err("Google Calendar did not return the new series".into());
+	}
+	let truncated = serde_json::json!({"recurrence": past_lines});
+	if let Err(error) = patch(
+		&master_url,
+		access_token,
+		&truncated.to_string(),
+		"Google Calendar",
+	) {
+		if let Err(rollback) = delete_event(access_token, destination, &created.id) {
+			return Err(GoogleError {
+				detail: format!(
+					"{error}. Could not remove the replacement series: {rollback}. Refresh before retrying."
+				),
+				context: String::new(),
+				..error
+			});
+		}
+		return Err(error);
+	}
+	// The old series now ends before this occurrence; the new one carries on.
+	super::series::note(source, series_id, vec![source.to_owned()]);
+	super::series::note(destination, &created.id, vec![destination.to_owned()]);
+	Ok(Saved {
+		link: created.html_link,
+		zoom_needed: written.zoom_needed,
+	})
 }
 
 fn json_event_start(value: &serde_json::Value) -> Result<DateTime<Local>, String> {
-    if let Some(time) = value["dateTime"].as_str() {
-        return DateTime::parse_from_rfc3339(time)
-            .map(|time| time.with_timezone(&Local))
-            .map_err(|error| error.to_string());
-    }
-    let date = value["date"]
-        .as_str()
-        .ok_or("Google Calendar did not return the original event time")?;
-    let date = NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|error| error.to_string())?;
-    Local
-        .from_local_datetime(&date.and_hms_opt(0, 0, 0).unwrap())
-        .earliest()
-        .ok_or_else(|| "The event date does not exist in this timezone".into())
+	if let Some(time) = value["dateTime"].as_str() {
+		return DateTime::parse_from_rfc3339(time)
+			.map(|time| time.with_timezone(&Local))
+			.map_err(|error| error.to_string());
+	}
+	let date = value["date"]
+		.as_str()
+		.ok_or("Google Calendar did not return the original event time")?;
+	let date = NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|error| error.to_string())?;
+	Local
+		.from_local_datetime(&date.and_hms_opt(0, 0, 0).unwrap())
+		.earliest()
+		.ok_or_else(|| "The event date does not exist in this timezone".into())
 }
 
 fn count_prior_instances(
-    token: &str,
-    master_url: &str,
-    boundary: DateTime<Local>,
+	token: &str,
+	master_url: &str,
+	boundary: DateTime<Local>,
 ) -> Result<u64, String> {
-    let mut count = 0;
-    let mut page = String::new();
-    loop {
-        let url = format!(
-            "{master_url}/instances?showDeleted=true&maxResults=2500&pageToken={}",
-            urlencoding::encode(&page)
-        );
-        let response: serde_json::Value = get(&url, token)?;
-        for event in response["items"].as_array().into_iter().flatten() {
-            if json_event_start(&event["originalStartTime"])? < boundary {
-                count += 1;
-            }
-        }
-        match response["nextPageToken"].as_str() {
-            Some(next) => page = next.to_owned(),
-            None => return Ok(count),
-        }
-    }
+	let mut count = 0;
+	let mut page = String::new();
+	loop {
+		let url = format!(
+			"{master_url}/instances?showDeleted=true&maxResults=2500&pageToken={}",
+			urlencoding::encode(&page)
+		);
+		let response: serde_json::Value = get(&url, token)?;
+		for event in response["items"].as_array().into_iter().flatten() {
+			if json_event_start(&event["originalStartTime"])? < boundary {
+				count += 1;
+			}
+		}
+		match response["nextPageToken"].as_str() {
+			Some(next) => page = next.to_owned(),
+			None => return Ok(count),
+		}
+	}
 }
 
 /// The repeat rule of the series `series_id` from its occurrence starting at
 /// `from` on, so something joining the series there repeats with its
 /// remaining occurrences rather than overrunning a repeat count.
 pub fn series_recurrence_from(
-    token: &str,
-    calendar_id: &str,
-    series_id: &str,
-    from: DateTime<Local>,
+	token: &str,
+	calendar_id: &str,
+	series_id: &str,
+	from: DateTime<Local>,
 ) -> Result<Vec<String>, GoogleError> {
-    let master_url = format!(
-        "{EVENTS}/{}/events/{}",
-        urlencoding::encode(calendar_id),
-        urlencoding::encode(series_id)
-    );
-    let master: serde_json::Value = get(&master_url, token)?;
-    let lines: Vec<String> = serde_json::from_value(master["recurrence"].clone())
-        .map_err(|error| format!("Could not read the time block's repeat rule: {error}"))?;
-    if from <= json_event_start(&master["start"])?
-        || !lines.iter().any(|line| line.contains("COUNT="))
-    {
-        return Ok(lines);
-    }
-    let prior = count_prior_instances(token, &master_url, from)?;
-    let (_, future) = split_recurrence(&lines, from, prior, master["start"]["date"].is_string())?;
-    Ok(future)
+	let master_url = format!(
+		"{EVENTS}/{}/events/{}",
+		urlencoding::encode(calendar_id),
+		urlencoding::encode(series_id)
+	);
+	let master: serde_json::Value = get(&master_url, token)?;
+	let lines: Vec<String> = serde_json::from_value(master["recurrence"].clone())
+		.map_err(|error| format!("Could not read the time block's repeat rule: {error}"))?;
+	if from <= json_event_start(&master["start"])?
+		|| !lines.iter().any(|line| line.contains("COUNT="))
+	{
+		return Ok(lines);
+	}
+	let prior = count_prior_instances(token, &master_url, from)?;
+	let (_, future) = split_recurrence(&lines, from, prior, master["start"]["date"].is_string())?;
+	Ok(future)
 }
 
 /// Trim the old RRULE and retain the remaining COUNT for the replacement.
 fn split_recurrence(
-    lines: &[String],
-    boundary: DateTime<Local>,
-    prior_count: u64,
-    all_day: bool,
+	lines: &[String],
+	boundary: DateTime<Local>,
+	prior_count: u64,
+	all_day: bool,
 ) -> Result<(Vec<String>, Vec<String>), String> {
-    if lines
-        .iter()
-        .filter(|line| line.starts_with("RRULE:"))
-        .count()
-        != 1
-        || (lines.iter().any(|line| line.contains("COUNT="))
-            && lines.iter().any(|line| line.starts_with("EXDATE")))
-    {
-        return Err(
-            "This custom series cannot be split here. Use Save current event or Save all events."
-                .into(),
-        );
-    }
-    let mut past = Vec::new();
-    let mut future = Vec::new();
-    for line in lines {
-        if line.starts_with("EXDATE") {
-            // Exclusions outside a series' range have no effect.
-            past.push(line.clone());
-            future.push(line.clone());
-            continue;
-        }
-        let rule = line.strip_prefix("RRULE:").ok_or(
-            "This custom series cannot be split here. Use Save current event or Save all events.",
-        )?;
-        let mut old = Vec::new();
-        let mut new = Vec::new();
-        for part in rule.split(';') {
-            if let Some(count) = part.strip_prefix("COUNT=") {
-                let count: u64 = count.parse().map_err(|_| "Invalid series repeat count")?;
-                let remaining = count
-                    .checked_sub(prior_count)
-                    .filter(|count| *count > 0)
-                    .ok_or("Could not determine the remaining series repeat count")?;
-                new.push(format!("COUNT={remaining}"));
-            } else {
-                new.push(part.to_owned());
-            }
-            if !part.starts_with("COUNT=") && !part.starts_with("UNTIL=") {
-                old.push(part.to_owned());
-            }
-        }
-        let until = if all_day {
-            boundary
-                .date_naive()
-                .pred_opt()
-                .ok_or("Invalid series date")?
-                .format("%Y%m%d")
-                .to_string()
-        } else {
-            (boundary.with_timezone(&Utc) - chrono::Duration::seconds(1))
-                .format("%Y%m%dT%H%M%SZ")
-                .to_string()
-        };
-        old.push(format!("UNTIL={until}"));
-        past.push(format!("RRULE:{}", old.join(";")));
-        future.push(format!("RRULE:{}", new.join(";")));
-    }
-    Ok((past, future))
+	if lines
+		.iter()
+		.filter(|line| line.starts_with("RRULE:"))
+		.count()
+		!= 1 || (lines.iter().any(|line| line.contains("COUNT="))
+		&& lines.iter().any(|line| line.starts_with("EXDATE")))
+	{
+		return Err(
+			"This custom series cannot be split here. Use Save current event or Save all events."
+				.into(),
+		);
+	}
+	let mut past = Vec::new();
+	let mut future = Vec::new();
+	for line in lines {
+		if line.starts_with("EXDATE") {
+			// Exclusions outside a series' range have no effect.
+			past.push(line.clone());
+			future.push(line.clone());
+			continue;
+		}
+		let rule = line.strip_prefix("RRULE:").ok_or(
+			"This custom series cannot be split here. Use Save current event or Save all events.",
+		)?;
+		let mut old = Vec::new();
+		let mut new = Vec::new();
+		for part in rule.split(';') {
+			if let Some(count) = part.strip_prefix("COUNT=") {
+				let count: u64 = count.parse().map_err(|_| "Invalid series repeat count")?;
+				let remaining = count
+					.checked_sub(prior_count)
+					.filter(|count| *count > 0)
+					.ok_or("Could not determine the remaining series repeat count")?;
+				new.push(format!("COUNT={remaining}"));
+			} else {
+				new.push(part.to_owned());
+			}
+			if !part.starts_with("COUNT=") && !part.starts_with("UNTIL=") {
+				old.push(part.to_owned());
+			}
+		}
+		let until = if all_day {
+			boundary
+				.date_naive()
+				.pred_opt()
+				.ok_or("Invalid series date")?
+				.format("%Y%m%d")
+				.to_string()
+		} else {
+			(boundary.with_timezone(&Utc) - chrono::Duration::seconds(1))
+				.format("%Y%m%dT%H%M%SZ")
+				.to_string()
+		};
+		old.push(format!("UNTIL={until}"));
+		past.push(format!("RRULE:{}", old.join(";")));
+		future.push(format!("RRULE:{}", new.join(";")));
+	}
+	Ok((past, future))
 }
 
 /// Creates a timed event on Google and returns its id.
@@ -2133,228 +2132,228 @@ fn split_recurrence(
 /// the app's `blocking::run`.
 #[allow(clippy::too_many_arguments)]
 pub fn insert_event(
-    access_token: &str,
-    calendar_id: &str,
-    title: &str,
-    description: &str,
-    color_id: Option<&str>,
-    start: DateTime<Local>,
-    end: DateTime<Local>,
-    recurrence: &[String],
-    projects: &[u64],
-    all_day: bool,
-    options: Option<&super::event_options::EventOptions>,
-    meeting: Option<&super::meeting::Form>,
+	access_token: &str,
+	calendar_id: &str,
+	title: &str,
+	description: &str,
+	color_id: Option<&str>,
+	start: DateTime<Local>,
+	end: DateTime<Local>,
+	recurrence: &[String],
+	projects: &[u64],
+	all_day: bool,
+	options: Option<&super::event_options::EventOptions>,
+	meeting: Option<&super::meeting::Form>,
 ) -> Result<Inserted, GoogleError> {
-    let url = format!("{EVENTS}/{}/events", urlencoding::encode(calendar_id));
-    let mut body = serde_json::json!({ "summary": title });
-    write_times(&mut body, start, end, all_day);
-    if let Some(id) = super::operations::insert_id() {
-        body["id"] = id.into();
-    }
-    if let Some(options) = options {
-        options.write(&mut body)?;
-    }
-    body["description"] = serde_json::Value::String(description.to_owned());
-    super::projects::write(&mut body, projects)?;
-    // Display defaults belong to TimeSlay. Omitting colorId also preserves
-    // any explicit Google color when editing an existing event.
-    let _ = color_id;
-    if !recurrence.is_empty() {
-        body["recurrence"] = serde_json::Value::Array(
-            recurrence
-                .iter()
-                .map(|line| serde_json::Value::String(line.clone()))
-                .collect(),
-        );
-    }
+	let url = format!("{EVENTS}/{}/events", urlencoding::encode(calendar_id));
+	let mut body = serde_json::json!({ "summary": title });
+	write_times(&mut body, start, end, all_day);
+	if let Some(id) = super::operations::insert_id() {
+		body["id"] = id.into();
+	}
+	if let Some(options) = options {
+		options.write(&mut body)?;
+	}
+	body["description"] = serde_json::Value::String(description.to_owned());
+	super::projects::write(&mut body, projects)?;
+	// Display defaults belong to TimeSlay. Omitting colorId also preserves
+	// any explicit Google color when editing an existing event.
+	let _ = color_id;
+	if !recurrence.is_empty() {
+		body["recurrence"] = serde_json::Value::Array(
+			recurrence
+				.iter()
+				.map(|line| serde_json::Value::String(line.clone()))
+				.collect(),
+		);
+	}
 
-    let mut notify = false;
-    if let Some(meeting) = meeting {
-        let request_id = super::meeting::request_id()?;
-        let written = meeting.write(&mut body, None, &request_id);
-        // A Zoom meeting still to be added means the invitation is better sent
-        // with its link, when the user saves on Google Calendar.
-        notify = meeting.notify && written.has_guests && !written.zoom_needed;
-    }
-    let query = super::meeting::write_query(&body, notify);
+	let mut notify = false;
+	if let Some(meeting) = meeting {
+		let request_id = super::meeting::request_id()?;
+		let written = meeting.write(&mut body, None, &request_id);
+		// A Zoom meeting still to be added means the invitation is better sent
+		// with its link, when the user saves on Google Calendar.
+		notify = meeting.notify && written.has_guests && !written.zoom_needed;
+	}
+	let query = super::meeting::write_query(&body, notify);
 
-    let response = match post(
-        &format!("{url}{query}"),
-        access_token,
-        &body.to_string(),
-        "Google Calendar",
-    ) {
-        Ok(response) => response,
-        Err(error) if error.status == Some(409) && body["id"].is_string() => {
-            let item_url = format!("{url}/{}", body["id"].as_str().unwrap());
-            patch_event_changes(&item_url, access_token, &body, notify)?;
-            get::<serde_json::Value>(&item_url, access_token)?.to_string()
-        }
-        Err(error) => return Err(error),
-    };
-    let value: serde_json::Value = serde_json::from_str(&response)
-        .map_err(|error| format!("Google Calendar response: {error}"))?;
-    // The event exists whatever became of its call. Failing here would invite a
-    // second save and a duplicate, so it is left without a link to add later.
-    if let Some(reason) = super::meeting::conference_failure(&value) {
-        log::warn!("{reason}");
-    }
-    let created: EventEntry = serde_json::from_value(value)
-        .map_err(|error| format!("Google Calendar response: {error}"))?;
+	let response = match post(
+		&format!("{url}{query}"),
+		access_token,
+		&body.to_string(),
+		"Google Calendar",
+	) {
+		Ok(response) => response,
+		Err(error) if error.status == Some(409) && body["id"].is_string() => {
+			let item_url = format!("{url}/{}", body["id"].as_str().unwrap());
+			patch_event_changes(&item_url, access_token, &body, notify)?;
+			get::<serde_json::Value>(&item_url, access_token)?.to_string()
+		}
+		Err(error) => return Err(error),
+	};
+	let value: serde_json::Value = serde_json::from_str(&response)
+		.map_err(|error| format!("Google Calendar response: {error}"))?;
+	// The event exists whatever became of its call. Failing here would invite a
+	// second save and a duplicate, so it is left without a link to add later.
+	if let Some(reason) = super::meeting::conference_failure(&value) {
+		log::warn!("{reason}");
+	}
+	let created: EventEntry = serde_json::from_value(value)
+		.map_err(|error| format!("Google Calendar response: {error}"))?;
 
-    if created.id.is_empty() {
-        return Err("Google Calendar did not return the new event"
-            .to_owned()
-            .into());
-    }
-    // The overlay only shows the new series' first occurrence, and the sync
-    // asked for when saving may have reached Google before this did.
-    if !recurrence.is_empty() {
-        super::series::note(calendar_id, &created.id, vec![calendar_id.to_owned()]);
-    }
-    let details = details_of(&created);
-    Ok(Inserted {
-        id: created.id,
-        link: details.link,
-        meeting: details.meeting,
-    })
+	if created.id.is_empty() {
+		return Err("Google Calendar did not return the new event"
+			.to_owned()
+			.into());
+	}
+	// The overlay only shows the new series' first occurrence, and the sync
+	// asked for when saving may have reached Google before this did.
+	if !recurrence.is_empty() {
+		super::series::note(calendar_id, &created.id, vec![calendar_id.to_owned()]);
+	}
+	let details = details_of(&created);
+	Ok(Inserted {
+		id: created.id,
+		link: details.link,
+		meeting: details.meeting,
+	})
 }
 
 /// Writes an event's `start` and `end`: dates for an all-day event, with
 /// Google's exclusive end, or instants for a timed one.
 fn write_times(
-    body: &mut serde_json::Value,
-    start: DateTime<Local>,
-    end: DateTime<Local>,
-    all_day: bool,
+	body: &mut serde_json::Value,
+	start: DateTime<Local>,
+	end: DateTime<Local>,
+	all_day: bool,
 ) {
-    if all_day {
-        body["start"] = serde_json::json!({ "date": start.date_naive().to_string() });
-        body["end"] = serde_json::json!({ "date": end.date_naive().to_string() });
-    } else {
-        // Google rejects a recurring event without a time zone: it needs one
-        // to expand the rule across daylight-saving changes.
-        let zone = iana_time_zone::get_timezone().ok();
-        let time = |when: DateTime<Local>| {
-            let mut value =
-                serde_json::json!({ "dateTime": when.with_timezone(&Utc).to_rfc3339() });
-            if let Some(zone) = &zone {
-                value["timeZone"] = serde_json::Value::String(zone.clone());
-            }
-            value
-        };
-        body["start"] = time(start);
-        body["end"] = time(end);
-    }
+	if all_day {
+		body["start"] = serde_json::json!({ "date": start.date_naive().to_string() });
+		body["end"] = serde_json::json!({ "date": end.date_naive().to_string() });
+	} else {
+		// Google rejects a recurring event without a time zone: it needs one
+		// to expand the rule across daylight-saving changes.
+		let zone = iana_time_zone::get_timezone().ok();
+		let time = |when: DateTime<Local>| {
+			let mut value =
+				serde_json::json!({ "dateTime": when.with_timezone(&Utc).to_rfc3339() });
+			if let Some(zone) = &zone {
+				value["timeZone"] = serde_json::Value::String(zone.clone());
+			}
+			value
+		};
+		body["start"] = time(start);
+		body["end"] = time(end);
+	}
 }
 
 /// What Google reports about an event it has just created.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Inserted {
-    pub id: String,
-    pub link: String,
-    pub meeting: String,
+	pub id: String,
+	pub link: String,
+	pub meeting: String,
 }
 
 /// Delete the selected instance, truncate its series, or delete its master.
 pub fn delete_event_scope(
-    access_token: &str,
-    calendar_id: &str,
-    event_id: &str,
-    scope: super::SaveScope,
-    notify: bool,
+	access_token: &str,
+	calendar_id: &str,
+	event_id: &str,
+	scope: super::SaveScope,
+	notify: bool,
 ) -> Result<(), GoogleError> {
-    use super::SaveScope;
-    let delete_event = |id: &str| delete_event_notifying(access_token, calendar_id, id, notify);
-    if scope == SaveScope::Current {
-        return delete_event(event_id);
-    }
-    let base = format!("{EVENTS}/{}/events", urlencoding::encode(calendar_id));
-    let instance_url = format!("{base}/{}", urlencoding::encode(event_id));
-    let instance: serde_json::Value = get(&instance_url, access_token)?;
-    let Some(series_id) = instance["recurringEventId"].as_str() else {
-        delete_event(event_id)?;
-        // A series deleted by its master (a habit's events) takes every
-        // occurrence with it, not only the one the overlay knows about.
-        if instance["recurrence"]
-            .as_array()
-            .is_some_and(|lines| !lines.is_empty())
-        {
-            super::series::note(calendar_id, event_id, vec![calendar_id.to_owned()]);
-        }
-        return Ok(());
-    };
-    let deleted_series = || -> Result<(), GoogleError> {
-        match delete_event(series_id) {
-            // Already gone is what a delete wants; the cache still has to catch up.
-            Err(error) if error.status != Some(404) => return Err(error),
-            _ => {}
-        }
-        super::series::note(calendar_id, series_id, vec![calendar_id.to_owned()]);
-        Ok(())
-    };
-    if scope == SaveScope::All {
-        return deleted_series();
-    }
-    let master_url = format!("{base}/{}", urlencoding::encode(series_id));
-    let master: serde_json::Value = get(&master_url, access_token)?;
-    let boundary = json_event_start(&instance["originalStartTime"])?;
-    if boundary <= json_event_start(&master["start"])? {
-        return deleted_series();
-    }
-    let lines: Vec<String> = serde_json::from_value(master["recurrence"].clone())
-        .map_err(|error| format!("Could not read series recurrence: {error}"))?;
-    let prior_count = if lines.iter().any(|line| line.contains("COUNT=")) {
-        count_prior_instances(access_token, &master_url, boundary)?
-    } else {
-        0
-    };
-    let (past, _) = split_recurrence(
-        &lines,
-        boundary,
-        prior_count,
-        master["start"]["date"].is_string(),
-    )
-    .map_err(|_| "This custom series cannot be split here. Use Delete or Delete all events.")?;
-    patch(
-        &format!(
-            "{master_url}?sendUpdates={}",
-            if notify { "all" } else { "none" }
-        ),
-        access_token,
-        &serde_json::json!({"recurrence": past}).to_string(),
-        "Google Calendar",
-    )?;
-    super::series::note(calendar_id, series_id, vec![calendar_id.to_owned()]);
-    Ok(())
+	use super::SaveScope;
+	let delete_event = |id: &str| delete_event_notifying(access_token, calendar_id, id, notify);
+	if scope == SaveScope::Current {
+		return delete_event(event_id);
+	}
+	let base = format!("{EVENTS}/{}/events", urlencoding::encode(calendar_id));
+	let instance_url = format!("{base}/{}", urlencoding::encode(event_id));
+	let instance: serde_json::Value = get(&instance_url, access_token)?;
+	let Some(series_id) = instance["recurringEventId"].as_str() else {
+		delete_event(event_id)?;
+		// A series deleted by its master (a habit's events) takes every
+		// occurrence with it, not only the one the overlay knows about.
+		if instance["recurrence"]
+			.as_array()
+			.is_some_and(|lines| !lines.is_empty())
+		{
+			super::series::note(calendar_id, event_id, vec![calendar_id.to_owned()]);
+		}
+		return Ok(());
+	};
+	let deleted_series = || -> Result<(), GoogleError> {
+		match delete_event(series_id) {
+			// Already gone is what a delete wants; the cache still has to catch up.
+			Err(error) if error.status != Some(404) => return Err(error),
+			_ => {}
+		}
+		super::series::note(calendar_id, series_id, vec![calendar_id.to_owned()]);
+		Ok(())
+	};
+	if scope == SaveScope::All {
+		return deleted_series();
+	}
+	let master_url = format!("{base}/{}", urlencoding::encode(series_id));
+	let master: serde_json::Value = get(&master_url, access_token)?;
+	let boundary = json_event_start(&instance["originalStartTime"])?;
+	if boundary <= json_event_start(&master["start"])? {
+		return deleted_series();
+	}
+	let lines: Vec<String> = serde_json::from_value(master["recurrence"].clone())
+		.map_err(|error| format!("Could not read series recurrence: {error}"))?;
+	let prior_count = if lines.iter().any(|line| line.contains("COUNT=")) {
+		count_prior_instances(access_token, &master_url, boundary)?
+	} else {
+		0
+	};
+	let (past, _) = split_recurrence(
+		&lines,
+		boundary,
+		prior_count,
+		master["start"]["date"].is_string(),
+	)
+	.map_err(|_| "This custom series cannot be split here. Use Delete or Delete all events.")?;
+	patch(
+		&format!(
+			"{master_url}?sendUpdates={}",
+			if notify { "all" } else { "none" }
+		),
+		access_token,
+		&serde_json::json!({"recurrence": past}).to_string(),
+		"Google Calendar",
+	)?;
+	super::series::note(calendar_id, series_id, vec![calendar_id.to_owned()]);
+	Ok(())
 }
 
 /// Deletes a single event on Google. A successful call returns `204 No
 /// Content` and there is no body to parse. Blocking: call it from
 /// the app's `blocking::run`.
 pub fn delete_event(
-    access_token: &str,
-    calendar_id: &str,
-    event_id: &str,
+	access_token: &str,
+	calendar_id: &str,
+	event_id: &str,
 ) -> Result<(), GoogleError> {
-    delete_event_notifying(access_token, calendar_id, event_id, false)
+	delete_event_notifying(access_token, calendar_id, event_id, false)
 }
 
 fn delete_event_notifying(
-    access_token: &str,
-    calendar_id: &str,
-    event_id: &str,
-    notify: bool,
+	access_token: &str,
+	calendar_id: &str,
+	event_id: &str,
+	notify: bool,
 ) -> Result<(), GoogleError> {
-    let url = format!(
-        "{EVENTS}/{}/events/{}?sendUpdates={}",
-        urlencoding::encode(calendar_id),
-        urlencoding::encode(event_id),
-        if notify { "all" } else { "none" },
-    );
+	let url = format!(
+		"{EVENTS}/{}/events/{}?sendUpdates={}",
+		urlencoding::encode(calendar_id),
+		urlencoding::encode(event_id),
+		if notify { "all" } else { "none" },
+	);
 
-    delete(&url, access_token, "Google Calendar")
+	delete(&url, access_token, "Google Calendar")
 }
 
 /// How far ahead the inbox looks for invitations to answer.
@@ -2364,448 +2363,448 @@ const INVITATION_DAYS: i64 = 180;
 /// one comes back once, as its series, rather than once per occurrence.
 /// Blocking: call it from the app's `blocking::run`.
 pub fn fetch_invitations(access_token: &str, calendar: &Calendar) -> Result<Vec<Event>, String> {
-    let now = Utc::now();
-    let base = format!(
-        "{EVENTS}/{}/events?singleEvents=false&maxResults=250&timeMin={}&timeMax={}",
-        urlencoding::encode(&calendar.id),
-        urlencoding::encode(&now.to_rfc3339()),
-        urlencoding::encode(&(now + chrono::Duration::days(INVITATION_DAYS)).to_rfc3339()),
-    );
-    let mut entries = Vec::new();
-    let mut page: Option<String> = None;
-    loop {
-        let url = match &page {
-            Some(token) => format!("{base}&pageToken={}", urlencoding::encode(token)),
-            None => base.clone(),
-        };
-        let list: EventList = get(&url, access_token)?;
-        entries.extend(list.items);
-        match list.next_page_token {
-            Some(next) => page = Some(next),
-            None => break,
-        }
-    }
-    let mut events: Vec<Event> = unanswered_invitations(entries)
-        .into_iter()
-        .filter_map(|entry| parse_event_in_range(entry, calendar, NaiveDate::MIN, NaiveDate::MAX))
-        .collect();
-    events.sort_by_key(|event| event.start);
-    Ok(events)
+	let now = Utc::now();
+	let base = format!(
+		"{EVENTS}/{}/events?singleEvents=false&maxResults=250&timeMin={}&timeMax={}",
+		urlencoding::encode(&calendar.id),
+		urlencoding::encode(&now.to_rfc3339()),
+		urlencoding::encode(&(now + chrono::Duration::days(INVITATION_DAYS)).to_rfc3339()),
+	);
+	let mut entries = Vec::new();
+	let mut page: Option<String> = None;
+	loop {
+		let url = match &page {
+			Some(token) => format!("{base}&pageToken={}", urlencoding::encode(token)),
+			None => base.clone(),
+		};
+		let list: EventList = get(&url, access_token)?;
+		entries.extend(list.items);
+		match list.next_page_token {
+			Some(next) => page = Some(next),
+			None => break,
+		}
+	}
+	let mut events: Vec<Event> = unanswered_invitations(entries)
+		.into_iter()
+		.filter_map(|entry| parse_event_in_range(entry, calendar, NaiveDate::MIN, NaiveDate::MAX))
+		.collect();
+	events.sort_by_key(|event| event.start);
+	Ok(events)
 }
 
 /// The entries the user was invited to and has not answered. An occurrence
 /// changed on its own is dropped when its whole series is waiting anyway.
 fn unanswered_invitations(entries: Vec<EventEntry>) -> Vec<EventEntry> {
-    let waiting: Vec<EventEntry> = entries
-        .into_iter()
-        .filter(|entry| {
-            entry.status.as_deref() != Some("cancelled")
-                && !entry.organizer.as_ref().is_some_and(|person| person.own)
-                && entry
-                    .attendees
-                    .iter()
-                    .any(|person| person.own && person.response_status == "needsAction")
-        })
-        .collect();
-    let series: Vec<String> = waiting
-        .iter()
-        .filter(|entry| !entry.recurrence.is_empty())
-        .map(|entry| entry.id.clone())
-        .collect();
-    waiting
-        .into_iter()
-        .filter(|entry| {
-            entry
-                .recurring_event_id
-                .as_ref()
-                .is_none_or(|id| !series.contains(id))
-        })
-        .collect()
+	let waiting: Vec<EventEntry> = entries
+		.into_iter()
+		.filter(|entry| {
+			entry.status.as_deref() != Some("cancelled")
+				&& !entry.organizer.as_ref().is_some_and(|person| person.own)
+				&& entry
+					.attendees
+					.iter()
+					.any(|person| person.own && person.response_status == "needsAction")
+		})
+		.collect();
+	let series: Vec<String> = waiting
+		.iter()
+		.filter(|entry| !entry.recurrence.is_empty())
+		.map(|entry| entry.id.clone())
+		.collect();
+	waiting
+		.into_iter()
+		.filter(|entry| {
+			entry
+				.recurring_event_id
+				.as_ref()
+				.is_none_or(|id| !series.contains(id))
+		})
+		.collect()
 }
 
 #[derive(Debug, Deserialize)]
 struct CreatedEvent {
-    #[serde(default)]
-    id: String,
-    #[serde(default, rename = "htmlLink")]
-    html_link: String,
+	#[serde(default)]
+	id: String,
+	#[serde(default, rename = "htmlLink")]
+	html_link: String,
 }
 
 /// `webViewLink` opens the task in the Google Tasks UI. The API id is the
 /// fallback when that field is missing.
 fn task_link(task: &TaskEntry) -> String {
-    if !task.web_view_link.is_empty() {
-        return task.web_view_link.clone();
-    }
-    if task.id.is_empty() {
-        return String::new();
-    }
-    format!("https://tasks.google.com/task/{}", task.id)
+	if !task.web_view_link.is_empty() {
+		return task.web_view_link.clone();
+	}
+	if task.id.is_empty() {
+		return String::new();
+	}
+	format!("https://tasks.google.com/task/{}", task.id)
 }
 
 /// Google stores a task due date as midnight UTC. The calendar day is the
 /// date in that string, not the date after converting to local time, or a
 /// task due on the 1st would land on the 30th in the US.
 fn task_due_date(due: &str) -> Option<NaiveDate> {
-    let date = due.get(..10)?;
-    NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()
+	let date = due.get(..10)?;
+	NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()
 }
 
 fn tasks_notice(error: &GoogleError) -> String {
-    match error.kind {
-        Kind::MissingScope => "Reconnect Google so Tasks are included".to_owned(),
-        Kind::ApiDisabled => "Enable the Google Tasks API, then sync again".to_owned(),
-        _ => format!("Tasks: {error}"),
-    }
+	match error.kind {
+		Kind::MissingScope => "Reconnect Google so Tasks are included".to_owned(),
+		Kind::ApiDisabled => "Enable the Google Tasks API, then sync again".to_owned(),
+		_ => format!("Tasks: {error}"),
+	}
 }
 
 fn parse_event(entry: EventEntry, calendar: &Calendar, day: NaiveDate) -> Option<Event> {
-    parse_event_in_range(entry, calendar, day, day)
+	parse_event_in_range(entry, calendar, day, day)
 }
 
 fn parse_event_in_range(
-    entry: EventEntry,
-    calendar: &Calendar,
-    first: NaiveDate,
-    last: NaiveDate,
+	entry: EventEntry,
+	calendar: &Calendar,
+	first: NaiveDate,
+	last: NaiveDate,
 ) -> Option<Event> {
-    let start = entry.start.as_ref()?;
-    let end = entry.end.as_ref()?;
+	let start = entry.start.as_ref()?;
+	let end = entry.end.as_ref()?;
 
-    let (start_dt, end_dt, all_day) =
-        match (&start.date_time, &start.date, &end.date_time, &end.date) {
-            (Some(start), _, Some(end), _) => {
-                (parse_date_time(start)?, parse_date_time(end)?, false)
-            }
-            (_, Some(start), _, Some(end)) => {
-                let start_date = NaiveDate::parse_from_str(start, "%Y-%m-%d").ok()?;
-                let end_date = NaiveDate::parse_from_str(end, "%Y-%m-%d").ok()?;
-                // Google's all-day end is exclusive. An event on `day` is kept if
-                // it covers that date.
-                if last < start_date || first >= end_date {
-                    return None;
-                }
-                (date_at(start_date, 0, 0), date_at(end_date, 0, 0), true)
-            }
-            _ => return None,
-        };
+	let (start_dt, end_dt, all_day) =
+		match (&start.date_time, &start.date, &end.date_time, &end.date) {
+			(Some(start), _, Some(end), _) => {
+				(parse_date_time(start)?, parse_date_time(end)?, false)
+			}
+			(_, Some(start), _, Some(end)) => {
+				let start_date = NaiveDate::parse_from_str(start, "%Y-%m-%d").ok()?;
+				let end_date = NaiveDate::parse_from_str(end, "%Y-%m-%d").ok()?;
+				// Google's all-day end is exclusive. An event on `day` is kept if
+				// it covers that date.
+				if last < start_date || first >= end_date {
+					return None;
+				}
+				(date_at(start_date, 0, 0), date_at(end_date, 0, 0), true)
+			}
+			_ => return None,
+		};
 
-    let color = entry
-        .color_id
-        .as_deref()
-        .and_then(colors::event)
-        .unwrap_or(calendar.color);
-    let mut details = details_of(&entry);
-    if entry.extended_properties["private"]["ttKind"].as_str() == Some("task") {
-        details.task_data =
-            Some(super::calendar_tasks::read_data(&entry.extended_properties).ok()?);
-        if let Some(data) = &mut details.task_data {
-            data.metadata.projects = details.projects.clone();
-            data.metadata.labels = details.labels.clone();
-        }
-    }
-    let completed = entry.extended_properties["private"]["ttCompleted"].as_str() == Some("true");
+	let color = entry
+		.color_id
+		.as_deref()
+		.and_then(colors::event)
+		.unwrap_or(calendar.color);
+	let mut details = details_of(&entry);
+	if entry.extended_properties["private"]["ttKind"].as_str() == Some("task") {
+		details.task_data =
+			Some(super::calendar_tasks::read_data(&entry.extended_properties).ok()?);
+		if let Some(data) = &mut details.task_data {
+			data.metadata.projects = details.projects.clone();
+			data.metadata.labels = details.labels.clone();
+		}
+	}
+	let completed = entry.extended_properties["private"]["ttCompleted"].as_str() == Some("true");
 
-    Some(Event {
-        id: entry.id,
-        calendar_id: calendar.id.clone(),
-        title: if entry.summary.is_empty() {
-            "(No title)".to_owned()
-        } else {
-            entry.summary
-        },
-        start: start_dt,
-        end: end_dt,
-        all_day,
-        color,
-        completed,
-        details,
-    })
+	Some(Event {
+		id: entry.id,
+		calendar_id: calendar.id.clone(),
+		title: if entry.summary.is_empty() {
+			"(No title)".to_owned()
+		} else {
+			entry.summary
+		},
+		start: start_dt,
+		end: end_dt,
+		all_day,
+		color,
+		completed,
+		details,
+	})
 }
 
 fn parse_date_time(value: &str) -> Option<DateTime<Local>> {
-    DateTime::parse_from_rfc3339(value)
-        .map(|parsed| parsed.with_timezone(&Local))
-        .ok()
-        .or_else(|| {
-            DateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.f%z")
-                .map(|parsed| parsed.with_timezone(&Local))
-                .ok()
-        })
+	DateTime::parse_from_rfc3339(value)
+		.map(|parsed| parsed.with_timezone(&Local))
+		.ok()
+		.or_else(|| {
+			DateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.f%z")
+				.map(|parsed| parsed.with_timezone(&Local))
+				.ok()
+		})
 }
 
 /// A start or end Google gave as a time, or as a date (taken as midnight).
 fn event_time(time: &EventTime) -> Option<DateTime<Local>> {
-    time.date_time
-        .as_deref()
-        .and_then(parse_date_time)
-        .or_else(|| {
-            time.date
-                .as_deref()
-                .and_then(|date| NaiveDate::parse_from_str(date, "%Y-%m-%d").ok())
-                .map(|date| date_at(date, 0, 0))
-        })
+	time.date_time
+		.as_deref()
+		.and_then(parse_date_time)
+		.or_else(|| {
+			time.date
+				.as_deref()
+				.and_then(|date| NaiveDate::parse_from_str(date, "%Y-%m-%d").ok())
+				.map(|date| date_at(date, 0, 0))
+		})
 }
 
 fn date_at(date: NaiveDate, hour: u32, minute: u32) -> DateTime<Local> {
-    super::at_clock(date, hour, minute)
+	super::at_clock(date, hour, minute)
 }
 
 fn details_of(entry: &EventEntry) -> crate::calendar::Details {
-    let meeting = if !entry.hangout_link.is_empty() {
-        entry.hangout_link.clone()
-    } else {
-        entry
-            .conference
-            .as_ref()
-            .and_then(|conference| {
-                conference
-                    .entry_points
-                    .iter()
-                    .find(|point| point.kind == "video" && !point.uri.is_empty())
-                    .or_else(|| {
-                        conference
-                            .entry_points
-                            .iter()
-                            .find(|point| !point.uri.is_empty())
-                    })
-                    .map(|point| point.uri.clone())
-            })
-            .unwrap_or_default()
-    };
+	let meeting = if !entry.hangout_link.is_empty() {
+		entry.hangout_link.clone()
+	} else {
+		entry
+			.conference
+			.as_ref()
+			.and_then(|conference| {
+				conference
+					.entry_points
+					.iter()
+					.find(|point| point.kind == "video" && !point.uri.is_empty())
+					.or_else(|| {
+						conference
+							.entry_points
+							.iter()
+							.find(|point| !point.uri.is_empty())
+					})
+					.map(|point| point.uri.clone())
+			})
+			.unwrap_or_default()
+	};
 
-    crate::calendar::Details {
-        sleep: super::sleep::Record::from_properties(&entry.extended_properties),
-        options: entry.options.clone(),
-        task_updated_at: None,
-        projects: super::projects::read(&entry.extended_properties),
-        task_data: None,
-        sending: false,
-        location: entry.location.trim().to_owned(),
-        description: plain_text(&entry.description),
-        status: match entry.status.as_deref() {
-            Some("confirmed") => "Confirmed".to_owned(),
-            Some("tentative") => "Tentative".to_owned(),
-            Some("cancelled") => "Cancelled".to_owned(),
-            Some(other) if !other.is_empty() => other.to_owned(),
-            _ => String::new(),
-        },
-        link: entry.html_link.clone(),
-        meeting,
-        organizer: person_label(entry.organizer.as_ref(), false),
-        attendees: entry
-            .attendees
-            .iter()
-            .map(|person| person_label(Some(person), true))
-            .filter(|label| !label.is_empty())
-            .collect(),
-        attendance: attendance_of(entry),
-        labels: entry.extended_properties["private"]["ttLabels"]
-            .as_str()
-            .and_then(|value| serde_json::from_str(value).ok())
-            .unwrap_or_default(),
-        habit_completed_at: entry.extended_properties["private"]["ttCompletedAt"]
-            .as_str()
-            .and_then(parse_date_time),
-        habit: entry.extended_properties["private"]["ttKind"].as_str() == Some("habit"),
-        habit_id: entry.extended_properties["private"][crate::habits::LINK_PROPERTY]
-            .as_str()
-            .map(str::to_owned),
-        recurring_event_id: entry.recurring_event_id.clone(),
-        original_start: entry.original_start_time.as_ref().and_then(event_time),
-        recurrence: entry.recurrence.clone(),
-        split_from: split_from(&entry.extended_properties),
-        color_id: entry.color_id.clone(),
-    }
+	crate::calendar::Details {
+		sleep: super::sleep::Record::from_properties(&entry.extended_properties),
+		options: entry.options.clone(),
+		task_updated_at: None,
+		projects: super::projects::read(&entry.extended_properties),
+		task_data: None,
+		sending: false,
+		location: entry.location.trim().to_owned(),
+		description: plain_text(&entry.description),
+		status: match entry.status.as_deref() {
+			Some("confirmed") => "Confirmed".to_owned(),
+			Some("tentative") => "Tentative".to_owned(),
+			Some("cancelled") => "Cancelled".to_owned(),
+			Some(other) if !other.is_empty() => other.to_owned(),
+			_ => String::new(),
+		},
+		link: entry.html_link.clone(),
+		meeting,
+		organizer: person_label(entry.organizer.as_ref(), false),
+		attendees: entry
+			.attendees
+			.iter()
+			.map(|person| person_label(Some(person), true))
+			.filter(|label| !label.is_empty())
+			.collect(),
+		attendance: attendance_of(entry),
+		labels: entry.extended_properties["private"]["ttLabels"]
+			.as_str()
+			.and_then(|value| serde_json::from_str(value).ok())
+			.unwrap_or_default(),
+		habit_completed_at: entry.extended_properties["private"]["ttCompletedAt"]
+			.as_str()
+			.and_then(parse_date_time),
+		habit: entry.extended_properties["private"]["ttKind"].as_str() == Some("habit"),
+		habit_id: entry.extended_properties["private"][crate::habits::LINK_PROPERTY]
+			.as_str()
+			.map(str::to_owned),
+		recurring_event_id: entry.recurring_event_id.clone(),
+		original_start: entry.original_start_time.as_ref().and_then(event_time),
+		recurrence: entry.recurrence.clone(),
+		split_from: split_from(&entry.extended_properties),
+		color_id: entry.color_id.clone(),
+	}
 }
 
 /// Private property naming the series a split series continues.
 const SPLIT_FROM: &str = "ttSplitFrom";
 
 fn split_from(properties: &serde_json::Value) -> Vec<String> {
-    properties["private"][SPLIT_FROM]
-        .as_str()
-        .and_then(|value| serde_json::from_str(value).ok())
-        .unwrap_or_default()
+	properties["private"][SPLIT_FROM]
+		.as_str()
+		.and_then(|value| serde_json::from_str(value).ok())
+		.unwrap_or_default()
 }
 
 fn attendance_of(entry: &EventEntry) -> super::meeting::Attendance {
-    use super::meeting::{Attendance, Guest, Permissions, Response};
-    let defaults = Permissions::default();
-    Attendance {
-        guests: entry
-            .attendees
-            .iter()
-            .filter(|person| !person.resource && !person.email.is_empty())
-            .map(|person| Guest {
-                email: person.email.clone(),
-                name: person.display_name.clone(),
-                response: Response::parse(&person.response_status),
-                optional: person.optional,
-            })
-            .collect(),
-        permissions: Permissions {
-            modify: entry.guests_can_modify.unwrap_or(defaults.modify),
-            invite_others: entry
-                .guests_can_invite_others
-                .unwrap_or(defaults.invite_others),
-            see_guests: entry
-                .guests_can_see_other_guests
-                .unwrap_or(defaults.see_guests),
-        },
-        organizer: entry.organizer.as_ref().is_some_and(|person| person.own),
-        own_email: entry
-            .attendees
-            .iter()
-            .find(|person| person.own && !person.email.is_empty())
-            .map(|person| person.email.clone()),
-    }
+	use super::meeting::{Attendance, Guest, Permissions, Response};
+	let defaults = Permissions::default();
+	Attendance {
+		guests: entry
+			.attendees
+			.iter()
+			.filter(|person| !person.resource && !person.email.is_empty())
+			.map(|person| Guest {
+				email: person.email.clone(),
+				name: person.display_name.clone(),
+				response: Response::parse(&person.response_status),
+				optional: person.optional,
+			})
+			.collect(),
+		permissions: Permissions {
+			modify: entry.guests_can_modify.unwrap_or(defaults.modify),
+			invite_others: entry
+				.guests_can_invite_others
+				.unwrap_or(defaults.invite_others),
+			see_guests: entry
+				.guests_can_see_other_guests
+				.unwrap_or(defaults.see_guests),
+		},
+		organizer: entry.organizer.as_ref().is_some_and(|person| person.own),
+		own_email: entry
+			.attendees
+			.iter()
+			.find(|person| person.own && !person.email.is_empty())
+			.map(|person| person.email.clone()),
+	}
 }
 
 fn person_label(person: Option<&Person>, with_response: bool) -> String {
-    let Some(person) = person else {
-        return String::new();
-    };
-    let name = if !person.display_name.is_empty() {
-        person.display_name.clone()
-    } else {
-        person.email.clone()
-    };
-    if name.is_empty() {
-        return String::new();
-    }
-    if !with_response {
-        return name;
-    }
-    let response = match person.response_status.as_str() {
-        "accepted" => "accepted",
-        "declined" => "declined",
-        "tentative" => "tentative",
-        "needsAction" => "no reply",
-        _ => "",
-    };
-    if response.is_empty() {
-        name
-    } else {
-        format!("{name} ({response})")
-    }
+	let Some(person) = person else {
+		return String::new();
+	};
+	let name = if !person.display_name.is_empty() {
+		person.display_name.clone()
+	} else {
+		person.email.clone()
+	};
+	if name.is_empty() {
+		return String::new();
+	}
+	if !with_response {
+		return name;
+	}
+	let response = match person.response_status.as_str() {
+		"accepted" => "accepted",
+		"declined" => "declined",
+		"tentative" => "tentative",
+		"needsAction" => "no reply",
+		_ => "",
+	};
+	if response.is_empty() {
+		name
+	} else {
+		format!("{name} ({response})")
+	}
 }
 
 /// Google descriptions are plain text or a small amount of HTML.
 /// Keep anchor destinations as text so the shared link renderer can open them.
 fn plain_text(value: &str) -> String {
-    let mut text = String::with_capacity(value.len());
-    let mut rest = value;
-    let mut anchor: Option<(String, usize)> = None;
-    while let Some(start) = rest.find('<') {
-        text.push_str(&rest[..start]);
-        let Some(end) = rest[start..].find('>').map(|end| start + end) else {
-            text.push_str(&rest[start..]);
-            rest = "";
-            break;
-        };
-        let tag = rest[start + 1..end].trim();
-        let name = tag.split_whitespace().next().unwrap_or("");
-        if name.eq_ignore_ascii_case("a") {
-            anchor = html_href(&tag[name.len()..]).map(|url| (url, text.len()));
-        } else if name.eq_ignore_ascii_case("/a") {
-            if let Some((url, label_start)) = anchor.take() {
-                let url = decode_entities(&url);
-                if decode_entities(text[label_start..].trim()) != url {
-                    text.push_str(" (");
-                    text.push_str(&url);
-                    text.push(')');
-                }
-            }
-        } else if ["br", "br/", "/p", "/div", "/li"]
-            .iter()
-            .any(|name| tag.eq_ignore_ascii_case(name))
-        {
-            text.push('\n');
-        } else if tag.starts_with("https://") || tag.starts_with("http://") {
-            text.push('<');
-            text.push_str(tag);
-            text.push('>');
-        }
-        rest = &rest[end + 1..];
-    }
-    text.push_str(rest);
-    decode_entities(&text).trim().to_owned()
+	let mut text = String::with_capacity(value.len());
+	let mut rest = value;
+	let mut anchor: Option<(String, usize)> = None;
+	while let Some(start) = rest.find('<') {
+		text.push_str(&rest[..start]);
+		let Some(end) = rest[start..].find('>').map(|end| start + end) else {
+			text.push_str(&rest[start..]);
+			rest = "";
+			break;
+		};
+		let tag = rest[start + 1..end].trim();
+		let name = tag.split_whitespace().next().unwrap_or("");
+		if name.eq_ignore_ascii_case("a") {
+			anchor = html_href(&tag[name.len()..]).map(|url| (url, text.len()));
+		} else if name.eq_ignore_ascii_case("/a") {
+			if let Some((url, label_start)) = anchor.take() {
+				let url = decode_entities(&url);
+				if decode_entities(text[label_start..].trim()) != url {
+					text.push_str(" (");
+					text.push_str(&url);
+					text.push(')');
+				}
+			}
+		} else if ["br", "br/", "/p", "/div", "/li"]
+			.iter()
+			.any(|name| tag.eq_ignore_ascii_case(name))
+		{
+			text.push('\n');
+		} else if tag.starts_with("https://") || tag.starts_with("http://") {
+			text.push('<');
+			text.push_str(tag);
+			text.push('>');
+		}
+		rest = &rest[end + 1..];
+	}
+	text.push_str(rest);
+	decode_entities(&text).trim().to_owned()
 }
 
 /// Read quoted or unquoted HTML attributes without confusing data-href or
 /// another attribute's value with the actual destination.
 fn html_href(mut attributes: &str) -> Option<String> {
-    while !attributes.trim_start().is_empty() {
-        attributes = attributes.trim_start();
-        let end = attributes
-            .find(|ch: char| ch.is_whitespace() || ch == '=')
-            .unwrap_or(attributes.len());
-        let name = &attributes[..end];
-        attributes = attributes[end..].trim_start();
-        if !attributes.starts_with('=') {
-            continue;
-        }
-        attributes = attributes[1..].trim_start();
-        let (value, rest) = if let Some(quote) = attributes
-            .chars()
-            .next()
-            .filter(|ch| *ch == '\'' || *ch == '"')
-        {
-            let tail = &attributes[1..];
-            let end = tail.find(quote).unwrap_or(tail.len());
-            (&tail[..end], tail.get(end + 1..).unwrap_or(""))
-        } else {
-            let end = attributes
-                .find(char::is_whitespace)
-                .unwrap_or(attributes.len());
-            (&attributes[..end], &attributes[end..])
-        };
-        if name.eq_ignore_ascii_case("href") {
-            return Some(value.to_owned());
-        }
-        attributes = rest;
-    }
-    None
+	while !attributes.trim_start().is_empty() {
+		attributes = attributes.trim_start();
+		let end = attributes
+			.find(|ch: char| ch.is_whitespace() || ch == '=')
+			.unwrap_or(attributes.len());
+		let name = &attributes[..end];
+		attributes = attributes[end..].trim_start();
+		if !attributes.starts_with('=') {
+			continue;
+		}
+		attributes = attributes[1..].trim_start();
+		let (value, rest) = if let Some(quote) = attributes
+			.chars()
+			.next()
+			.filter(|ch| *ch == '\'' || *ch == '"')
+		{
+			let tail = &attributes[1..];
+			let end = tail.find(quote).unwrap_or(tail.len());
+			(&tail[..end], tail.get(end + 1..).unwrap_or(""))
+		} else {
+			let end = attributes
+				.find(char::is_whitespace)
+				.unwrap_or(attributes.len());
+			(&attributes[..end], &attributes[end..])
+		};
+		if name.eq_ignore_ascii_case("href") {
+			return Some(value.to_owned());
+		}
+		attributes = rest;
+	}
+	None
 }
 
 fn decode_entities(text: &str) -> String {
-    text.replace("&nbsp;", " ")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&#39;", "'")
-        .replace("&quot;", "\"")
-        .replace("&amp;", "&")
+	text.replace("&nbsp;", " ")
+		.replace("&lt;", "<")
+		.replace("&gt;", ">")
+		.replace("&#39;", "'")
+		.replace("&quot;", "\"")
+		.replace("&amp;", "&")
 }
 
 fn day_bounds(day: NaiveDate, day_end_hour: u32) -> (String, String) {
-    let hour = day_end_hour.min(CalendarSettings::MAX_DAY_END_HOUR);
-    let start = date_at(day, hour, 0);
-    let end = date_at(day.succ_opt().unwrap_or(day), hour, 0);
-    (
-        start.with_timezone(&Utc).to_rfc3339(),
-        end.with_timezone(&Utc).to_rfc3339(),
-    )
+	let hour = day_end_hour.min(CalendarSettings::MAX_DAY_END_HOUR);
+	let start = date_at(day, hour, 0);
+	let end = date_at(day.succ_opt().unwrap_or(day), hour, 0);
+	(
+		start.with_timezone(&Utc).to_rfc3339(),
+		end.with_timezone(&Utc).to_rfc3339(),
+	)
 }
 
 pub fn get<T: serde::de::DeserializeOwned>(
-    url: &str,
-    access_token: &str,
+	url: &str,
+	access_token: &str,
 ) -> Result<T, GoogleError> {
-    #[cfg(test)]
-    if let Some(answer) = faked_google("GET", url, None) {
-        return serde_json::from_str(&answer?)
-            .map_err(|error| GoogleError::transport("Google Calendar response", error));
-    }
-    let result = agent()
-        .get(url)
-        .set("Authorization", &format!("Bearer {access_token}"))
-        .set("Accept", "application/json")
-        .call();
+	#[cfg(test)]
+	if let Some(answer) = faked_google("GET", url, None) {
+		return serde_json::from_str(&answer?)
+			.map_err(|error| GoogleError::transport("Google Calendar response", error));
+	}
+	let result = agent()
+		.get(url)
+		.set("Authorization", &format!("Bearer {access_token}"))
+		.set("Accept", "application/json")
+		.call();
 
-    google::send("Google Calendar", result)?
-        .into_json()
-        .map_err(|error| GoogleError::transport("Google Calendar response", error))
+	google::send("Google Calendar", result)?
+		.into_json()
+		.map_err(|error| GoogleError::transport("Google Calendar response", error))
 }
 
 /// Sends a small JSON body to Google and discards the response.
@@ -2814,17 +2813,17 @@ pub fn get<T: serde::de::DeserializeOwned>(
 /// from Calendar or Tasks rather than from whichever call site happened to
 /// share this helper.
 pub fn patch(url: &str, access_token: &str, body: &str, context: &str) -> Result<(), GoogleError> {
-    #[cfg(test)]
-    if let Some(answer) = faked_google("PATCH", url, Some(body)) {
-        return answer.map(|_| ());
-    }
-    let result = agent()
-        .request("PATCH", url)
-        .set("Authorization", &format!("Bearer {access_token}"))
-        .set("Content-Type", "application/json")
-        .send_string(body);
+	#[cfg(test)]
+	if let Some(answer) = faked_google("PATCH", url, Some(body)) {
+		return answer.map(|_| ());
+	}
+	let result = agent()
+		.request("PATCH", url)
+		.set("Authorization", &format!("Bearer {access_token}"))
+		.set("Content-Type", "application/json")
+		.send_string(body);
 
-    google::send(context, result).map(|_| ())
+	google::send(context, result).map(|_| ())
 }
 
 /// Sends a `DELETE` to Google and discards the response.
@@ -2832,16 +2831,16 @@ pub fn patch(url: &str, access_token: &str, body: &str, context: &str) -> Result
 /// A successful deletion comes back as `204 No Content` with no body, so there
 /// is nothing to parse. Blocking: call it from the app's `blocking::run`.
 fn delete(url: &str, access_token: &str, context: &str) -> Result<(), GoogleError> {
-    #[cfg(test)]
-    if let Some(answer) = faked_google("DELETE", url, None) {
-        return answer.map(|_| ());
-    }
-    let result = agent()
-        .request("DELETE", url)
-        .set("Authorization", &format!("Bearer {access_token}"))
-        .call();
+	#[cfg(test)]
+	if let Some(answer) = faked_google("DELETE", url, None) {
+		return answer.map(|_| ());
+	}
+	let result = agent()
+		.request("DELETE", url)
+		.set("Authorization", &format!("Bearer {access_token}"))
+		.call();
 
-    google::send(context, result).map(|_| ())
+	google::send(context, result).map(|_| ())
 }
 
 /// Sends a JSON body to Google and returns the response text.
@@ -2849,809 +2848,810 @@ fn delete(url: &str, access_token: &str, context: &str) -> Result<(), GoogleErro
 /// Used for the one call that needs something back: creating an event, whose
 /// id the caller keeps so the new chip can be drawn without a full sync.
 pub fn post(
-    url: &str,
-    access_token: &str,
-    body: &str,
-    context: &str,
+	url: &str,
+	access_token: &str,
+	body: &str,
+	context: &str,
 ) -> Result<String, GoogleError> {
-    #[cfg(test)]
-    if let Some(answer) = faked_google("POST", url, Some(body)) {
-        return answer;
-    }
-    let result = agent()
-        .post(url)
-        .set("Authorization", &format!("Bearer {access_token}"))
-        .set("Content-Type", "application/json")
-        .send_string(body);
+	#[cfg(test)]
+	if let Some(answer) = faked_google("POST", url, Some(body)) {
+		return answer;
+	}
+	let result = agent()
+		.post(url)
+		.set("Authorization", &format!("Bearer {access_token}"))
+		.set("Content-Type", "application/json")
+		.send_string(body);
 
-    google::send(context, result)?
-        .into_string()
-        .map_err(|error| GoogleError::transport(context, error))
+	google::send(context, result)?
+		.into_string()
+		.map_err(|error| GoogleError::transport(context, error))
 }
 
 pub fn color_or_default(value: Option<Color>) -> Color {
-    value.unwrap_or(colors::DEFAULT_EVENT)
+	value.unwrap_or(colors::DEFAULT_EVENT)
 }
 
 /// Parse a newly written sleep event using the ordinary Google event parser.
 pub(super) fn parse_sleep(value: serde_json::Value, calendar_id: &str) -> Result<Event, String> {
-    let entry: EventEntry = serde_json::from_value(value).map_err(|e| e.to_string())?;
-    let calendar = Calendar {
-        id: calendar_id.to_owned(),
-        name: "TimeSlay".into(),
-        color: super::sleep::COLOR,
-        primary: false,
-        selected_by_google: true,
-    };
-    // Use the event's own interval: a sleep write need not overlap today's window.
-    let day = entry
-        .start
-        .as_ref()
-        .and_then(|start| start.date_time.as_deref())
-        .and_then(parse_date_time)
-        .map(|dt| dt.date_naive())
-        .ok_or("Sleep event has no start time")?;
-    parse_event(entry, &calendar, day).ok_or_else(|| "Invalid sleep event".into())
+	let entry: EventEntry = serde_json::from_value(value).map_err(|e| e.to_string())?;
+	let calendar = Calendar {
+		id: calendar_id.to_owned(),
+		name: "TimeSlay".into(),
+		color: super::sleep::COLOR,
+		primary: false,
+		selected_by_google: true,
+	};
+	// Use the event's own interval: a sleep write need not overlap today's window.
+	let day = entry
+		.start
+		.as_ref()
+		.and_then(|start| start.date_time.as_deref())
+		.and_then(parse_date_time)
+		.map(|dt| dt.date_naive())
+		.ok_or("Sleep event has no start time")?;
+	parse_event(entry, &calendar, day).ok_or_else(|| "Invalid sleep event".into())
 }
 
 #[cfg(test)]
 mod tests {
-    fn mapped_task() -> (tempfile::TempDir, std::path::PathBuf, super::Event) {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("timeslay.sqlite3");
-        let mut db = crate::task_db::Database::open(&path).unwrap();
-        let mut event = super::super::sample_snapshot().events.remove(0);
-        event.id = "task:google-id".into();
-        event.calendar_id = "tasks:google-list".into();
-        event.details = Default::default();
-        let data = db.import(&event).unwrap();
-        event.details.task_data = Some(data);
-        db.connection().execute(
+	fn mapped_task() -> (tempfile::TempDir, std::path::PathBuf, super::Event) {
+		let dir = tempfile::tempdir().unwrap();
+		let path = dir.path().join("timeslay.sqlite3");
+		let mut db = crate::task_db::Database::open(&path).unwrap();
+		let mut event = super::super::sample_snapshot().events.remove(0);
+		event.id = "task:google-id".into();
+		event.calendar_id = "tasks:google-list".into();
+		event.details = Default::default();
+		let data = db.import(&event).unwrap();
+		event.details.task_data = Some(data);
+		db.connection().execute(
             "INSERT INTO google_id_map(local,remote,calendar) VALUES('local-id','google-id','tasks:google-list')",
             [],
         ).unwrap();
-        (dir, path, event)
-    }
+		(dir, path, event)
+	}
 
-    #[test]
-    fn unchanged_remote_task_is_not_saved_under_its_local_ui_id() {
-        let (_dir, path, task) = mapped_task();
-        let mut events = vec![task];
-        super::reconcile_task_metadata_and_overlay(
-            &path,
-            &mut events,
-            crate::clock::now(),
-            |_, _| panic!("unchanged remote metadata must not be published"),
-        )
-        .unwrap();
-        assert_eq!(events[0].id, "task:local-id");
-        // The UI identity has no database alias; checking it after overlay was
-        // what triggered a spurious save to an invalid Google task ID.
-        assert!(
-            crate::task_db::Database::open(&path)
-                .unwrap()
-                .lookup(&events[0])
-                .unwrap()
-                .is_none()
-        );
-    }
+	#[test]
+	fn unchanged_remote_task_is_not_saved_under_its_local_ui_id() {
+		let (_dir, path, task) = mapped_task();
+		let mut events = vec![task];
+		super::reconcile_task_metadata_and_overlay(
+			&path,
+			&mut events,
+			crate::clock::now(),
+			|_, _| panic!("unchanged remote metadata must not be published"),
+		)
+		.unwrap();
+		assert_eq!(events[0].id, "task:local-id");
+		// The UI identity has no database alias; checking it after overlay was
+		// what triggered a spurious save to an invalid Google task ID.
+		assert!(
+			crate::task_db::Database::open(&path)
+				.unwrap()
+				.lookup(&events[0])
+				.unwrap()
+				.is_none()
+		);
+	}
 
-    #[test]
-    fn remote_merge_is_saved_with_google_identity_before_pending_edits_are_overlaid() {
-        let (_dir, path, mut task) = mapped_task();
-        task.details.task_data.as_mut().unwrap().metadata.minutes = 45;
-        let mut pending = task.clone();
-        pending.id = "task:local-id".into();
-        pending.details.task_data.as_mut().unwrap().metadata.minutes = 90;
-        let mut db = crate::task_db::Database::open(&path).unwrap();
-        db.connection()
-            .execute(
-                "INSERT INTO google_entities(id,event) VALUES(?1,?2)",
-                rusqlite::params![
-                    "tasks:google-list\ntask:local-id",
-                    serde_json::to_string(&pending).unwrap()
-                ],
-            )
-            .unwrap();
-        let mut events = vec![task.clone()];
-        let mut sent = Vec::new();
-        super::reconcile_task_metadata_and_overlay(
-            &path,
-            &mut events,
-            crate::clock::now(),
-            |event, data| {
-                sent.push((
-                    event.id.clone(),
-                    event.calendar_id.clone(),
-                    data.metadata.minutes,
-                ));
-                Ok(())
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            sent,
-            [("task:google-id".into(), "tasks:google-list".into(), 45)]
-        );
-        assert_eq!(db.lookup(&task).unwrap(), task.details.task_data);
-        assert_eq!(events[0], pending);
-    }
+	#[test]
+	fn remote_merge_is_saved_with_google_identity_before_pending_edits_are_overlaid() {
+		let (_dir, path, mut task) = mapped_task();
+		task.details.task_data.as_mut().unwrap().metadata.minutes = 45;
+		let mut pending = task.clone();
+		pending.id = "task:local-id".into();
+		pending.details.task_data.as_mut().unwrap().metadata.minutes = 90;
+		let mut db = crate::task_db::Database::open(&path).unwrap();
+		db.connection()
+			.execute(
+				"INSERT INTO google_entities(id,event) VALUES(?1,?2)",
+				rusqlite::params![
+					"tasks:google-list\ntask:local-id",
+					serde_json::to_string(&pending).unwrap()
+				],
+			)
+			.unwrap();
+		let mut events = vec![task.clone()];
+		let mut sent = Vec::new();
+		super::reconcile_task_metadata_and_overlay(
+			&path,
+			&mut events,
+			crate::clock::now(),
+			|event, data| {
+				sent.push((
+					event.id.clone(),
+					event.calendar_id.clone(),
+					data.metadata.minutes,
+				));
+				Ok(())
+			},
+		)
+		.unwrap();
+		assert_eq!(
+			sent,
+			[("task:google-id".into(), "tasks:google-list".into(), 45)]
+		);
+		assert_eq!(db.lookup(&task).unwrap(), task.details.task_data);
+		assert_eq!(events[0], pending);
+	}
 
-    #[test]
-    fn refresh_cannot_publish_stale_metadata_while_an_edit_is_sending() {
-        let (_dir, path, mut remote) = mapped_task();
-        let mut pending = remote.clone();
-        pending.id = "task:local-id".into();
-        pending.details.task_data.as_mut().unwrap().metadata.block = Some("app/new-block".into());
-        let mut db = crate::task_db::Database::open(&path).unwrap();
-        db.connection()
-            .execute(
-                "INSERT INTO google_entities(id,event) VALUES(?1,?2)",
-                rusqlite::params![
-                    "tasks:google-list\ntask:local-id",
-                    serde_json::to_string(&pending).unwrap()
-                ],
-            )
-            .unwrap();
-        db.connection()
-            .execute(
-                "UPDATE google_entities SET sending_since=?2 WHERE id=?1",
-                rusqlite::params![
-                    "tasks:google-list\ntask:local-id",
-                    crate::clock::utc_now().to_rfc3339()
-                ],
-            )
-            .unwrap();
-        remote.details.task_data.as_mut().unwrap().metadata.minutes = 45;
-        let mut events = vec![remote];
-        super::reconcile_task_metadata_and_overlay(
-            &path,
-            &mut events,
-            crate::clock::now(),
-            |_, _| panic!("pending edits must not be overwritten by reconciliation"),
-        )
-        .unwrap();
-        assert_eq!(
-            crate::timeblocking::metadata(&events[0]).block.as_deref(),
-            Some("app/new-block")
-        );
-    }
+	#[test]
+	fn refresh_cannot_publish_stale_metadata_while_an_edit_is_sending() {
+		let (_dir, path, mut remote) = mapped_task();
+		let mut pending = remote.clone();
+		pending.id = "task:local-id".into();
+		pending.details.task_data.as_mut().unwrap().metadata.block = Some("app/new-block".into());
+		let mut db = crate::task_db::Database::open(&path).unwrap();
+		db.connection()
+			.execute(
+				"INSERT INTO google_entities(id,event) VALUES(?1,?2)",
+				rusqlite::params![
+					"tasks:google-list\ntask:local-id",
+					serde_json::to_string(&pending).unwrap()
+				],
+			)
+			.unwrap();
+		db.connection()
+			.execute(
+				"UPDATE google_entities SET sending_since=?2 WHERE id=?1",
+				rusqlite::params![
+					"tasks:google-list\ntask:local-id",
+					crate::clock::utc_now().to_rfc3339()
+				],
+			)
+			.unwrap();
+		remote.details.task_data.as_mut().unwrap().metadata.minutes = 45;
+		let mut events = vec![remote];
+		super::reconcile_task_metadata_and_overlay(
+			&path,
+			&mut events,
+			crate::clock::now(),
+			|_, _| panic!("pending edits must not be overwritten by reconciliation"),
+		)
+		.unwrap();
+		assert_eq!(
+			crate::timeblocking::metadata(&events[0]).block.as_deref(),
+			Some("app/new-block")
+		);
+	}
 
-    #[test]
-    fn failed_remote_metadata_save_leaves_cache_and_identity_retryable() {
-        let (_dir, path, mut task) = mapped_task();
-        let db = crate::task_db::Database::open(&path).unwrap();
-        let before = db.lookup(&task).unwrap();
-        task.details.task_data.as_mut().unwrap().metadata.minutes = 45;
-        let mut events = vec![task];
-        assert_eq!(
-            super::reconcile_task_metadata_and_overlay(
-                &path,
-                &mut events,
-                crate::clock::now(),
-                |event, _| {
-                    assert_eq!(event.id, "task:google-id");
-                    Err("offline".into())
-                }
-            ),
-            Err("offline".into())
-        );
-        assert_eq!(events[0].id, "task:google-id");
-        assert_eq!(db.lookup(&events[0]).unwrap(), before);
-    }
+	#[test]
+	fn failed_remote_metadata_save_leaves_cache_and_identity_retryable() {
+		let (_dir, path, mut task) = mapped_task();
+		let db = crate::task_db::Database::open(&path).unwrap();
+		let before = db.lookup(&task).unwrap();
+		task.details.task_data.as_mut().unwrap().metadata.minutes = 45;
+		let mut events = vec![task];
+		assert_eq!(
+			super::reconcile_task_metadata_and_overlay(
+				&path,
+				&mut events,
+				crate::clock::now(),
+				|event, _| {
+					assert_eq!(event.id, "task:google-id");
+					Err("offline".into())
+				}
+			),
+			Err("offline".into())
+		);
+		assert_eq!(events[0].id, "task:google-id");
+		assert_eq!(db.lookup(&events[0]).unwrap(), before);
+	}
 
-    #[test]
-    fn queued_event_edits_neither_export_defaults_nor_clear_google_colors() {
-        let event = super::super::sample_snapshot().events.remove(0);
-        for color in [None, Some("5")] {
-            let body = event_patch_body(
-                &event.title,
-                "Notes",
-                color,
-                event.start,
-                event.end,
-                None,
-                &[],
-                false,
-                &[],
-                None,
-            )
-            .unwrap();
-            assert!(
-                body.get("colorId").is_none(),
-                "edits preserve Google overrides"
-            );
-        }
-    }
+	#[test]
+	fn queued_event_edits_neither_export_defaults_nor_clear_google_colors() {
+		let event = super::super::sample_snapshot().events.remove(0);
+		for color in [None, Some("5")] {
+			let body = event_patch_body(
+				&event.title,
+				"Notes",
+				color,
+				event.start,
+				event.end,
+				None,
+				&[],
+				false,
+				&[],
+				None,
+			)
+			.unwrap();
+			assert!(
+				body.get("colorId").is_none(),
+				"edits preserve Google overrides"
+			);
+		}
+	}
 
-    #[test]
-    fn moving_an_event_names_both_calendars_encoded() {
-        assert_eq!(
-            super::move_event_url("me@example.com", "abc", "team#x@group.calendar.google.com"),
-            format!(
-                "{}/me%40example.com/events/abc/move?destination=team%23x%40group.calendar.google.com",
-                super::EVENTS
-            )
-        );
-    }
+	#[test]
+	fn moving_an_event_names_both_calendars_encoded() {
+		assert_eq!(
+			super::move_event_url("me@example.com", "abc", "team#x@group.calendar.google.com"),
+			format!(
+				"{}/me%40example.com/events/abc/move?destination=team%23x%40group.calendar.google.com",
+				super::EVENTS
+			)
+		);
+	}
 
-    #[test]
-    fn splitting_a_series_keeps_past_dates_and_the_remaining_count() {
-        let boundary = DateTime::parse_from_rfc3339("2026-10-30T09:00:00-07:00")
-            .unwrap()
-            .with_timezone(&Local);
-        let (past, future) =
-            super::split_recurrence(&["RRULE:FREQ=DAILY;COUNT=10".into()], boundary, 4, false)
-                .unwrap();
-        assert_eq!(past, ["RRULE:FREQ=DAILY;UNTIL=20261030T155959Z"]);
-        assert_eq!(future, ["RRULE:FREQ=DAILY;COUNT=6"]);
-    }
+	#[test]
+	fn splitting_a_series_keeps_past_dates_and_the_remaining_count() {
+		let boundary = DateTime::parse_from_rfc3339("2026-10-30T09:00:00-07:00")
+			.unwrap()
+			.with_timezone(&Local);
+		let (past, future) =
+			super::split_recurrence(&["RRULE:FREQ=DAILY;COUNT=10".into()], boundary, 4, false)
+				.unwrap();
+		assert_eq!(past, ["RRULE:FREQ=DAILY;UNTIL=20261030T155959Z"]);
+		assert_eq!(future, ["RRULE:FREQ=DAILY;COUNT=6"]);
+	}
 
-    #[test]
-    fn splitting_an_all_day_series_uses_a_date_until_and_preserves_the_end() {
-        let boundary = super::json_event_start(&serde_json::json!({"date": "2026-10-30"})).unwrap();
-        let lines = vec![
-            "RRULE:FREQ=WEEKLY;UNTIL=20261231".into(),
-            "EXDATE;VALUE=DATE:20261106".into(),
-        ];
-        let (past, future) = super::split_recurrence(&lines, boundary, 0, true).unwrap();
-        assert_eq!(past[0], "RRULE:FREQ=WEEKLY;UNTIL=20261029");
-        assert_eq!(future, lines);
-        assert_eq!(past[1], lines[1]);
-    }
+	#[test]
+	fn splitting_an_all_day_series_uses_a_date_until_and_preserves_the_end() {
+		let boundary = super::json_event_start(&serde_json::json!({"date": "2026-10-30"})).unwrap();
+		let lines = vec![
+			"RRULE:FREQ=WEEKLY;UNTIL=20261231".into(),
+			"EXDATE;VALUE=DATE:20261106".into(),
+		];
+		let (past, future) = super::split_recurrence(&lines, boundary, 0, true).unwrap();
+		assert_eq!(past[0], "RRULE:FREQ=WEEKLY;UNTIL=20261029");
+		assert_eq!(future, lines);
+		assert_eq!(past[1], lines[1]);
+	}
 
-    #[test]
-    fn unsupported_custom_splits_fail_before_writing() {
-        let boundary = crate::clock::now();
-        assert!(
-            super::split_recurrence(&["RDATE:20261101T090000Z".into()], boundary, 0, false)
-                .is_err()
-        );
-        assert!(
-            super::split_recurrence(&["RRULE:FREQ=DAILY;COUNT=3".into()], boundary, 3, false)
-                .is_err()
-        );
-    }
+	#[test]
+	fn unsupported_custom_splits_fail_before_writing() {
+		let boundary = crate::clock::now();
+		assert!(
+			super::split_recurrence(&["RDATE:20261101T090000Z".into()], boundary, 0, false)
+				.is_err()
+		);
+		assert!(
+			super::split_recurrence(&["RRULE:FREQ=DAILY;COUNT=3".into()], boundary, 3, false)
+				.is_err()
+		);
+	}
 
-    use super::*;
+	use super::*;
 
-    #[test]
-    fn descriptions_keep_html_link_targets_and_line_breaks() {
-        assert_eq!(
-            plain_text(
-                "<p>Join <a href=\"https://example.org/?a=1&amp;b=2\">the meeting</a></p><br>Bring notes"
-            ),
-            "Join the meeting (https://example.org/?a=1&b=2)\n\nBring notes"
-        );
-        assert_eq!(
-            plain_text("<A title='more info' HREF='https://example.org'>https://example.org</A>"),
-            "https://example.org"
-        );
-        assert_eq!(
-            plain_text("<a href=https://example.org>Visit</a>"),
-            "Visit (https://example.org)"
-        );
-        assert_eq!(
-            plain_text("See <https://example.org>"),
-            "See <https://example.org>"
-        );
-    }
+	#[test]
+	fn descriptions_keep_html_link_targets_and_line_breaks() {
+		assert_eq!(
+			plain_text(
+				"<p>Join <a href=\"https://example.org/?a=1&amp;b=2\">the meeting</a></p><br>Bring notes"
+			),
+			"Join the meeting (https://example.org/?a=1&b=2)\n\nBring notes"
+		);
+		assert_eq!(
+			plain_text("<A title='more info' HREF='https://example.org'>https://example.org</A>"),
+			"https://example.org"
+		);
+		assert_eq!(
+			plain_text("<a href=https://example.org>Visit</a>"),
+			"Visit (https://example.org)"
+		);
+		assert_eq!(
+			plain_text("See <https://example.org>"),
+			"See <https://example.org>"
+		);
+	}
 
-    #[test]
-    fn all_day_events_use_exclusive_ends() {
-        let calendar = Calendar {
-            id: "primary".into(),
-            name: "Personal".into(),
-            color: colors::DEFAULT_EVENT,
-            primary: true,
-            selected_by_google: true,
-        };
-        let day = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
-        let entry = EventEntry {
-            id: "1".into(),
-            summary: "Holiday".into(),
-            start: Some(EventTime {
-                date_time: None,
-                date: Some("2026-10-01".into()),
-            }),
-            end: Some(EventTime {
-                date_time: None,
-                date: Some("2026-10-02".into()),
-            }),
-            color_id: None,
-            status: None,
-            ..EventEntry::default()
-        };
+	#[test]
+	fn all_day_events_use_exclusive_ends() {
+		let calendar = Calendar {
+			id: "primary".into(),
+			name: "Personal".into(),
+			color: colors::DEFAULT_EVENT,
+			primary: true,
+			selected_by_google: true,
+		};
+		let day = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
+		let entry = EventEntry {
+			id: "1".into(),
+			summary: "Holiday".into(),
+			start: Some(EventTime {
+				date_time: None,
+				date: Some("2026-10-01".into()),
+			}),
+			end: Some(EventTime {
+				date_time: None,
+				date: Some("2026-10-02".into()),
+			}),
+			color_id: None,
+			status: None,
+			..EventEntry::default()
+		};
 
-        let event = parse_event(entry, &calendar, day).unwrap();
-        assert!(event.all_day);
-        assert_eq!(event.title, "Holiday");
-    }
+		let event = parse_event(entry, &calendar, day).unwrap();
+		assert!(event.all_day);
+		assert_eq!(event.title, "Holiday");
+	}
 
-    #[test]
-    fn range_parser_keeps_all_day_events_anywhere_in_the_range() {
-        let calendar = Calendar {
-            id: "primary".into(),
-            name: "Personal".into(),
-            color: colors::DEFAULT_EVENT,
-            primary: true,
-            selected_by_google: true,
-        };
-        let entry = || EventEntry {
-            id: "holiday".into(),
-            start: Some(EventTime {
-                date_time: None,
-                date: Some("2026-10-20".into()),
-            }),
-            end: Some(EventTime {
-                date_time: None,
-                date: Some("2026-10-22".into()),
-            }),
-            ..EventEntry::default()
-        };
-        let day = |day| NaiveDate::from_ymd_opt(2026, 10, day).unwrap();
-        assert!(parse_event_in_range(entry(), &calendar, day(14), day(22)).is_some());
-        assert!(parse_event_in_range(entry(), &calendar, day(14), day(19)).is_none());
-        assert!(parse_event_in_range(entry(), &calendar, day(22), day(25)).is_none());
-    }
+	#[test]
+	fn range_parser_keeps_all_day_events_anywhere_in_the_range() {
+		let calendar = Calendar {
+			id: "primary".into(),
+			name: "Personal".into(),
+			color: colors::DEFAULT_EVENT,
+			primary: true,
+			selected_by_google: true,
+		};
+		let entry = || EventEntry {
+			id: "holiday".into(),
+			start: Some(EventTime {
+				date_time: None,
+				date: Some("2026-10-20".into()),
+			}),
+			end: Some(EventTime {
+				date_time: None,
+				date: Some("2026-10-22".into()),
+			}),
+			..EventEntry::default()
+		};
+		let day = |day| NaiveDate::from_ymd_opt(2026, 10, day).unwrap();
+		assert!(parse_event_in_range(entry(), &calendar, day(14), day(22)).is_some());
+		assert!(parse_event_in_range(entry(), &calendar, day(14), day(19)).is_none());
+		assert!(parse_event_in_range(entry(), &calendar, day(22), day(25)).is_none());
+	}
 
-    #[test]
-    fn cancelled_events_are_not_parsed_by_the_status_guard() {
-        // parse_event itself does not look at status; fetch_events drops them.
-        // This keeps the parser focused on times.
-        let calendar = Calendar {
-            id: "primary".into(),
-            name: "Personal".into(),
-            color: colors::DEFAULT_EVENT,
-            primary: true,
-            selected_by_google: true,
-        };
-        let day = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
-        let entry = EventEntry {
-            id: "1".into(),
-            summary: "Gone".into(),
-            start: Some(EventTime {
-                date_time: Some("2026-10-01T09:00:00-07:00".into()),
-                date: None,
-            }),
-            end: Some(EventTime {
-                date_time: Some("2026-10-01T10:00:00-07:00".into()),
-                date: None,
-            }),
-            color_id: Some("11".into()),
-            status: Some("cancelled".into()),
-            ..EventEntry::default()
-        };
+	#[test]
+	fn cancelled_events_are_not_parsed_by_the_status_guard() {
+		// parse_event itself does not look at status; fetch_events drops them.
+		// This keeps the parser focused on times.
+		let calendar = Calendar {
+			id: "primary".into(),
+			name: "Personal".into(),
+			color: colors::DEFAULT_EVENT,
+			primary: true,
+			selected_by_google: true,
+		};
+		let day = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
+		let entry = EventEntry {
+			id: "1".into(),
+			summary: "Gone".into(),
+			start: Some(EventTime {
+				date_time: Some("2026-10-01T09:00:00-07:00".into()),
+				date: None,
+			}),
+			end: Some(EventTime {
+				date_time: Some("2026-10-01T10:00:00-07:00".into()),
+				date: None,
+			}),
+			color_id: Some("11".into()),
+			status: Some("cancelled".into()),
+			..EventEntry::default()
+		};
 
-        let event = parse_event(entry, &calendar, day).unwrap();
-        assert!(!event.all_day);
-        assert_eq!(event.color, colors::event("11").unwrap());
-    }
+		let event = parse_event(entry, &calendar, day).unwrap();
+		assert!(!event.all_day);
+		assert_eq!(event.color, colors::event("11").unwrap());
+	}
 
-    #[test]
-    fn event_options_keep_inherited_notifications_when_customizing() {
-        use super::super::event_options::Action;
-        let list: EventList = serde_json::from_value(serde_json::json!({
-            "defaultReminders": [{"method":"popup", "minutes":30}, {"method":"email", "minutes":1440}],
-            "items": [{"reminders":{"useDefault":true}}]
-        })).unwrap();
-        let mut options = list.items.into_iter().next().unwrap().options;
-        options.default_reminders = list.default_reminders;
-        options.update(Action::Add);
-        assert_eq!(options.reminders.overrides.len(), 3);
-        let mut body = serde_json::json!({});
-        options.write(&mut body).unwrap();
-        assert_eq!(body["reminders"]["overrides"][0]["minutes"], 30);
-        assert_eq!(body["reminders"]["useDefault"], false);
-        assert!(body.get("default_reminders").is_none());
-    }
+	#[test]
+	fn event_options_keep_inherited_notifications_when_customizing() {
+		use super::super::event_options::Action;
+		let list: EventList = serde_json::from_value(serde_json::json!({
+			"defaultReminders": [{"method":"popup", "minutes":30}, {"method":"email", "minutes":1440}],
+			"items": [{"reminders":{"useDefault":true}}]
+		}))
+		.unwrap();
+		let mut options = list.items.into_iter().next().unwrap().options;
+		options.default_reminders = list.default_reminders;
+		options.update(Action::Add);
+		assert_eq!(options.reminders.overrides.len(), 3);
+		let mut body = serde_json::json!({});
+		options.write(&mut body).unwrap();
+		assert_eq!(body["reminders"]["overrides"][0]["minutes"], 30);
+		assert_eq!(body["reminders"]["useDefault"], false);
+		assert!(body.get("default_reminders").is_none());
+	}
 
-    #[test]
-    fn event_options_survive_google_sync_cache_edit_and_patch() {
-        use super::super::event_options::{Action, Availability, Visibility};
-        let entry: EventEntry = serde_json::from_value(serde_json::json!({
-            "reminders": {"useDefault": false, "overrides": [
-                {"method": "popup", "minutes": 10},
-                {"method": "email", "minutes": 1440}
-            ]},
-            "transparency": "transparent", "visibility": "private"
-        }))
-        .unwrap();
-        let cached = serde_json::to_string(&details_of(&entry)).unwrap();
-        let mut event = super::super::sample_snapshot().events.remove(0);
-        event.details = serde_json::from_str(&cached).unwrap();
-        let mut draft = super::super::EditDraft::from_event(&event);
-        assert_eq!(draft.options.transparency, Availability::Free);
-        assert_eq!(draft.options.visibility, Visibility::Private);
-        assert_eq!(draft.options.reminders.overrides.len(), 2);
-        let body = event_patch_body(
-            &draft.title,
-            &draft.description,
-            None,
-            draft.start,
-            draft.end,
-            None,
-            &[],
-            false,
-            &[],
-            Some(&draft.options),
-        )
-        .unwrap();
-        assert_eq!(body["reminders"]["overrides"][1]["minutes"], 1440);
-        assert_eq!(body["reminders"]["overrides"][1]["method"], "email");
-        assert_eq!(body["transparency"], "transparent");
-        assert_eq!(body["visibility"], "private");
-        draft.options.update(Action::Remove(1));
-        draft.options.update(Action::Remove(0));
-        let mut body = serde_json::json!({});
-        draft.options.write(&mut body).unwrap();
-        assert_eq!(
-            body["reminders"],
-            serde_json::json!({"useDefault": false, "overrides": []})
-        );
-        draft.options.update(Action::Defaults(true));
-        draft
-            .options
-            .update(Action::Availability(Availability::Busy));
-        draft
-            .options
-            .update(Action::Visibility(Visibility::Default));
-        draft.options.write(&mut body).unwrap();
-        assert_eq!(body["reminders"], serde_json::json!({"useDefault": true}));
-        assert_eq!(body["transparency"], "opaque");
-        assert_eq!(body["visibility"], "default");
-        let old: super::super::Details = serde_json::from_str("{}").unwrap();
-        assert!(old.options.reminders.use_default);
-    }
+	#[test]
+	fn event_options_survive_google_sync_cache_edit_and_patch() {
+		use super::super::event_options::{Action, Availability, Visibility};
+		let entry: EventEntry = serde_json::from_value(serde_json::json!({
+			"reminders": {"useDefault": false, "overrides": [
+				{"method": "popup", "minutes": 10},
+				{"method": "email", "minutes": 1440}
+			]},
+			"transparency": "transparent", "visibility": "private"
+		}))
+		.unwrap();
+		let cached = serde_json::to_string(&details_of(&entry)).unwrap();
+		let mut event = super::super::sample_snapshot().events.remove(0);
+		event.details = serde_json::from_str(&cached).unwrap();
+		let mut draft = super::super::EditDraft::from_event(&event);
+		assert_eq!(draft.options.transparency, Availability::Free);
+		assert_eq!(draft.options.visibility, Visibility::Private);
+		assert_eq!(draft.options.reminders.overrides.len(), 2);
+		let body = event_patch_body(
+			&draft.title,
+			&draft.description,
+			None,
+			draft.start,
+			draft.end,
+			None,
+			&[],
+			false,
+			&[],
+			Some(&draft.options),
+		)
+		.unwrap();
+		assert_eq!(body["reminders"]["overrides"][1]["minutes"], 1440);
+		assert_eq!(body["reminders"]["overrides"][1]["method"], "email");
+		assert_eq!(body["transparency"], "transparent");
+		assert_eq!(body["visibility"], "private");
+		draft.options.update(Action::Remove(1));
+		draft.options.update(Action::Remove(0));
+		let mut body = serde_json::json!({});
+		draft.options.write(&mut body).unwrap();
+		assert_eq!(
+			body["reminders"],
+			serde_json::json!({"useDefault": false, "overrides": []})
+		);
+		draft.options.update(Action::Defaults(true));
+		draft
+			.options
+			.update(Action::Availability(Availability::Busy));
+		draft
+			.options
+			.update(Action::Visibility(Visibility::Default));
+		draft.options.write(&mut body).unwrap();
+		assert_eq!(body["reminders"], serde_json::json!({"useDefault": true}));
+		assert_eq!(body["transparency"], "opaque");
+		assert_eq!(body["visibility"], "default");
+		let old: super::super::Details = serde_json::from_str("{}").unwrap();
+		assert!(old.options.reminders.use_default);
+	}
 
-    #[test]
-    fn event_projects_survive_sync_cache_and_reopening_the_editor() {
-        let entry: EventEntry = serde_json::from_value(serde_json::json!({
+	#[test]
+	fn event_projects_survive_sync_cache_and_reopening_the_editor() {
+		let entry: EventEntry = serde_json::from_value(serde_json::json!({
             "extendedProperties": { "private": { "ttProjects": "[7,3]", "ttKind": "habit", "ttLabels": "[\"work\",\"meeting\"]" } }
         }))
         .unwrap();
-        let details = details_of(&entry);
-        assert_eq!(details.projects, vec![3, 7]);
-        assert!(details.habit);
-        let cached = serde_json::to_string(&details).unwrap();
-        let mut event = super::super::sample_snapshot().events.remove(0);
-        event.details = serde_json::from_str(&cached).unwrap();
-        let draft = super::super::EditDraft::from_event(&event);
-        assert_eq!(draft.projects.ids, vec![3, 7]);
-        assert_eq!(draft.labels, ["work", "meeting"]);
-        let old: super::super::Details = serde_json::from_str("{}").unwrap();
-        assert!(old.projects.is_empty());
-    }
+		let details = details_of(&entry);
+		assert_eq!(details.projects, vec![3, 7]);
+		assert!(details.habit);
+		let cached = serde_json::to_string(&details).unwrap();
+		let mut event = super::super::sample_snapshot().events.remove(0);
+		event.details = serde_json::from_str(&cached).unwrap();
+		let draft = super::super::EditDraft::from_event(&event);
+		assert_eq!(draft.projects.ids, vec![3, 7]);
+		assert_eq!(draft.labels, ["work", "meeting"]);
+		let old: super::super::Details = serde_json::from_str("{}").unwrap();
+		assert!(old.projects.is_empty());
+	}
 
-    #[test]
-    fn event_details_keep_the_fields_worth_reading() {
-        let calendar = Calendar {
-            id: "primary".into(),
-            name: "Personal".into(),
-            color: colors::DEFAULT_EVENT,
-            primary: true,
-            selected_by_google: true,
-        };
-        let day = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
-        let entry = EventEntry {
-            id: "1".into(),
-            summary: "Sync".into(),
-            description: "<b>Bring notes</b> &amp; coffee".into(),
-            location: "Room 4".into(),
-            html_link: "https://calendar.google.com/event?eid=1".into(),
-            hangout_link: "https://meet.google.com/abc-defg-hij".into(),
-            start: Some(EventTime {
-                date_time: Some("2026-10-01T09:00:00-07:00".into()),
-                date: None,
-            }),
-            end: Some(EventTime {
-                date_time: Some("2026-10-01T10:00:00-07:00".into()),
-                date: None,
-            }),
-            status: Some("confirmed".into()),
-            organizer: Some(Person {
-                email: "ada@example.com".into(),
-                display_name: "Ada".into(),
-                response_status: String::new(),
-                own: true,
-                resource: false,
-                optional: false,
-            }),
-            attendees: vec![Person {
-                email: "grace@example.com".into(),
-                display_name: "Grace".into(),
-                response_status: "accepted".into(),
-                own: false,
-                resource: false,
-                optional: false,
-            }],
-            ..EventEntry::default()
-        };
+	#[test]
+	fn event_details_keep_the_fields_worth_reading() {
+		let calendar = Calendar {
+			id: "primary".into(),
+			name: "Personal".into(),
+			color: colors::DEFAULT_EVENT,
+			primary: true,
+			selected_by_google: true,
+		};
+		let day = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
+		let entry = EventEntry {
+			id: "1".into(),
+			summary: "Sync".into(),
+			description: "<b>Bring notes</b> &amp; coffee".into(),
+			location: "Room 4".into(),
+			html_link: "https://calendar.google.com/event?eid=1".into(),
+			hangout_link: "https://meet.google.com/abc-defg-hij".into(),
+			start: Some(EventTime {
+				date_time: Some("2026-10-01T09:00:00-07:00".into()),
+				date: None,
+			}),
+			end: Some(EventTime {
+				date_time: Some("2026-10-01T10:00:00-07:00".into()),
+				date: None,
+			}),
+			status: Some("confirmed".into()),
+			organizer: Some(Person {
+				email: "ada@example.com".into(),
+				display_name: "Ada".into(),
+				response_status: String::new(),
+				own: true,
+				resource: false,
+				optional: false,
+			}),
+			attendees: vec![Person {
+				email: "grace@example.com".into(),
+				display_name: "Grace".into(),
+				response_status: "accepted".into(),
+				own: false,
+				resource: false,
+				optional: false,
+			}],
+			..EventEntry::default()
+		};
 
-        let event = parse_event(entry, &calendar, day).unwrap();
-        assert_eq!(event.details.location, "Room 4");
-        assert_eq!(event.details.description, "Bring notes & coffee");
-        assert_eq!(event.details.status, "Confirmed");
-        assert_eq!(event.details.organizer, "Ada");
-        assert_eq!(event.details.attendees, vec!["Grace (accepted)".to_owned()]);
-        assert!(event.details.attendance.organizer);
-        assert_eq!(event.details.attendance.own_email, None);
-        assert_eq!(
-            event.details.attendance.guests[0].email,
-            "grace@example.com"
-        );
-        assert_eq!(
-            event.details.meeting,
-            "https://meet.google.com/abc-defg-hij"
-        );
-        assert!(event.details.link.contains("calendar.google.com"));
-    }
+		let event = parse_event(entry, &calendar, day).unwrap();
+		assert_eq!(event.details.location, "Room 4");
+		assert_eq!(event.details.description, "Bring notes & coffee");
+		assert_eq!(event.details.status, "Confirmed");
+		assert_eq!(event.details.organizer, "Ada");
+		assert_eq!(event.details.attendees, vec!["Grace (accepted)".to_owned()]);
+		assert!(event.details.attendance.organizer);
+		assert_eq!(event.details.attendance.own_email, None);
+		assert_eq!(
+			event.details.attendance.guests[0].email,
+			"grace@example.com"
+		);
+		assert_eq!(
+			event.details.meeting,
+			"https://meet.google.com/abc-defg-hij"
+		);
+		assert!(event.details.link.contains("calendar.google.com"));
+	}
 
-    #[test]
-    fn task_updated_timestamp_is_parsed_and_retained() {
-        let task: TaskEntry =
-            serde_json::from_str(r#"{"id":"abc","updated":"2026-10-29T12:30:45.123-07:00"}"#)
-                .unwrap();
-        let event = parse_task(
-            task,
-            "tasks:list",
-            colors::DEFAULT_EVENT,
-            crate::timeblocking::UNDATED,
-        )
-        .unwrap();
-        assert_eq!(
-            event.details.task_updated_at.unwrap().to_rfc3339(),
-            "2026-10-29T19:30:45.123+00:00"
-        );
-        let old: TaskEntry = serde_json::from_str(r#"{"id":"old"}"#).unwrap();
-        assert_eq!(old.updated, None);
-    }
+	#[test]
+	fn task_updated_timestamp_is_parsed_and_retained() {
+		let task: TaskEntry =
+			serde_json::from_str(r#"{"id":"abc","updated":"2026-10-29T12:30:45.123-07:00"}"#)
+				.unwrap();
+		let event = parse_task(
+			task,
+			"tasks:list",
+			colors::DEFAULT_EVENT,
+			crate::timeblocking::UNDATED,
+		)
+		.unwrap();
+		assert_eq!(
+			event.details.task_updated_at.unwrap().to_rfc3339(),
+			"2026-10-29T19:30:45.123+00:00"
+		);
+		let old: TaskEntry = serde_json::from_str(r#"{"id":"old"}"#).unwrap();
+		assert_eq!(old.updated, None);
+	}
 
-    #[test]
-    fn a_task_due_at_utc_midnight_stays_on_that_calendar_day() {
-        let day = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
-        let task = TaskEntry {
-            updated: None,
-            deleted: false,
-            id: "abc".into(),
-            title: "File taxes".into(),
-            notes: String::new(),
-            status: Some("needsAction".into()),
-            due: Some("2026-10-01T00:00:00.000Z".into()),
-            web_view_link: "https://tasks.google.com/task/abc".into(),
-        };
+	#[test]
+	fn a_task_due_at_utc_midnight_stays_on_that_calendar_day() {
+		let day = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
+		let task = TaskEntry {
+			updated: None,
+			deleted: false,
+			id: "abc".into(),
+			title: "File taxes".into(),
+			notes: String::new(),
+			status: Some("needsAction".into()),
+			due: Some("2026-10-01T00:00:00.000Z".into()),
+			web_view_link: "https://tasks.google.com/task/abc".into(),
+		};
 
-        let event = parse_task(task, "tasks:list", colors::DEFAULT_EVENT, day).unwrap();
-        assert!(event.all_day);
-        assert!(!event.completed);
-        assert_eq!(event.title, "File taxes");
-        assert_eq!(event.calendar_id, "tasks:list");
-        assert!(event.details.status.is_empty());
-        assert_eq!(event.details.link, "https://tasks.google.com/task/abc");
-    }
+		let event = parse_task(task, "tasks:list", colors::DEFAULT_EVENT, day).unwrap();
+		assert!(event.all_day);
+		assert!(!event.completed);
+		assert_eq!(event.title, "File taxes");
+		assert_eq!(event.calendar_id, "tasks:list");
+		assert!(event.details.status.is_empty());
+		assert_eq!(event.details.link, "https://tasks.google.com/task/abc");
+	}
 
-    #[test]
-    fn a_task_for_another_day_is_left_out() {
-        let day = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
-        let task = TaskEntry {
-            updated: None,
-            deleted: false,
-            id: "abc".into(),
-            title: "Tomorrow".into(),
-            notes: String::new(),
-            status: Some("needsAction".into()),
-            due: Some("2026-10-02T00:00:00.000Z".into()),
-            web_view_link: String::new(),
-        };
+	#[test]
+	fn a_task_for_another_day_is_left_out() {
+		let day = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
+		let task = TaskEntry {
+			updated: None,
+			deleted: false,
+			id: "abc".into(),
+			title: "Tomorrow".into(),
+			notes: String::new(),
+			status: Some("needsAction".into()),
+			due: Some("2026-10-02T00:00:00.000Z".into()),
+			web_view_link: String::new(),
+		};
 
-        assert!(parse_task(task, "tasks:list", colors::DEFAULT_EVENT, day).is_none());
-    }
+		assert!(parse_task(task, "tasks:list", colors::DEFAULT_EVENT, day).is_none());
+	}
 
-    #[test]
-    fn a_created_task_keeps_its_id_title_and_link() {
-        let created = created_task(
-            r#"{"id":"abc","title":"Call the client","webViewLink":"https://tasks.google.com/task/abc"}"#,
-            "ignored",
-        )
-        .unwrap();
-        assert_eq!(
-            created,
-            CreatedTask {
-                updated_at: None,
-                id: "abc".into(),
-                title: "Call the client".into(),
-                link: "https://tasks.google.com/task/abc".into(),
-            }
-        );
-    }
+	#[test]
+	fn a_created_task_keeps_its_id_title_and_link() {
+		let created = created_task(
+			r#"{"id":"abc","title":"Call the client","webViewLink":"https://tasks.google.com/task/abc"}"#,
+			"ignored",
+		)
+		.unwrap();
+		assert_eq!(
+			created,
+			CreatedTask {
+				updated_at: None,
+				id: "abc".into(),
+				title: "Call the client".into(),
+				link: "https://tasks.google.com/task/abc".into(),
+			}
+		);
+	}
 
-    #[test]
-    fn a_created_task_without_a_title_or_link_uses_what_was_typed() {
-        let created = created_task(r#"{"id":"abc"}"#, "Buy milk").unwrap();
-        assert_eq!(created.title, "Buy milk");
-        assert_eq!(created.link, "https://tasks.google.com/task/abc");
-    }
+	#[test]
+	fn a_created_task_without_a_title_or_link_uses_what_was_typed() {
+		let created = created_task(r#"{"id":"abc"}"#, "Buy milk").unwrap();
+		assert_eq!(created.title, "Buy milk");
+		assert_eq!(created.link, "https://tasks.google.com/task/abc");
+	}
 
-    #[test]
-    fn a_created_task_without_an_id_is_refused() {
-        let error = created_task(r#"{"title":"Buy milk"}"#, "Buy milk").unwrap_err();
-        assert!(error.contains("did not return"));
-    }
+	#[test]
+	fn a_created_task_without_an_id_is_refused() {
+		let error = created_task(r#"{"title":"Buy milk"}"#, "Buy milk").unwrap_err();
+		assert!(error.contains("did not return"));
+	}
 
-    #[test]
-    fn a_missing_tasks_scope_asks_for_a_reconnect() {
-        let notice = tasks_notice(&GoogleError::from_status(
-            "Google Tasks",
-            403,
-            "Request had insufficient authentication scopes.",
-        ));
-        assert_eq!(notice, "Reconnect Google so Tasks are included");
-    }
+	#[test]
+	fn a_missing_tasks_scope_asks_for_a_reconnect() {
+		let notice = tasks_notice(&GoogleError::from_status(
+			"Google Tasks",
+			403,
+			"Request had insufficient authentication scopes.",
+		));
+		assert_eq!(notice, "Reconnect Google so Tasks are included");
+	}
 
-    fn task_entry(id: &str, deleted: bool) -> TaskEntry {
-        TaskEntry {
-            updated: None,
-            deleted,
-            id: id.into(),
-            title: id.into(),
-            notes: String::new(),
-            status: None,
-            due: None,
-            web_view_link: String::new(),
-        }
-    }
+	fn task_entry(id: &str, deleted: bool) -> TaskEntry {
+		TaskEntry {
+			updated: None,
+			deleted,
+			id: id.into(),
+			title: id.into(),
+			notes: String::new(),
+			status: None,
+			due: None,
+			web_view_link: String::new(),
+		}
+	}
 
-    #[test]
-    fn a_moved_task_leaves_the_list_it_came_from() {
-        let mut lists = std::collections::HashMap::new();
-        adopt_list(
-            &mut lists,
-            "low-priority",
-            vec![task_entry("shopping", false), task_entry("keep", false)],
-        );
-        adopt_list(
-            &mut lists,
-            "time-blocked",
-            vec![task_entry("shopping", false)],
-        );
-        assert!(!lists["low-priority"].items.contains_key("shopping"));
-        assert!(lists["low-priority"].items.contains_key("keep"));
-        assert!(lists["time-blocked"].items.contains_key("shopping"));
+	#[test]
+	fn a_moved_task_leaves_the_list_it_came_from() {
+		let mut lists = std::collections::HashMap::new();
+		adopt_list(
+			&mut lists,
+			"low-priority",
+			vec![task_entry("shopping", false), task_entry("keep", false)],
+		);
+		adopt_list(
+			&mut lists,
+			"time-blocked",
+			vec![task_entry("shopping", false)],
+		);
+		assert!(!lists["low-priority"].items.contains_key("shopping"));
+		assert!(lists["low-priority"].items.contains_key("keep"));
+		assert!(lists["time-blocked"].items.contains_key("shopping"));
 
-        adopt_list(
-            &mut lists,
-            "low-priority",
-            vec![task_entry("keep", false), task_entry("shopping", true)],
-        );
-        assert!(!lists["low-priority"].items.contains_key("shopping"));
-        assert!(lists["time-blocked"].items.contains_key("shopping"));
-    }
+		adopt_list(
+			&mut lists,
+			"low-priority",
+			vec![task_entry("keep", false), task_entry("shopping", true)],
+		);
+		assert!(!lists["low-priority"].items.contains_key("shopping"));
+		assert!(lists["time-blocked"].items.contains_key("shopping"));
+	}
 
-    #[test]
-    fn deletion_skips_a_placeholder_or_deleted_list() {
-        let lists = vec!["real-list".to_owned()];
-        for preferred in ["inbox", "deleted-list"] {
-            let found = live_list(preferred, &lists, |list| {
-                assert_eq!(list, "real-list");
-                Ok(TaskPresence::Live)
-            })
-            .unwrap();
-            assert_eq!(found, Some("real-list"));
-        }
-        assert_eq!(
-            live_list("inbox", &[], |_| panic!("no valid lists")).unwrap(),
-            None
-        );
-    }
+	#[test]
+	fn deletion_skips_a_placeholder_or_deleted_list() {
+		let lists = vec!["real-list".to_owned()];
+		for preferred in ["inbox", "deleted-list"] {
+			let found = live_list(preferred, &lists, |list| {
+				assert_eq!(list, "real-list");
+				Ok(TaskPresence::Live)
+			})
+			.unwrap();
+			assert_eq!(found, Some("real-list"));
+		}
+		assert_eq!(
+			live_list("inbox", &[], |_| panic!("no valid lists")).unwrap(),
+			None
+		);
+	}
 
-    #[test]
-    fn deletion_lookup_preserves_google_error_classification() {
-        let error = GoogleError::from_status("Google Tasks", 400, "Invalid task list ID");
-        let actual =
-            live_list("real-list", &["real-list".into()], |_| Err(error.clone())).unwrap_err();
-        assert_eq!(actual, error);
-    }
+	#[test]
+	fn deletion_lookup_preserves_google_error_classification() {
+		let error = GoogleError::from_status("Google Tasks", 400, "Invalid task list ID");
+		let actual =
+			live_list("real-list", &["real-list".into()], |_| Err(error.clone())).unwrap_err();
+		assert_eq!(actual, error);
+	}
 
-    #[test]
-    fn delete_uses_the_list_that_still_has_the_task() {
-        let lists = vec!["time-blocked".to_owned(), "low-priority".to_owned()];
-        let mut checked = Vec::new();
-        let found = live_list("low-priority", &lists, |list| {
-            checked.push(list.to_owned());
-            Ok(if list == "time-blocked" {
-                TaskPresence::Live
-            } else {
-                TaskPresence::Gone
-            })
-        })
-        .unwrap();
-        assert_eq!(found, Some("time-blocked"));
-        assert_eq!(
-            checked,
-            vec!["low-priority".to_owned(), "time-blocked".to_owned()]
-        );
+	#[test]
+	fn delete_uses_the_list_that_still_has_the_task() {
+		let lists = vec!["time-blocked".to_owned(), "low-priority".to_owned()];
+		let mut checked = Vec::new();
+		let found = live_list("low-priority", &lists, |list| {
+			checked.push(list.to_owned());
+			Ok(if list == "time-blocked" {
+				TaskPresence::Live
+			} else {
+				TaskPresence::Gone
+			})
+		})
+		.unwrap();
+		assert_eq!(found, Some("time-blocked"));
+		assert_eq!(
+			checked,
+			vec!["low-priority".to_owned(), "time-blocked".to_owned()]
+		);
 
-        let mut checked = Vec::new();
-        let found = live_list("time-blocked", &lists, |list| {
-            checked.push(list.to_owned());
-            Ok(TaskPresence::Live)
-        })
-        .unwrap();
-        assert_eq!(found, Some("time-blocked"));
-        assert_eq!(checked, vec!["time-blocked".to_owned()]);
+		let mut checked = Vec::new();
+		let found = live_list("time-blocked", &lists, |list| {
+			checked.push(list.to_owned());
+			Ok(TaskPresence::Live)
+		})
+		.unwrap();
+		assert_eq!(found, Some("time-blocked"));
+		assert_eq!(checked, vec!["time-blocked".to_owned()]);
 
-        let found = live_list("low-priority", &lists, |_| Ok(TaskPresence::Gone)).unwrap();
-        assert_eq!(found, None);
-    }
+		let found = live_list("low-priority", &lists, |_| Ok(TaskPresence::Gone)).unwrap();
+		assert_eq!(found, None);
+	}
 
-    #[test]
-    fn a_habit_write_sends_its_whole_rule_and_can_clear_it() {
-        let start = Local
-            .with_ymd_and_hms(2026, 10, 28, 9, 0, 0)
-            .single()
-            .unwrap();
-        let end = start + chrono::Duration::minutes(30);
+	#[test]
+	fn a_habit_write_sends_its_whole_rule_and_can_clear_it() {
+		let start = Local
+			.with_ymd_and_hms(2026, 10, 28, 9, 0, 0)
+			.single()
+			.unwrap();
+		let end = start + chrono::Duration::minutes(30);
 
-        let body = habit_body(
-            "Stretch",
-            "After coffee",
-            start,
-            end,
-            &["RRULE:FREQ=DAILY".into(), "EXDATE:20261101T090000".into()],
-            Some("3"),
-        );
-        assert_eq!(body["summary"], "Stretch");
-        assert_eq!(body["extendedProperties"]["private"]["ttKind"], "habit");
-        assert_eq!(
-            body["recurrence"],
-            serde_json::json!(["RRULE:FREQ=DAILY", "EXDATE:20261101T090000"])
-        );
-        assert!(body.get("colorId").is_none());
+		let body = habit_body(
+			"Stretch",
+			"After coffee",
+			start,
+			end,
+			&["RRULE:FREQ=DAILY".into(), "EXDATE:20261101T090000".into()],
+			Some("3"),
+		);
+		assert_eq!(body["summary"], "Stretch");
+		assert_eq!(body["extendedProperties"]["private"]["ttKind"], "habit");
+		assert_eq!(
+			body["recurrence"],
+			serde_json::json!(["RRULE:FREQ=DAILY", "EXDATE:20261101T090000"])
+		);
+		assert!(body.get("colorId").is_none());
 
-        // A PATCH has to say the rule and color are gone; omitting them would
-        // leave Google's copy of the habit repeating.
-        let cleared = habit_body("Stretch", "After coffee", start, end, &[], None);
-        assert_eq!(cleared["recurrence"], serde_json::json!([]));
-        assert!(cleared.get("colorId").is_none());
-    }
+		// A PATCH has to say the rule and color are gone; omitting them would
+		// leave Google's copy of the habit repeating.
+		let cleared = habit_body("Stretch", "After coffee", start, end, &[], None);
+		assert_eq!(cleared["recurrence"], serde_json::json!([]));
+		assert!(cleared.get("colorId").is_none());
+	}
 
-    #[test]
-    fn a_reply_sends_only_the_users_own_answer() {
-        assert_eq!(
-            reply_body(
-                "me@example.com",
-                crate::calendar::meeting::Response::Tentative
-            ),
-            serde_json::json!({
-                "attendeesOmitted": true,
-                "attendees": [{"email": "me@example.com", "responseStatus": "tentative"}],
-            })
-        );
-    }
+	#[test]
+	fn a_reply_sends_only_the_users_own_answer() {
+		assert_eq!(
+			reply_body(
+				"me@example.com",
+				crate::calendar::meeting::Response::Tentative
+			),
+			serde_json::json!({
+				"attendeesOmitted": true,
+				"attendees": [{"email": "me@example.com", "responseStatus": "tentative"}],
+			})
+		);
+	}
 
-    #[test]
-    fn an_invitation_is_read_with_its_permissions_and_without_its_rooms() {
-        use crate::calendar::meeting::Response;
-        let entry: EventEntry = serde_json::from_value(serde_json::json!({
-            "organizer": {"email": "boss@example.com"},
-            "guestsCanInviteOthers": false,
-            "attendees": [
-                {"email": "me@example.com", "self": true, "responseStatus": "needsAction"},
-                {"email": "boss@example.com", "responseStatus": "accepted"},
-                {"email": "room@resource.calendar.google.com", "resource": true},
-            ],
-        }))
-        .unwrap();
-        let attendance = attendance_of(&entry);
-        assert_eq!(attendance.guests.len(), 2);
-        assert!(attendance.can_reply() && !attendance.can_manage() && !attendance.can_invite());
-        assert_eq!(attendance.own_response(), Some(Response::NeedsAction));
-        assert!(attendance.permissions.see_guests);
-    }
+	#[test]
+	fn an_invitation_is_read_with_its_permissions_and_without_its_rooms() {
+		use crate::calendar::meeting::Response;
+		let entry: EventEntry = serde_json::from_value(serde_json::json!({
+			"organizer": {"email": "boss@example.com"},
+			"guestsCanInviteOthers": false,
+			"attendees": [
+				{"email": "me@example.com", "self": true, "responseStatus": "needsAction"},
+				{"email": "boss@example.com", "responseStatus": "accepted"},
+				{"email": "room@resource.calendar.google.com", "resource": true},
+			],
+		}))
+		.unwrap();
+		let attendance = attendance_of(&entry);
+		assert_eq!(attendance.guests.len(), 2);
+		assert!(attendance.can_reply() && !attendance.can_manage() && !attendance.can_invite());
+		assert_eq!(attendance.own_response(), Some(Response::NeedsAction));
+		assert!(attendance.permissions.see_guests);
+	}
 
-    #[test]
-    fn only_unanswered_invitations_reach_the_inbox_once_each() {
-        let entries: Vec<EventEntry> = serde_json::from_value(serde_json::json!([
+	#[test]
+	fn only_unanswered_invitations_reach_the_inbox_once_each() {
+		let entries: Vec<EventEntry> = serde_json::from_value(serde_json::json!([
             {"id": "waiting", "attendees": [{"email": "me@x.y", "self": true, "responseStatus": "needsAction"}]},
             {"id": "answered", "attendees": [{"email": "me@x.y", "self": true, "responseStatus": "accepted"}]},
             {"id": "mine", "organizer": {"self": true}, "attendees": [{"email": "me@x.y", "self": true, "responseStatus": "needsAction"}]},
@@ -3662,128 +3662,128 @@ mod tests {
             {"id": "lone_1", "recurringEventId": "answered-series", "attendees": [{"email": "me@x.y", "self": true, "responseStatus": "needsAction"}]},
         ]))
         .unwrap();
-        let ids: Vec<String> = unanswered_invitations(entries)
-            .into_iter()
-            .map(|entry| entry.id)
-            .collect();
-        assert_eq!(ids, ["waiting", "series", "lone_1"]);
-    }
+		let ids: Vec<String> = unanswered_invitations(entries)
+			.into_iter()
+			.map(|entry| entry.id)
+			.collect();
+		assert_eq!(ids, ["waiting", "series", "lone_1"]);
+	}
 
-    /// The series noted by `body`, which runs with Google answered by
-    /// `answer` (method, URL, body).
-    fn noted_by(
-        answer: impl FnMut(&str, &str, Option<&str>) -> Result<String, (u16, String)> + 'static,
-        body: impl FnOnce(),
-    ) -> Vec<(String, String)> {
-        super::super::series::take_noted();
-        super::with_transport(Box::new(answer), body);
-        super::super::series::take_noted()
-            .into_iter()
-            .map(|series| (series.calendar, series.id))
-            .collect()
-    }
+	/// The series noted by `body`, which runs with Google answered by
+	/// `answer` (method, URL, body).
+	fn noted_by(
+		answer: impl FnMut(&str, &str, Option<&str>) -> Result<String, (u16, String)> + 'static,
+		body: impl FnOnce(),
+	) -> Vec<(String, String)> {
+		super::super::series::take_noted();
+		super::with_transport(Box::new(answer), body);
+		super::super::series::take_noted()
+			.into_iter()
+			.map(|series| (series.calendar, series.id))
+			.collect()
+	}
 
-    /// Echoes a created event back with `id`.
-    fn created(
-        id: &'static str,
-    ) -> impl FnMut(&str, &str, Option<&str>) -> Result<String, (u16, String)> {
-        move |_, _, body| {
-            let mut event: serde_json::Value = serde_json::from_str(body.unwrap()).unwrap();
-            event["id"] = id.into();
-            Ok(event.to_string())
-        }
-    }
+	/// Echoes a created event back with `id`.
+	fn created(
+		id: &'static str,
+	) -> impl FnMut(&str, &str, Option<&str>) -> Result<String, (u16, String)> {
+		move |_, _, body| {
+			let mut event: serde_json::Value = serde_json::from_str(body.unwrap()).unwrap();
+			event["id"] = id.into();
+			Ok(event.to_string())
+		}
+	}
 
-    // The sync asked for when saving can reach Google before the new series
-    // does, so its other occurrences are fetched once Google has it.
-    #[test]
-    fn a_new_series_is_noted_for_refresh_but_a_one_off_is_not() {
-        let start = chrono::Local::now();
-        let insert = |recurrence: &[String]| {
-            super::insert_event(
-                "token",
-                "cal",
-                "Title",
-                "",
-                None,
-                start,
-                start + chrono::Duration::hours(1),
-                recurrence,
-                &[],
-                false,
-                None,
-                None,
-            )
-            .unwrap();
-        };
-        let series = vec!["RRULE:FREQ=DAILY".to_owned()];
-        assert_eq!(
-            noted_by(created("new-series"), || insert(&series)),
-            [("cal".to_owned(), "new-series".to_owned())]
-        );
-        assert!(noted_by(created("one-off"), || insert(&[])).is_empty());
-    }
+	// The sync asked for when saving can reach Google before the new series
+	// does, so its other occurrences are fetched once Google has it.
+	#[test]
+	fn a_new_series_is_noted_for_refresh_but_a_one_off_is_not() {
+		let start = chrono::Local::now();
+		let insert = |recurrence: &[String]| {
+			super::insert_event(
+				"token",
+				"cal",
+				"Title",
+				"",
+				None,
+				start,
+				start + chrono::Duration::hours(1),
+				recurrence,
+				&[],
+				false,
+				None,
+				None,
+			)
+			.unwrap();
+		};
+		let series = vec!["RRULE:FREQ=DAILY".to_owned()];
+		assert_eq!(
+			noted_by(created("new-series"), || insert(&series)),
+			[("cal".to_owned(), "new-series".to_owned())]
+		);
+		assert!(noted_by(created("one-off"), || insert(&[])).is_empty());
+	}
 
-    #[test]
-    fn a_new_habit_series_is_noted_for_refresh() {
-        let start = chrono::Local::now();
-        let body = super::habit_body(
-            "Stretch",
-            "",
-            start,
-            start + chrono::Duration::minutes(10),
-            &["RRULE:FREQ=DAILY".to_owned()],
-            None,
-        );
-        assert_eq!(
-            noted_by(created("habit"), || {
-                super::insert_habit("token", Some("cal"), &body).unwrap();
-            }),
-            [("cal".to_owned(), "habit".to_owned())]
-        );
-    }
+	#[test]
+	fn a_new_habit_series_is_noted_for_refresh() {
+		let start = chrono::Local::now();
+		let body = super::habit_body(
+			"Stretch",
+			"",
+			start,
+			start + chrono::Duration::minutes(10),
+			&["RRULE:FREQ=DAILY".to_owned()],
+			None,
+		);
+		assert_eq!(
+			noted_by(created("habit"), || {
+				super::insert_habit("token", Some("cal"), &body).unwrap();
+			}),
+			[("cal".to_owned(), "habit".to_owned())]
+		);
+	}
 
-    #[test]
-    fn deleting_a_series_by_its_master_is_noted_for_refresh() {
-        let answer = |method: &str, _: &str, _: Option<&str>| {
-            Ok(match method {
-                "GET" => serde_json::json!({"id": "habit", "recurrence": ["RRULE:FREQ=DAILY"]})
-                    .to_string(),
-                _ => String::new(),
-            })
-        };
-        assert_eq!(
-            noted_by(answer, || {
-                super::delete_event_scope(
-                    "token",
-                    "cal",
-                    "habit",
-                    super::super::SaveScope::All,
-                    false,
-                )
-                .unwrap();
-            }),
-            [("cal".to_owned(), "habit".to_owned())]
-        );
-        // A one-off deleted the same way changes nothing else.
-        let one_off = |method: &str, _: &str, _: Option<&str>| {
-            Ok(match method {
-                "GET" => serde_json::json!({"id": "lone"}).to_string(),
-                _ => String::new(),
-            })
-        };
-        assert!(
-            noted_by(one_off, || {
-                super::delete_event_scope(
-                    "token",
-                    "cal",
-                    "lone",
-                    super::super::SaveScope::All,
-                    false,
-                )
-                .unwrap();
-            })
-            .is_empty()
-        );
-    }
+	#[test]
+	fn deleting_a_series_by_its_master_is_noted_for_refresh() {
+		let answer = |method: &str, _: &str, _: Option<&str>| {
+			Ok(match method {
+				"GET" => serde_json::json!({"id": "habit", "recurrence": ["RRULE:FREQ=DAILY"]})
+					.to_string(),
+				_ => String::new(),
+			})
+		};
+		assert_eq!(
+			noted_by(answer, || {
+				super::delete_event_scope(
+					"token",
+					"cal",
+					"habit",
+					super::super::SaveScope::All,
+					false,
+				)
+				.unwrap();
+			}),
+			[("cal".to_owned(), "habit".to_owned())]
+		);
+		// A one-off deleted the same way changes nothing else.
+		let one_off = |method: &str, _: &str, _: Option<&str>| {
+			Ok(match method {
+				"GET" => serde_json::json!({"id": "lone"}).to_string(),
+				_ => String::new(),
+			})
+		};
+		assert!(
+			noted_by(one_off, || {
+				super::delete_event_scope(
+					"token",
+					"cal",
+					"lone",
+					super::super::SaveScope::All,
+					false,
+				)
+				.unwrap();
+			})
+			.is_empty()
+		);
+	}
 }

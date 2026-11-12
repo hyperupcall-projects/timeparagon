@@ -13,965 +13,962 @@ const HOST: &str = "calendar-task-drop";
 /// Convert coordinates from the sidebar's surface to the adjacent range view.
 /// Both layer surfaces share the same output and vertical anchors.
 pub(crate) fn range_position(
-    state: &State,
-    window: iced::window::Id,
-    point: Point,
+	state: &State,
+	window: iced::window::Id,
+	point: Point,
 ) -> Option<Point> {
-    if !state.range_view_active() && !state.day_plan_active() {
-        return None;
-    }
-    let editor = state.editor_window?;
-    let point = if window == editor {
-        point
-    } else if state.main_window == Some(window) {
-        let sidebar = state.sidebar.as_ref()?;
-        Point::new(
-            match sidebar.side {
-                crate::panel::Side::Left => point.x - state.main_size.width,
-                crate::panel::Side::Right => point.x + state.editor_window_size.width,
-            },
-            point.y - super::editor_window_top(state),
-        )
-    } else {
-        return None;
-    };
-    Rectangle::with_size(state.editor_window_size)
-        .contains(point)
-        .then_some(point)
+	if !state.range_view_active() && !state.day_plan_active() {
+		return None;
+	}
+	let editor = state.editor_window?;
+	let point = if window == editor {
+		point
+	} else if state.main_window == Some(window) {
+		let sidebar = state.sidebar.as_ref()?;
+		Point::new(
+			match sidebar.side {
+				crate::panel::Side::Left => point.x - state.main_size.width,
+				crate::panel::Side::Right => point.x + state.editor_window_size.width,
+			},
+			point.y - super::editor_window_top(state),
+		)
+	} else {
+		return None;
+	};
+	Rectangle::with_size(state.editor_window_size)
+		.contains(point)
+		.then_some(point)
 }
 
 pub(super) fn host<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
-    Element::new(DropHost(content.into()))
+	Element::new(DropHost(content.into()))
 }
 
 pub(crate) fn release(task: String, position: Point) -> iced::Task<Message> {
-    iced_runtime::task::widget(DropOperation {
-        task,
-        position,
-        result: None,
-        probe: false,
-    })
+	iced_runtime::task::widget(DropOperation {
+		task,
+		position,
+		result: None,
+		probe: false,
+	})
 }
 
 /// Ask the plan view what a release at `position` would do, without doing it,
 /// so the view can preview the drop. It goes through the same hit testing as
 /// [`release`], so the preview and the real drop cannot disagree.
 pub(crate) fn probe(task: String, position: Point) -> iced::Task<Message> {
-    iced_runtime::task::widget(DropOperation {
-        task,
-        position,
-        result: None,
-        probe: true,
-    })
+	iced_runtime::task::widget(DropOperation {
+		task,
+		position,
+		result: None,
+		probe: true,
+	})
 }
 
 /// Probe the drop under the pointer of the task in the air, or forget the
 /// last one when the pointer is not over a plan view.
 pub(crate) fn probe_drag(state: &mut State) -> iced::Task<Message> {
-    let target = state.timeblocking.dragging.clone().and_then(|id| {
-        let window = state.timeblocking.drag_window.or(state.main_window)?;
-        let point = range_position(state, window, state.timeblocking.drag_pointer?)?;
-        Some((id, point))
-    });
-    match target {
-        Some((id, point)) => probe(id, point),
-        None => {
-            state.timeblocking.drop_hover = None;
-            iced::Task::none()
-        }
-    }
+	let target = state.timeblocking.dragging.clone().and_then(|id| {
+		let window = state.timeblocking.drag_window.or(state.main_window)?;
+		let point = range_position(state, window, state.timeblocking.drag_pointer?)?;
+		Some((id, point))
+	});
+	match target {
+		Some((id, point)) => probe(id, point),
+		None => {
+			state.timeblocking.drop_hover = None;
+			iced::Task::none()
+		}
+	}
 }
 
 /// The drop a release message makes, with the day of the column it came from.
 pub(crate) fn hover_of(message: &Message) -> Option<crate::timeblocking::DropHover> {
-    fn find(
-        message: &Message,
-        day: Option<chrono::NaiveDate>,
-    ) -> Option<crate::timeblocking::DropHover> {
-        match message {
-            Message::Calendar(CalendarMessage::WeekDayAction(day, message)) => {
-                find(message, Some(*day))
-            }
-            Message::TimeBlocking(action) => Some(crate::timeblocking::DropHover {
-                day,
-                action: action.clone(),
-            }),
-            _ => None,
-        }
-    }
-    find(message, None)
+	fn find(
+		message: &Message,
+		day: Option<chrono::NaiveDate>,
+	) -> Option<crate::timeblocking::DropHover> {
+		match message {
+			Message::Calendar(CalendarMessage::WeekDayAction(day, message)) => {
+				find(message, Some(*day))
+			}
+			Message::TimeBlocking(action) => Some(crate::timeblocking::DropHover {
+				day,
+				action: action.clone(),
+			}),
+			_ => None,
+		}
+	}
+	find(message, None)
 }
 
 #[derive(Default)]
 struct Request {
-    position: Option<Point>,
-    messages: Option<Vec<Message>>,
+	position: Option<Point>,
+	messages: Option<Vec<Message>>,
 }
 
 struct DropOperation {
-    task: String,
-    position: Point,
-    result: Option<Message>,
-    /// Only report what the drop would be, as a hover.
-    probe: bool,
+	task: String,
+	position: Point,
+	result: Option<Message>,
+	/// Only report what the drop would be, as a hover.
+	probe: bool,
 }
 
 impl widget::Operation<Message> for DropOperation {
-    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn widget::Operation<Message>)) {
-        operate(self);
-    }
+	fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn widget::Operation<Message>)) {
+		operate(self);
+	}
 
-    fn custom(&mut self, id: Option<&widget::Id>, _: Rectangle, state: &mut dyn std::any::Any) {
-        if id != Some(&widget::Id::new(HOST)) {
-            return;
-        }
-        let Some(request) = state.downcast_mut::<Request>() else {
-            return;
-        };
-        if let Some(messages) = request.messages.take() {
-            self.result = messages.into_iter().find(is_drop);
-        } else {
-            request.position = Some(self.position);
-        }
-    }
+	fn custom(&mut self, id: Option<&widget::Id>, _: Rectangle, state: &mut dyn std::any::Any) {
+		if id != Some(&widget::Id::new(HOST)) {
+			return;
+		}
+		let Some(request) = state.downcast_mut::<Request>() else {
+			return;
+		};
+		if let Some(messages) = request.messages.take() {
+			self.result = messages.into_iter().find(is_drop);
+		} else {
+			request.position = Some(self.position);
+		}
+	}
 
-    fn finish(&self) -> widget::operation::Outcome<Message> {
-        if self.probe {
-            return widget::operation::Outcome::Some(Message::Task(TaskMessage::TaskDragHovered(
-                self.task.clone(),
-                self.position,
-                self.result.clone().map(Box::new),
-            )));
-        }
-        widget::operation::Outcome::Some(Message::Task(TaskMessage::TaskDragDropped(
-            self.task.clone(),
-            self.result.clone().map(Box::new),
-        )))
-    }
+	fn finish(&self) -> widget::operation::Outcome<Message> {
+		if self.probe {
+			return widget::operation::Outcome::Some(Message::Task(TaskMessage::TaskDragHovered(
+				self.task.clone(),
+				self.position,
+				self.result.clone().map(Box::new),
+			)));
+		}
+		widget::operation::Outcome::Some(Message::Task(TaskMessage::TaskDragDropped(
+			self.task.clone(),
+			self.result.clone().map(Box::new),
+		)))
+	}
 }
 
 fn is_drop(message: &Message) -> bool {
-    match message {
-        Message::Calendar(CalendarMessage::WeekDayAction(_, message)) => is_drop(message),
-        Message::TimeBlocking(action) => matches!(
-            action,
-            crate::timeblocking::Action::DropDay
-                | crate::timeblocking::Action::DropAt { .. }
-                | crate::timeblocking::Action::DropWeekList { .. }
-                | crate::timeblocking::Action::DropTime(_)
-                | crate::timeblocking::Action::DropBlock(_)
-                | crate::timeblocking::Action::DropTask(_)
-        ),
-        _ => false,
-    }
+	match message {
+		Message::Calendar(CalendarMessage::WeekDayAction(_, message)) => is_drop(message),
+		Message::TimeBlocking(action) => matches!(
+			action,
+			crate::timeblocking::Action::DropDay
+				| crate::timeblocking::Action::DropAt { .. }
+				| crate::timeblocking::Action::DropWeekList { .. }
+				| crate::timeblocking::Action::DropTime(_)
+				| crate::timeblocking::Action::DropBlock(_)
+				| crate::timeblocking::Action::DropTask(_)
+		),
+		_ => false,
+	}
 }
 
 struct DropHost<'a>(Element<'a, Message>);
 
 impl Widget<Message, Theme, Renderer> for DropHost<'_> {
-    fn children(&self) -> Vec<widget::Tree> {
-        vec![widget::Tree::new(&self.0)]
-    }
+	fn children(&self) -> Vec<widget::Tree> {
+		vec![widget::Tree::new(&self.0)]
+	}
 
-    fn diff(&self, tree: &mut widget::Tree) {
-        tree.diff_children(std::slice::from_ref(&self.0));
-    }
+	fn diff(&self, tree: &mut widget::Tree) {
+		tree.diff_children(std::slice::from_ref(&self.0));
+	}
 
-    fn size(&self) -> Size<Length> {
-        self.0.as_widget().size()
-    }
+	fn size(&self) -> Size<Length> {
+		self.0.as_widget().size()
+	}
 
-    fn layout(
-        &mut self,
-        tree: &mut widget::Tree,
-        renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
-        self.0
-            .as_widget_mut()
-            .layout(&mut tree.children[0], renderer, limits)
-    }
+	fn layout(
+		&mut self,
+		tree: &mut widget::Tree,
+		renderer: &Renderer,
+		limits: &layout::Limits,
+	) -> layout::Node {
+		self.0
+			.as_widget_mut()
+			.layout(&mut tree.children[0], renderer, limits)
+	}
 
-    fn operate(
-        &mut self,
-        tree: &mut widget::Tree,
-        layout: Layout<'_>,
-        renderer: &Renderer,
-        operation: &mut dyn widget::Operation,
-    ) {
-        let id = widget::Id::new(HOST);
-        let mut request = Request::default();
-        operation.custom(Some(&id), layout.bounds(), &mut request);
-        if let Some(position) = request.position {
-            let mut messages = Vec::new();
-            self.0.as_widget_mut().update(
-                &mut tree.children[0],
-                &Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
-                layout,
-                mouse::Cursor::Available(position),
-                renderer,
-                &mut clipboard::Null,
-                &mut Shell::new(&mut messages),
-                &layout.bounds(),
-            );
-            request.messages = Some(messages);
-            operation.custom(Some(&id), layout.bounds(), &mut request);
-        } else {
-            operation.traverse(&mut |operation| {
-                self.0
-                    .as_widget_mut()
-                    .operate(&mut tree.children[0], layout, renderer, operation);
-            });
-        }
-    }
+	fn operate(
+		&mut self,
+		tree: &mut widget::Tree,
+		layout: Layout<'_>,
+		renderer: &Renderer,
+		operation: &mut dyn widget::Operation,
+	) {
+		let id = widget::Id::new(HOST);
+		let mut request = Request::default();
+		operation.custom(Some(&id), layout.bounds(), &mut request);
+		if let Some(position) = request.position {
+			let mut messages = Vec::new();
+			self.0.as_widget_mut().update(
+				&mut tree.children[0],
+				&Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+				layout,
+				mouse::Cursor::Available(position),
+				renderer,
+				&mut clipboard::Null,
+				&mut Shell::new(&mut messages),
+				&layout.bounds(),
+			);
+			request.messages = Some(messages);
+			operation.custom(Some(&id), layout.bounds(), &mut request);
+		} else {
+			operation.traverse(&mut |operation| {
+				self.0
+					.as_widget_mut()
+					.operate(&mut tree.children[0], layout, renderer, operation);
+			});
+		}
+	}
 
-    fn update(
-        &mut self,
-        tree: &mut widget::Tree,
-        event: &Event,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        renderer: &Renderer,
-        clipboard: &mut dyn iced::advanced::Clipboard,
-        shell: &mut Shell<'_, Message>,
-        viewport: &Rectangle,
-    ) {
-        self.0.as_widget_mut().update(
-            &mut tree.children[0],
-            event,
-            layout,
-            cursor,
-            renderer,
-            clipboard,
-            shell,
-            viewport,
-        );
-    }
+	fn update(
+		&mut self,
+		tree: &mut widget::Tree,
+		event: &Event,
+		layout: Layout<'_>,
+		cursor: mouse::Cursor,
+		renderer: &Renderer,
+		clipboard: &mut dyn iced::advanced::Clipboard,
+		shell: &mut Shell<'_, Message>,
+		viewport: &Rectangle,
+	) {
+		self.0.as_widget_mut().update(
+			&mut tree.children[0],
+			event,
+			layout,
+			cursor,
+			renderer,
+			clipboard,
+			shell,
+			viewport,
+		);
+	}
 
-    fn draw(
-        &self,
-        tree: &widget::Tree,
-        renderer: &mut Renderer,
-        theme: &Theme,
-        style: &renderer::Style,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        viewport: &Rectangle,
-    ) {
-        self.0.as_widget().draw(
-            &tree.children[0],
-            renderer,
-            theme,
-            style,
-            layout,
-            cursor,
-            viewport,
-        );
-    }
+	fn draw(
+		&self,
+		tree: &widget::Tree,
+		renderer: &mut Renderer,
+		theme: &Theme,
+		style: &renderer::Style,
+		layout: Layout<'_>,
+		cursor: mouse::Cursor,
+		viewport: &Rectangle,
+	) {
+		self.0.as_widget().draw(
+			&tree.children[0],
+			renderer,
+			theme,
+			style,
+			layout,
+			cursor,
+			viewport,
+		);
+	}
 
-    fn mouse_interaction(
-        &self,
-        tree: &widget::Tree,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        viewport: &Rectangle,
-        renderer: &Renderer,
-    ) -> mouse::Interaction {
-        self.0
-            .as_widget()
-            .mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
-    }
+	fn mouse_interaction(
+		&self,
+		tree: &widget::Tree,
+		layout: Layout<'_>,
+		cursor: mouse::Cursor,
+		viewport: &Rectangle,
+		renderer: &Renderer,
+	) -> mouse::Interaction {
+		self.0
+			.as_widget()
+			.mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
+	}
 
-    fn overlay<'a>(
-        &'a mut self,
-        tree: &'a mut widget::Tree,
-        layout: Layout<'a>,
-        renderer: &Renderer,
-        viewport: &Rectangle,
-        translation: Vector,
-    ) -> Option<overlay::Element<'a, Message, Theme, Renderer>> {
-        self.0.as_widget_mut().overlay(
-            &mut tree.children[0],
-            layout,
-            renderer,
-            viewport,
-            translation,
-        )
-    }
+	fn overlay<'a>(
+		&'a mut self,
+		tree: &'a mut widget::Tree,
+		layout: Layout<'a>,
+		renderer: &Renderer,
+		viewport: &Rectangle,
+		translation: Vector,
+	) -> Option<overlay::Element<'a, Message, Theme, Renderer>> {
+		self.0.as_widget_mut().overlay(
+			&mut tree.children[0],
+			layout,
+			renderer,
+			viewport,
+			translation,
+		)
+	}
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::app::EventMessage;
-    use crate::{
-        app::{self, Screen, Sidebar},
-        calendar::{self, Store},
-        panel::Side,
-        timeblocking::{self, Action},
-    };
-    use chrono::{Datelike, Timelike};
-    use iced_test::{Simulator, core::Settings};
+	use super::*;
+	use crate::app::EventMessage;
+	use crate::{
+		app::{self, Screen, Sidebar},
+		calendar::{self, Store},
+		panel::Side,
+		timeblocking::{self, Action},
+	};
+	use chrono::{Datelike, Timelike};
+	use iced_test::{Simulator, core::Settings};
 
-    fn state(screen: Screen, monthly: bool) -> State {
-        let mut state = State::blank();
-        let mut snapshot = calendar::sample_snapshot();
-        let mut task = snapshot.events.remove(2);
-        task.id = "task:drag".into();
-        task.calendar_id = "tasks:inbox".into();
-        task.title = "Drag this task".into();
-        task.all_day = true;
-        task.start = calendar::at_clock(timeblocking::UNDATED, 0, 0);
-        task.end = task.start + chrono::Duration::days(1);
-        snapshot.events = vec![task];
-        state.config.calendar.inbox_list = Some("tasks:inbox".into());
-        state.config.calendar.backlog_list = Some("tasks:inbox".into());
-        state.week_anchor = snapshot.day;
-        state.calendar = Store::with_snapshot(snapshot);
-        state.screen = screen;
-        state.view = if monthly {
-            crate::app::CalendarView::Month
-        } else {
-            crate::app::CalendarView::Week
-        };
-        state.main_window = Some(iced::window::Id::unique());
-        state.editor_window = Some(iced::window::Id::unique());
-        state.main_size = Size::new(300.0, 900.0);
-        state.editor_window_size = Size::new(1200.0, 880.0);
-        state.sidebar = Some(Sidebar {
-            width: 300.0,
-            side: Side::Left,
-        });
-        state
-    }
+	fn state(screen: Screen, monthly: bool) -> State {
+		let mut state = State::blank();
+		let mut snapshot = calendar::sample_snapshot();
+		let mut task = snapshot.events.remove(2);
+		task.id = "task:drag".into();
+		task.calendar_id = "tasks:inbox".into();
+		task.title = "Drag this task".into();
+		task.all_day = true;
+		task.start = calendar::at_clock(timeblocking::UNDATED, 0, 0);
+		task.end = task.start + chrono::Duration::days(1);
+		snapshot.events = vec![task];
+		state.config.calendar.inbox_list = Some("tasks:inbox".into());
+		state.config.calendar.backlog_list = Some("tasks:inbox".into());
+		state.week_anchor = snapshot.day;
+		state.calendar = Store::with_snapshot(snapshot);
+		state.screen = screen;
+		state.view = if monthly {
+			crate::app::CalendarView::Month
+		} else {
+			crate::app::CalendarView::Week
+		};
+		state.main_window = Some(iced::window::Id::unique());
+		state.editor_window = Some(iced::window::Id::unique());
+		state.main_size = Size::new(300.0, 900.0);
+		state.editor_window_size = Size::new(1200.0, 880.0);
+		state.sidebar = Some(Sidebar {
+			width: 300.0,
+			side: Side::Left,
+		});
+		state
+	}
 
-    /// Exercise the same operation used by the multi-window runtime, including
-    /// the host's normal scrollable and canvas event dispatch.
-    fn drop_at(state: &mut State, position: Point) -> Message {
-        drop_scrolled(state, position, 0.0, 0.0)
-    }
+	/// Exercise the same operation used by the multi-window runtime, including
+	/// the host's normal scrollable and canvas event dispatch.
+	fn drop_at(state: &mut State, position: Point) -> Message {
+		drop_scrolled(state, position, 0.0, 0.0)
+	}
 
-    fn drop_scrolled(state: &mut State, position: Point, x: f32, y: f32) -> Message {
-        let main = state.main_window.unwrap();
-        let source = Point::new(
-            position.x + state.main_size.width,
-            position.y + state.screen_margin(),
-        );
-        let _ = app::update(
-            state,
-            Message::Task(TaskMessage::TaskDragMoved(main, source)),
-        );
-        let task = app::update(state, Message::Task(TaskMessage::TaskDragReleased(main)));
-        run_operations(state, task, x, y, |message| {
-            matches!(message, Message::Task(TaskMessage::TaskDragDropped(..)))
-        })
-        .expect("drop operation did not complete")
-    }
+	fn drop_scrolled(state: &mut State, position: Point, x: f32, y: f32) -> Message {
+		let main = state.main_window.unwrap();
+		let source = Point::new(
+			position.x + state.main_size.width,
+			position.y + state.screen_margin(),
+		);
+		let _ = app::update(
+			state,
+			Message::Task(TaskMessage::TaskDragMoved(main, source)),
+		);
+		let task = app::update(state, Message::Task(TaskMessage::TaskDragReleased(main)));
+		run_operations(state, task, x, y, |message| {
+			matches!(message, Message::Task(TaskMessage::TaskDragDropped(..)))
+		})
+		.expect("drop operation did not complete")
+	}
 
-    /// Move the pointer over the plan view and apply the drop it previews.
-    fn hover_at(state: &mut State, position: Point) {
-        let main = state.main_window.unwrap();
-        let source = Point::new(
-            position.x + state.main_size.width,
-            position.y + state.screen_margin(),
-        );
-        let task = app::update(
-            state,
-            Message::Task(TaskMessage::TaskDragMoved(main, source)),
-        );
-        if let Some(message) = run_operations(state, task, 0.0, 0.0, |message| {
-            matches!(message, Message::Task(TaskMessage::TaskDragHovered(..)))
-        }) {
-            let _ = app::update(state, message);
-        }
-    }
+	/// Move the pointer over the plan view and apply the drop it previews.
+	fn hover_at(state: &mut State, position: Point) {
+		let main = state.main_window.unwrap();
+		let source = Point::new(
+			position.x + state.main_size.width,
+			position.y + state.screen_margin(),
+		);
+		let task = app::update(
+			state,
+			Message::Task(TaskMessage::TaskDragMoved(main, source)),
+		);
+		if let Some(message) = run_operations(state, task, 0.0, 0.0, |message| {
+			matches!(message, Message::Task(TaskMessage::TaskDragHovered(..)))
+		}) {
+			let _ = app::update(state, message);
+		}
+	}
 
-    /// Run a task's widget operations against the editor window, scrolled by
-    /// `x` and `y`, and return the first message `wanted` accepts.
-    fn run_operations(
-        state: &State,
-        task: iced::Task<Message>,
-        x: f32,
-        y: f32,
-        wanted: impl Fn(&Message) -> bool,
-    ) -> Option<Message> {
-        use iced::futures::{StreamExt, executor::block_on};
-        use iced_test::core::renderer::Headless;
-        let mut renderer = block_on(Renderer::new(
-            iced::Font::DEFAULT,
-            iced::Pixels(16.0),
-            Some("tiny-skia"),
-        ))
-        .unwrap();
-        let mut ui = iced_runtime::UserInterface::build(
-            super::super::editor_window(state),
-            state.editor_window_size,
-            iced_runtime::user_interface::Cache::default(),
-            &mut renderer,
-        );
-        if x != 0.0 {
-            ui.operate(
-                &renderer,
-                &mut widget::operation::scrollable::scroll_to(
-                    widget::Id::new("cal-week"),
-                    widget::operation::scrollable::AbsoluteOffset {
-                        x: Some(x),
-                        y: None,
-                    },
-                ),
-            );
-        }
-        if y != 0.0 {
-            ui.operate(
-                &renderer,
-                &mut widget::operation::scrollable::scroll_to(
-                    widget::Id::new(if state.config.calendar.weekly_task_list {
-                        "cal-week"
-                    } else {
-                        "cal-week-day"
-                    }),
-                    widget::operation::scrollable::AbsoluteOffset {
-                        x: None,
-                        y: Some(y),
-                    },
-                ),
-            );
-        }
-        block_on(async {
-            let mut stream = iced_runtime::task::into_stream(task)?;
-            while let Some(action) = stream.next().await {
-                match action {
-                    iced_runtime::Action::Widget(mut operation) => {
-                        ui.operate(&renderer, operation.as_mut());
-                        let _ = operation.finish();
-                    }
-                    iced_runtime::Action::Output(message) if wanted(&message) => {
-                        return Some(message);
-                    }
-                    _ => {}
-                }
-            }
-            None
-        })
-    }
+	/// Run a task's widget operations against the editor window, scrolled by
+	/// `x` and `y`, and return the first message `wanted` accepts.
+	fn run_operations(
+		state: &State,
+		task: iced::Task<Message>,
+		x: f32,
+		y: f32,
+		wanted: impl Fn(&Message) -> bool,
+	) -> Option<Message> {
+		use iced::futures::{StreamExt, executor::block_on};
+		use iced_test::core::renderer::Headless;
+		let mut renderer = block_on(Renderer::new(
+			iced::Font::DEFAULT,
+			iced::Pixels(16.0),
+			Some("tiny-skia"),
+		))
+		.unwrap();
+		let mut ui = iced_runtime::UserInterface::build(
+			super::super::editor_window(state),
+			state.editor_window_size,
+			iced_runtime::user_interface::Cache::default(),
+			&mut renderer,
+		);
+		if x != 0.0 {
+			ui.operate(
+				&renderer,
+				&mut widget::operation::scrollable::scroll_to(
+					widget::Id::new("cal-week"),
+					widget::operation::scrollable::AbsoluteOffset {
+						x: Some(x),
+						y: None,
+					},
+				),
+			);
+		}
+		if y != 0.0 {
+			ui.operate(
+				&renderer,
+				&mut widget::operation::scrollable::scroll_to(
+					widget::Id::new(if state.config.calendar.weekly_task_list {
+						"cal-week"
+					} else {
+						"cal-week-day"
+					}),
+					widget::operation::scrollable::AbsoluteOffset {
+						x: None,
+						y: Some(y),
+					},
+				),
+			);
+		}
+		block_on(async {
+			let mut stream = iced_runtime::task::into_stream(task)?;
+			while let Some(action) = stream.next().await {
+				match action {
+					iced_runtime::Action::Widget(mut operation) => {
+						ui.operate(&renderer, operation.as_mut());
+						let _ = operation.finish();
+					}
+					iced_runtime::Action::Output(message) if wanted(&message) => {
+						return Some(message);
+					}
+					_ => {}
+				}
+			}
+			None
+		})
+	}
 
-    fn start_drag(state: &mut State) {
-        let mut ui = Simulator::with_size(
-            Settings::default(),
-            state.main_size,
-            super::super::view(state),
-        );
-        let bounds = ui.find("Drag this task").unwrap().bounds();
-        let origin = bounds.center();
-        ui.point_at(origin);
-        ui.simulate([Event::Mouse(mouse::Event::ButtonPressed(
-            mouse::Button::Left,
-        ))]);
-        let position = origin + Vector::new(10.0, 0.0);
-        ui.point_at(position);
-        ui.simulate([Event::Mouse(mouse::Event::CursorMoved { position })]);
-        let messages: Vec<_> = ui.into_messages().collect();
-        assert!(
-            !messages
-                .iter()
-                .any(|message| matches!(message, Message::Event(EventMessage::EventOpened(_))))
-        );
-        assert!(
-            messages
-                .iter()
-                .any(|message| matches!(message, Message::TimeBlocking(Action::Drag(_, _))))
-        );
-        for message in messages {
-            let _ = app::update(state, message);
-        }
-        assert_eq!(state.timeblocking.dragging.as_deref(), Some("task:drag"));
-    }
+	fn start_drag(state: &mut State) {
+		let mut ui = Simulator::with_size(
+			Settings::default(),
+			state.main_size,
+			super::super::view(state),
+		);
+		let bounds = ui.find("Drag this task").unwrap().bounds();
+		let origin = bounds.center();
+		ui.point_at(origin);
+		ui.simulate([Event::Mouse(mouse::Event::ButtonPressed(
+			mouse::Button::Left,
+		))]);
+		let position = origin + Vector::new(10.0, 0.0);
+		ui.point_at(position);
+		ui.simulate([Event::Mouse(mouse::Event::CursorMoved { position })]);
+		let messages: Vec<_> = ui.into_messages().collect();
+		assert!(
+			!messages
+				.iter()
+				.any(|message| matches!(message, Message::Event(EventMessage::EventOpened(_))))
+		);
+		assert!(
+			messages
+				.iter()
+				.any(|message| matches!(message, Message::TimeBlocking(Action::Drag(_, _))))
+		);
+		for message in messages {
+			let _ = app::update(state, message);
+		}
+		assert_eq!(state.timeblocking.dragging.as_deref(), Some("task:drag"));
+	}
 
-    #[test]
-    fn inbox_and_backlog_drag_into_month_dates_and_empty_week_list_columns() {
-        for screen in [Screen::Inbox, Screen::Backlog] {
-            for monthly in [false, true] {
-                let mut state = state(screen, monthly);
-                state.config.calendar.weekly_task_list = true;
-                start_drag(&mut state);
-                let anchor = state.week_anchor;
-                let day = if monthly {
-                    calendar::month_grid(anchor, state.config.calendar.first_day_of_week)[10]
-                } else {
-                    state.calendar_dates()[3]
-                };
-                let mut ui = Simulator::with_size(
-                    Settings::default(),
-                    state.editor_window_size,
-                    super::super::editor_window(&state),
-                );
-                let label = if monthly {
-                    day.day().to_string()
-                } else {
-                    day.format("%B %-d").to_string()
-                };
-                let bounds = ui.find(label.as_str()).unwrap().bounds();
-                let point = bounds.center() + Vector::new(0.0, 45.0);
-                drop(ui);
-                let main = state.main_window.unwrap();
-                let source = Point::new(
-                    point.x + state.main_size.width,
-                    point.y + state.screen_margin(),
-                );
-                let _ = app::update(
-                    &mut state,
-                    Message::Task(TaskMessage::TaskDragMoved(main, source)),
-                );
-                assert!(
-                    range_position(&state, main, source)
-                        .unwrap()
-                        .distance(point)
-                        < 0.001
-                );
-                let message = drop_at(&mut state, point);
-                assert!(
-                    matches!(&message, Message::Task(TaskMessage::TaskDragDropped(_, Some(message)))
+	#[test]
+	fn inbox_and_backlog_drag_into_month_dates_and_empty_week_list_columns() {
+		for screen in [Screen::Inbox, Screen::Backlog] {
+			for monthly in [false, true] {
+				let mut state = state(screen, monthly);
+				state.config.calendar.weekly_task_list = true;
+				start_drag(&mut state);
+				let anchor = state.week_anchor;
+				let day = if monthly {
+					calendar::month_grid(anchor, state.config.calendar.first_day_of_week)[10]
+				} else {
+					state.calendar_dates()[3]
+				};
+				let mut ui = Simulator::with_size(
+					Settings::default(),
+					state.editor_window_size,
+					super::super::editor_window(&state),
+				);
+				let label = if monthly {
+					day.day().to_string()
+				} else {
+					day.format("%B %-d").to_string()
+				};
+				let bounds = ui.find(label.as_str()).unwrap().bounds();
+				let point = bounds.center() + Vector::new(0.0, 45.0);
+				drop(ui);
+				let main = state.main_window.unwrap();
+				let source = Point::new(
+					point.x + state.main_size.width,
+					point.y + state.screen_margin(),
+				);
+				let _ = app::update(
+					&mut state,
+					Message::Task(TaskMessage::TaskDragMoved(main, source)),
+				);
+				assert!(
+					range_position(&state, main, source)
+						.unwrap()
+						.distance(point) < 0.001
+				);
+				let message = drop_at(&mut state, point);
+				assert!(
+					matches!(&message, Message::Task(TaskMessage::TaskDragDropped(_, Some(message)))
                     if matches!(&**message, Message::Calendar(CalendarMessage::WeekDayAction(date, inner))
                         if *date == day && matches!(&**inner, Message::TimeBlocking(Action::DropDay | Action::DropWeekList { .. })))),
-                    "{screen:?}, monthly={monthly}, point={point:?}: {message:?}"
-                );
-                // Block the save path: test only UI routing, never remote writes.
-                state.timeblocking.busy.insert("test-no-remote-write");
-                let _ = app::update(&mut state, message);
-                assert_eq!(state.calendar.day, day);
-                assert_eq!(state.week_anchor, anchor);
-                assert_eq!(state.screen, screen);
-                assert_eq!(state.monthly(), monthly);
-                assert_eq!(state.weekly(), !monthly);
-                assert!(state.timeblocking.dragging.is_none());
-                assert!(state.timeblocking.drag_pointer.is_none());
-                assert_eq!(state.timeblocking.busy.len(), 1);
-            }
-        }
-    }
+					"{screen:?}, monthly={monthly}, point={point:?}: {message:?}"
+				);
+				// Block the save path: test only UI routing, never remote writes.
+				state.timeblocking.busy.insert("test-no-remote-write");
+				let _ = app::update(&mut state, message);
+				assert_eq!(state.calendar.day, day);
+				assert_eq!(state.week_anchor, anchor);
+				assert_eq!(state.screen, screen);
+				assert_eq!(state.monthly(), monthly);
+				assert_eq!(state.weekly(), !monthly);
+				assert!(state.timeblocking.dragging.is_none());
+				assert!(state.timeblocking.drag_pointer.is_none());
+				assert_eq!(state.timeblocking.busy.len(), 1);
+			}
+		}
+	}
 
-    #[test]
-    fn week_grid_drop_uses_destination_day_and_snapped_time() {
-        let mut state = state(Screen::Inbox, false);
-        start_drag(&mut state);
-        let day = state.calendar_dates()[3];
-        let mut ui = Simulator::with_size(
-            Settings::default(),
-            state.editor_window_size,
-            super::super::editor_window(&state),
-        );
-        let bounds = ui
-            .find(day.format("%a %b %-d").to_string().as_str())
-            .unwrap()
-            .bounds();
-        let point = Point::new(bounds.center_x(), 300.0);
-        drop(ui);
-        let message = drop_at(&mut state, point);
-        assert!(
-            matches!(&message, Message::Task(TaskMessage::TaskDragDropped(_, Some(message)))
+	#[test]
+	fn week_grid_drop_uses_destination_day_and_snapped_time() {
+		let mut state = state(Screen::Inbox, false);
+		start_drag(&mut state);
+		let day = state.calendar_dates()[3];
+		let mut ui = Simulator::with_size(
+			Settings::default(),
+			state.editor_window_size,
+			super::super::editor_window(&state),
+		);
+		let bounds = ui
+			.find(day.format("%a %b %-d").to_string().as_str())
+			.unwrap()
+			.bounds();
+		let point = Point::new(bounds.center_x(), 300.0);
+		drop(ui);
+		let message = drop_at(&mut state, point);
+		assert!(
+			matches!(&message, Message::Task(TaskMessage::TaskDragDropped(_, Some(message)))
             if matches!(&**message, Message::Calendar(CalendarMessage::WeekDayAction(date, message))
                 if *date == day && matches!(&**message, Message::TimeBlocking(Action::DropTime(time))
                     if time.date_naive() == day && time.minute() % 15 == 0)))
-        );
-    }
+		);
+	}
 
-    #[test]
-    fn week_grid_drop_honors_horizontal_and_vertical_scroll() {
-        let mut state = state(Screen::Backlog, false);
-        state.config.calendar.weekly_day_width = 200;
-        state.config.views.calendar_week_width = Some(800.0);
-        start_drag(&mut state);
-        let day = state.calendar_dates()[2];
-        // A column and an hour scrolled off-screen must affect hit testing.
-        let message = drop_scrolled(&mut state, Point::new(250.0, 300.0), 200.0, 60.0);
-        assert!(
-            matches!(&message, Message::Task(TaskMessage::TaskDragDropped(_, Some(message)))
+	#[test]
+	fn week_grid_drop_honors_horizontal_and_vertical_scroll() {
+		let mut state = state(Screen::Backlog, false);
+		state.config.calendar.weekly_day_width = 200;
+		state.config.views.calendar_week_width = Some(800.0);
+		start_drag(&mut state);
+		let day = state.calendar_dates()[2];
+		// A column and an hour scrolled off-screen must affect hit testing.
+		let message = drop_scrolled(&mut state, Point::new(250.0, 300.0), 200.0, 60.0);
+		assert!(
+			matches!(&message, Message::Task(TaskMessage::TaskDragDropped(_, Some(message)))
             if matches!(&**message, Message::Calendar(CalendarMessage::WeekDayAction(date, message))
                 if *date == day && matches!(&**message, Message::TimeBlocking(Action::DropTime(time))
                     if time.date_naive() == day && time.minute() % 15 == 0))),
-            "{message:?}"
-        );
-    }
+			"{message:?}"
+		);
+	}
 
-    #[test]
-    fn week_board_drop_honors_scroll_offsets_and_precise_card_placement() {
-        let mut state = state(Screen::Backlog, false);
-        state.config.calendar.weekly_task_list = true;
-        state.config.views.calendar_week_width = Some(1200.0);
-        start_drag(&mut state);
-        let days = state.calendar_dates();
-        let destination = days[3];
-        let mut snapshot = state.calendar.cached_snapshot().unwrap();
-        let template = snapshot.events[0].clone();
-        for index in 0..20 {
-            let mut task = template.clone();
-            task.id = format!("task:destination-{index}");
-            task.title = format!("Destination row {index}");
-            task.all_day = false;
-            task.start =
-                calendar::at_clock(destination, 6, 0) + chrono::Duration::minutes(30 * index);
-            task.end = task.start + chrono::Duration::minutes(30);
-            snapshot.events.push(task);
-        }
-        state.calendar.apply_week_snapshot(snapshot, &days);
-        let mut ui = Simulator::with_size(
-            Settings::default(),
-            state.editor_window_size,
-            super::super::editor_window(&state),
-        );
-        let title = ui.find("Destination row 4").unwrap().bounds();
-        let point = title.center() - Vector::new(240.0, 250.0);
-        drop(ui);
-        let message = drop_scrolled(&mut state, point, 240.0, 250.0);
-        assert!(
-            matches!(&message, Message::Task(TaskMessage::TaskDragDropped(_, Some(message)))
+	#[test]
+	fn week_board_drop_honors_scroll_offsets_and_precise_card_placement() {
+		let mut state = state(Screen::Backlog, false);
+		state.config.calendar.weekly_task_list = true;
+		state.config.views.calendar_week_width = Some(1200.0);
+		start_drag(&mut state);
+		let days = state.calendar_dates();
+		let destination = days[3];
+		let mut snapshot = state.calendar.cached_snapshot().unwrap();
+		let template = snapshot.events[0].clone();
+		for index in 0..20 {
+			let mut task = template.clone();
+			task.id = format!("task:destination-{index}");
+			task.title = format!("Destination row {index}");
+			task.all_day = false;
+			task.start =
+				calendar::at_clock(destination, 6, 0) + chrono::Duration::minutes(30 * index);
+			task.end = task.start + chrono::Duration::minutes(30);
+			snapshot.events.push(task);
+		}
+		state.calendar.apply_week_snapshot(snapshot, &days);
+		let mut ui = Simulator::with_size(
+			Settings::default(),
+			state.editor_window_size,
+			super::super::editor_window(&state),
+		);
+		let title = ui.find("Destination row 4").unwrap().bounds();
+		let point = title.center() - Vector::new(240.0, 250.0);
+		drop(ui);
+		let message = drop_scrolled(&mut state, point, 240.0, 250.0);
+		assert!(
+			matches!(&message, Message::Task(TaskMessage::TaskDragDropped(_, Some(message)))
             if matches!(&**message, Message::Calendar(CalendarMessage::WeekDayAction(day, inner))
                 if *day == destination && matches!(&**inner, Message::TimeBlocking(Action::DropWeekList { target: Some(id), .. })
                     if id == "task:destination-4"))),
-            "{point:?}: {message:?}"
-        );
-    }
+			"{point:?}: {message:?}"
+		);
+	}
 
-    #[test]
-    fn bridge_cancels_outside_calendar_and_ignores_results_after_escape() {
-        let mut state = state(Screen::Inbox, true);
-        start_drag(&mut state);
-        let main = state.main_window.unwrap();
-        assert!(range_position(&state, main, Point::new(20.0, 200.0)).is_none());
-        let no_target = drop_at(&mut state, Point::new(5.0, 5.0));
-        assert!(matches!(
-            &no_target,
-            Message::Task(TaskMessage::TaskDragDropped(_, None))
-        ));
-        let _ = app::update(&mut state, no_target);
-        assert!(state.timeblocking.dragging.is_none());
-        assert!(state.timeblocking.busy.is_empty());
-        let _ = app::update(
-            &mut state,
-            Message::Task(TaskMessage::TaskDragDropped(
-                "task:drag".into(),
-                Some(Box::new(Message::TimeBlocking(Action::DropDay))),
-            )),
-        );
-        assert!(state.timeblocking.busy.is_empty());
-    }
+	#[test]
+	fn bridge_cancels_outside_calendar_and_ignores_results_after_escape() {
+		let mut state = state(Screen::Inbox, true);
+		start_drag(&mut state);
+		let main = state.main_window.unwrap();
+		assert!(range_position(&state, main, Point::new(20.0, 200.0)).is_none());
+		let no_target = drop_at(&mut state, Point::new(5.0, 5.0));
+		assert!(matches!(
+			&no_target,
+			Message::Task(TaskMessage::TaskDragDropped(_, None))
+		));
+		let _ = app::update(&mut state, no_target);
+		assert!(state.timeblocking.dragging.is_none());
+		assert!(state.timeblocking.busy.is_empty());
+		let _ = app::update(
+			&mut state,
+			Message::Task(TaskMessage::TaskDragDropped(
+				"task:drag".into(),
+				Some(Box::new(Message::TimeBlocking(Action::DropDay))),
+			)),
+		);
+		assert!(state.timeblocking.busy.is_empty());
+	}
 
-    #[test]
-    fn coordinates_handle_both_panel_sides_and_exclude_other_windows() {
-        let mut state = state(Screen::Inbox, true);
-        let main = state.main_window.unwrap();
-        let editor = state.editor_window.unwrap();
-        let point = Point::new(150.0, 250.0);
-        let top = state.screen_margin();
-        assert_eq!(
-            range_position(&state, main, Point::new(450.0, 250.0 + top)),
-            Some(point)
-        );
-        state.sidebar.as_mut().unwrap().side = Side::Right;
-        assert_eq!(
-            range_position(&state, main, Point::new(-1050.0, 250.0 + top)),
-            Some(point)
-        );
-        assert_eq!(range_position(&state, editor, point), Some(point));
-        assert!(range_position(&state, iced::window::Id::unique(), point).is_none());
-        // Plan Day shows its day grid in the same window, so it is a target too.
-        state.view = crate::app::CalendarView::Day;
-        assert_eq!(range_position(&state, editor, point), Some(point));
-        // The Do screen keeps its day in the panel itself.
-        state.screen = Screen::Calendar;
-        assert!(range_position(&state, editor, point).is_none());
-    }
+	#[test]
+	fn coordinates_handle_both_panel_sides_and_exclude_other_windows() {
+		let mut state = state(Screen::Inbox, true);
+		let main = state.main_window.unwrap();
+		let editor = state.editor_window.unwrap();
+		let point = Point::new(150.0, 250.0);
+		let top = state.screen_margin();
+		assert_eq!(
+			range_position(&state, main, Point::new(450.0, 250.0 + top)),
+			Some(point)
+		);
+		state.sidebar.as_mut().unwrap().side = Side::Right;
+		assert_eq!(
+			range_position(&state, main, Point::new(-1050.0, 250.0 + top)),
+			Some(point)
+		);
+		assert_eq!(range_position(&state, editor, point), Some(point));
+		assert!(range_position(&state, iced::window::Id::unique(), point).is_none());
+		// Plan Day shows its day grid in the same window, so it is a target too.
+		state.view = crate::app::CalendarView::Day;
+		assert_eq!(range_position(&state, editor, point), Some(point));
+		// The Do screen keeps its day in the panel itself.
+		state.screen = Screen::Calendar;
+		assert!(range_position(&state, editor, point).is_none());
+	}
 
-    /// The preview a hover shows is the drop the release then makes.
-    #[test]
-    fn week_grid_hover_previews_the_task_at_the_snapped_time() {
-        let mut state = state(Screen::Inbox, false);
-        start_drag(&mut state);
-        let day = state.calendar_dates()[3];
-        let mut ui = Simulator::with_size(
-            Settings::default(),
-            state.editor_window_size,
-            super::super::editor_window(&state),
-        );
-        let bounds = ui
-            .find(day.format("%a %b %-d").to_string().as_str())
-            .unwrap()
-            .bounds();
-        let point = Point::new(bounds.center_x(), 300.0);
-        drop(ui);
-        hover_at(&mut state, point);
-        let preview = crate::ui::drop_preview::timed(&state).expect("a timed preview");
-        assert_eq!(preview.start.date_naive(), day);
-        assert_eq!(preview.start.minute() % 15, 0);
-        assert!(!preview.all_day);
-        let minutes = match timeblocking::metadata(&preview).minutes {
-            0 => 30,
-            minutes => i64::from(minutes),
-        };
-        assert_eq!((preview.end - preview.start).num_minutes(), minutes);
-        assert!(crate::ui::drop_preview::hides_ghost(&state));
-        // The preview is drawn on the grid without breaking the view.
-        let _ = Simulator::with_size(
-            Settings::default(),
-            state.editor_window_size,
-            super::super::editor_window(&state),
-        );
-        let message = drop_at(&mut state, point);
-        assert!(
-            matches!(&message, Message::Task(TaskMessage::TaskDragDropped(_, Some(message)))
+	/// The preview a hover shows is the drop the release then makes.
+	#[test]
+	fn week_grid_hover_previews_the_task_at_the_snapped_time() {
+		let mut state = state(Screen::Inbox, false);
+		start_drag(&mut state);
+		let day = state.calendar_dates()[3];
+		let mut ui = Simulator::with_size(
+			Settings::default(),
+			state.editor_window_size,
+			super::super::editor_window(&state),
+		);
+		let bounds = ui
+			.find(day.format("%a %b %-d").to_string().as_str())
+			.unwrap()
+			.bounds();
+		let point = Point::new(bounds.center_x(), 300.0);
+		drop(ui);
+		hover_at(&mut state, point);
+		let preview = crate::ui::drop_preview::timed(&state).expect("a timed preview");
+		assert_eq!(preview.start.date_naive(), day);
+		assert_eq!(preview.start.minute() % 15, 0);
+		assert!(!preview.all_day);
+		let minutes = match timeblocking::metadata(&preview).minutes {
+			0 => 30,
+			minutes => i64::from(minutes),
+		};
+		assert_eq!((preview.end - preview.start).num_minutes(), minutes);
+		assert!(crate::ui::drop_preview::hides_ghost(&state));
+		// The preview is drawn on the grid without breaking the view.
+		let _ = Simulator::with_size(
+			Settings::default(),
+			state.editor_window_size,
+			super::super::editor_window(&state),
+		);
+		let message = drop_at(&mut state, point);
+		assert!(
+			matches!(&message, Message::Task(TaskMessage::TaskDragDropped(_, Some(message)))
             if matches!(&**message, Message::Calendar(CalendarMessage::WeekDayAction(_, message))
                 if matches!(&**message, Message::TimeBlocking(Action::DropTime(time))
                     if *time == preview.start))),
-            "{message:?}"
-        );
-    }
+			"{message:?}"
+		);
+	}
 
-    #[test]
-    fn plan_day_hover_previews_and_drops_on_the_day_grid() {
-        let mut state = state(Screen::Inbox, false);
-        state.view = crate::app::CalendarView::Day;
-        assert!(state.day_plan_active());
-        start_drag(&mut state);
-        // The floating card follows the pointer into the day grid.
-        hover_at(&mut state, Point::new(150.0, 400.0));
-        let preview = crate::ui::drop_preview::timed(&state).expect("a timed preview");
-        assert_eq!(preview.start.minute() % 15, 0);
-        let message = drop_at(&mut state, Point::new(150.0, 400.0));
-        assert!(
-            matches!(&message, Message::Task(TaskMessage::TaskDragDropped(_, Some(message)))
+	#[test]
+	fn plan_day_hover_previews_and_drops_on_the_day_grid() {
+		let mut state = state(Screen::Inbox, false);
+		state.view = crate::app::CalendarView::Day;
+		assert!(state.day_plan_active());
+		start_drag(&mut state);
+		// The floating card follows the pointer into the day grid.
+		hover_at(&mut state, Point::new(150.0, 400.0));
+		let preview = crate::ui::drop_preview::timed(&state).expect("a timed preview");
+		assert_eq!(preview.start.minute() % 15, 0);
+		let message = drop_at(&mut state, Point::new(150.0, 400.0));
+		assert!(
+			matches!(&message, Message::Task(TaskMessage::TaskDragDropped(_, Some(message)))
             if matches!(&**message, Message::TimeBlocking(Action::DropTime(time))
                 if *time == preview.start)),
-            "{message:?}"
-        );
-    }
+			"{message:?}"
+		);
+	}
 
-    #[test]
-    fn month_hover_previews_the_task_on_the_day_under_the_pointer() {
-        let mut state = state(Screen::Inbox, true);
-        start_drag(&mut state);
-        let day =
-            calendar::month_grid(state.week_anchor, state.config.calendar.first_day_of_week)[10];
-        let mut ui = Simulator::with_size(
-            Settings::default(),
-            state.editor_window_size,
-            super::super::editor_window(&state),
-        );
-        let point = ui
-            .find(day.day().to_string().as_str())
-            .unwrap()
-            .bounds()
-            .center()
-            + Vector::new(0.0, 45.0);
-        drop(ui);
-        hover_at(&mut state, point);
-        let preview = crate::ui::drop_preview::on_day(&state, day).expect("a day preview");
-        assert!(preview.all_day);
-        assert_eq!(preview.start.date_naive(), day);
-        assert!(crate::ui::drop_preview::on_day(&state, day.succ_opt().unwrap()).is_none());
-        assert!(!crate::ui::drop_preview::hides_ghost(&state));
-        // Leaving the plan view forgets the preview.
-        hover_at(&mut state, Point::new(-500.0, 5.0));
-        assert!(state.timeblocking.drop_hover.is_none());
-    }
+	#[test]
+	fn month_hover_previews_the_task_on_the_day_under_the_pointer() {
+		let mut state = state(Screen::Inbox, true);
+		start_drag(&mut state);
+		let day =
+			calendar::month_grid(state.week_anchor, state.config.calendar.first_day_of_week)[10];
+		let mut ui = Simulator::with_size(
+			Settings::default(),
+			state.editor_window_size,
+			super::super::editor_window(&state),
+		);
+		let point = ui
+			.find(day.day().to_string().as_str())
+			.unwrap()
+			.bounds()
+			.center() + Vector::new(0.0, 45.0);
+		drop(ui);
+		hover_at(&mut state, point);
+		let preview = crate::ui::drop_preview::on_day(&state, day).expect("a day preview");
+		assert!(preview.all_day);
+		assert_eq!(preview.start.date_naive(), day);
+		assert!(crate::ui::drop_preview::on_day(&state, day.succ_opt().unwrap()).is_none());
+		assert!(!crate::ui::drop_preview::hides_ghost(&state));
+		// Leaving the plan view forgets the preview.
+		hover_at(&mut state, Point::new(-500.0, 5.0));
+		assert!(state.timeblocking.drop_hover.is_none());
+	}
 
-    #[test]
-    fn week_board_hover_previews_a_card_that_holds_its_place() {
-        let mut state = state(Screen::Backlog, false);
-        state.config.calendar.weekly_task_list = true;
-        start_drag(&mut state);
-        let day = state.calendar_dates()[3];
-        let mut ui = Simulator::with_size(
-            Settings::default(),
-            state.editor_window_size,
-            super::super::editor_window(&state),
-        );
-        let point = ui
-            .find(day.format("%B %-d").to_string().as_str())
-            .unwrap()
-            .bounds()
-            .center()
-            + Vector::new(0.0, 45.0);
-        drop(ui);
-        hover_at(&mut state, point);
-        let (target, after, preview) =
-            crate::ui::drop_preview::week_list(&state, day).expect("a board preview");
-        assert_eq!(preview.start.date_naive(), day);
-        // With the preview card now in the column, the same spot keeps
-        // previewing the same drop.
-        hover_at(&mut state, point);
-        let (again, again_after, _) =
-            crate::ui::drop_preview::week_list(&state, day).expect("a board preview");
-        assert_eq!((again, again_after), (target, after));
-    }
+	#[test]
+	fn week_board_hover_previews_a_card_that_holds_its_place() {
+		let mut state = state(Screen::Backlog, false);
+		state.config.calendar.weekly_task_list = true;
+		start_drag(&mut state);
+		let day = state.calendar_dates()[3];
+		let mut ui = Simulator::with_size(
+			Settings::default(),
+			state.editor_window_size,
+			super::super::editor_window(&state),
+		);
+		let point = ui
+			.find(day.format("%B %-d").to_string().as_str())
+			.unwrap()
+			.bounds()
+			.center() + Vector::new(0.0, 45.0);
+		drop(ui);
+		hover_at(&mut state, point);
+		let (target, after, preview) =
+			crate::ui::drop_preview::week_list(&state, day).expect("a board preview");
+		assert_eq!(preview.start.date_naive(), day);
+		// With the preview card now in the column, the same spot keeps
+		// previewing the same drop.
+		hover_at(&mut state, point);
+		let (again, again_after, _) =
+			crate::ui::drop_preview::week_list(&state, day).expect("a board preview");
+		assert_eq!((again, again_after), (target, after));
+	}
 
-    /// Two timed meetings on `day`, 10–11 and 14–15, to drop between.
-    fn with_meetings(state: &mut State, day: chrono::NaiveDate) {
-        let mut snapshot = state.calendar.cached_snapshot().unwrap();
-        let template = calendar::sample_snapshot().events[0].clone();
-        for (id, title, hour) in [
-            ("morning", "Morning meeting", 10),
-            ("afternoon", "Afternoon meeting", 14),
-        ] {
-            let mut event = template.clone();
-            event.id = id.into();
-            event.title = title.into();
-            event.all_day = false;
-            event.start = calendar::at_clock(day, hour, 0);
-            event.end = event.start + chrono::Duration::hours(1);
-            snapshot.events.push(event);
-        }
-        let days = state.calendar_dates();
-        state.calendar.apply_week_snapshot(snapshot, &days);
-    }
+	/// Two timed meetings on `day`, 10–11 and 14–15, to drop between.
+	fn with_meetings(state: &mut State, day: chrono::NaiveDate) {
+		let mut snapshot = state.calendar.cached_snapshot().unwrap();
+		let template = calendar::sample_snapshot().events[0].clone();
+		for (id, title, hour) in [
+			("morning", "Morning meeting", 10),
+			("afternoon", "Afternoon meeting", 14),
+		] {
+			let mut event = template.clone();
+			event.id = id.into();
+			event.title = title.into();
+			event.all_day = false;
+			event.start = calendar::at_clock(day, hour, 0);
+			event.end = event.start + chrono::Duration::hours(1);
+			snapshot.events.push(event);
+		}
+		let days = state.calendar_dates();
+		state.calendar.apply_week_snapshot(snapshot, &days);
+	}
 
-    fn row_bounds(state: &State, label: &str) -> Rectangle {
-        let mut ui = Simulator::with_size(
-            Settings::default(),
-            state.editor_window_size,
-            super::super::editor_window(state),
-        );
-        ui.find(label)
-            .unwrap_or_else(|_| panic!("no {label:?}"))
-            .bounds()
-    }
+	fn row_bounds(state: &State, label: &str) -> Rectangle {
+		let mut ui = Simulator::with_size(
+			Settings::default(),
+			state.editor_window_size,
+			super::super::editor_window(state),
+		);
+		ui.find(label)
+			.unwrap_or_else(|_| panic!("no {label:?}"))
+			.bounds()
+	}
 
-    fn dropped_at(
-        message: &Message,
-    ) -> Option<(
-        chrono::NaiveDate,
-        Option<String>,
-        Option<chrono::DateTime<chrono::Local>>,
-    )> {
-        let Message::Task(TaskMessage::TaskDragDropped(_, Some(message))) = message else {
-            return None;
-        };
-        let Message::Calendar(CalendarMessage::WeekDayAction(day, message)) = &**message else {
-            return None;
-        };
-        let Message::TimeBlocking(Action::DropAt { after, start }) = &**message else {
-            return None;
-        };
-        Some((*day, after.clone(), *start))
-    }
+	fn dropped_at(
+		message: &Message,
+	) -> Option<(
+		chrono::NaiveDate,
+		Option<String>,
+		Option<chrono::DateTime<chrono::Local>>,
+	)> {
+		let Message::Task(TaskMessage::TaskDragDropped(_, Some(message))) = message else {
+			return None;
+		};
+		let Message::Calendar(CalendarMessage::WeekDayAction(day, message)) = &**message else {
+			return None;
+		};
+		let Message::TimeBlocking(Action::DropAt { after, start }) = &**message else {
+			return None;
+		};
+		Some((*day, after.clone(), *start))
+	}
 
-    #[test]
-    fn two_week_drop_between_rows_starts_when_the_row_above_ends() {
-        let mut state = state(Screen::Inbox, false);
-        state.view = crate::app::CalendarView::TwoWeek;
-        let day = state.calendar_dates()[3];
-        with_meetings(&mut state, day);
-        start_drag(&mut state);
-        let clock = |hour| {
-            calendar::time_format::clock(
-                calendar::at_clock(day, hour, 0),
-                state.config.appearance.time_format,
-            )
-        };
-        let label = format!("{} Morning meeting", clock(10));
-        let bounds = row_bounds(&state, &label);
-        // The bottom half of the morning meeting: just after it.
-        let point = Point::new(bounds.center_x(), bounds.y + bounds.height * 0.8);
-        hover_at(&mut state, point);
-        assert!(
-            matches!(&state.timeblocking.drop_hover, Some(hover)
+	#[test]
+	fn two_week_drop_between_rows_starts_when_the_row_above_ends() {
+		let mut state = state(Screen::Inbox, false);
+		state.view = crate::app::CalendarView::TwoWeek;
+		let day = state.calendar_dates()[3];
+		with_meetings(&mut state, day);
+		start_drag(&mut state);
+		let clock = |hour| {
+			calendar::time_format::clock(
+				calendar::at_clock(day, hour, 0),
+				state.config.appearance.time_format,
+			)
+		};
+		let label = format!("{} Morning meeting", clock(10));
+		let bounds = row_bounds(&state, &label);
+		// The bottom half of the morning meeting: just after it.
+		let point = Point::new(bounds.center_x(), bounds.y + bounds.height * 0.8);
+		hover_at(&mut state, point);
+		assert!(
+			matches!(&state.timeblocking.drop_hover, Some(hover)
                 if matches!(&hover.action, Action::DropAt { after: Some(after), start: Some(start) }
                     if after == "morning" && *start == calendar::at_clock(day, 11, 0))),
-            "{:?}",
-            state.timeblocking.drop_hover
-        );
-        // The preview row sits in the gap and holds it.
-        hover_at(&mut state, point);
-        let message = drop_at(&mut state, point);
-        assert_eq!(
-            dropped_at(&message),
-            Some((
-                day,
-                Some("morning".into()),
-                Some(calendar::at_clock(day, 11, 0))
-            )),
-            "{message:?}"
-        );
-    }
+			"{:?}",
+			state.timeblocking.drop_hover
+		);
+		// The preview row sits in the gap and holds it.
+		hover_at(&mut state, point);
+		let message = drop_at(&mut state, point);
+		assert_eq!(
+			dropped_at(&message),
+			Some((
+				day,
+				Some("morning".into()),
+				Some(calendar::at_clock(day, 11, 0))
+			)),
+			"{message:?}"
+		);
+	}
 
-    #[test]
-    fn month_drop_above_the_first_timed_row_ends_as_it_starts() {
-        let mut state = state(Screen::Inbox, true);
-        let day =
-            calendar::month_grid(state.week_anchor, state.config.calendar.first_day_of_week)[10];
-        with_meetings(&mut state, day);
-        start_drag(&mut state);
-        let label = format!(
-            "{} Morning meeting",
-            calendar::time_format::clock(
-                calendar::at_clock(day, 10, 0),
-                state.config.appearance.time_format,
-            )
-        );
-        let bounds = row_bounds(&state, &label);
-        let point = Point::new(bounds.center_x(), bounds.y + bounds.height * 0.2);
-        let message = drop_at(&mut state, point);
-        let task = state.calendar.event("task:drag").unwrap();
-        let minutes = match timeblocking::metadata(task).minutes {
-            0 => 30,
-            minutes => i64::from(minutes),
-        };
-        assert_eq!(
-            dropped_at(&message),
-            Some((
-                day,
-                None,
-                Some(calendar::at_clock(day, 10, 0) - chrono::Duration::minutes(minutes))
-            )),
-            "{message:?}"
-        );
-    }
+	#[test]
+	fn month_drop_above_the_first_timed_row_ends_as_it_starts() {
+		let mut state = state(Screen::Inbox, true);
+		let day =
+			calendar::month_grid(state.week_anchor, state.config.calendar.first_day_of_week)[10];
+		with_meetings(&mut state, day);
+		start_drag(&mut state);
+		let label = format!(
+			"{} Morning meeting",
+			calendar::time_format::clock(
+				calendar::at_clock(day, 10, 0),
+				state.config.appearance.time_format,
+			)
+		);
+		let bounds = row_bounds(&state, &label);
+		let point = Point::new(bounds.center_x(), bounds.y + bounds.height * 0.2);
+		let message = drop_at(&mut state, point);
+		let task = state.calendar.event("task:drag").unwrap();
+		let minutes = match timeblocking::metadata(task).minutes {
+			0 => 30,
+			minutes => i64::from(minutes),
+		};
+		assert_eq!(
+			dropped_at(&message),
+			Some((
+				day,
+				None,
+				Some(calendar::at_clock(day, 10, 0) - chrono::Duration::minutes(minutes))
+			)),
+			"{message:?}"
+		);
+	}
 
-    #[test]
-    fn schedule_takes_drops_between_rows_and_on_the_whole_day() {
-        let mut state = state(Screen::Inbox, false);
-        state.view = crate::app::CalendarView::Schedule;
-        let day = state.calendar_dates()[1];
-        with_meetings(&mut state, day);
-        start_drag(&mut state);
-        let bounds = row_bounds(&state, "Afternoon meeting");
-        let point = Point::new(bounds.center_x(), bounds.y + bounds.height * 0.8);
-        hover_at(&mut state, point);
-        assert!(
-            matches!(&state.timeblocking.drop_hover, Some(hover)
+	#[test]
+	fn schedule_takes_drops_between_rows_and_on_the_whole_day() {
+		let mut state = state(Screen::Inbox, false);
+		state.view = crate::app::CalendarView::Schedule;
+		let day = state.calendar_dates()[1];
+		with_meetings(&mut state, day);
+		start_drag(&mut state);
+		let bounds = row_bounds(&state, "Afternoon meeting");
+		let point = Point::new(bounds.center_x(), bounds.y + bounds.height * 0.8);
+		hover_at(&mut state, point);
+		assert!(
+			matches!(&state.timeblocking.drop_hover, Some(hover)
                 if hover.day == Some(day)
                     && matches!(&hover.action, Action::DropAt { after: Some(after), start: Some(start) }
                         if after == "afternoon" && *start == calendar::at_clock(day, 15, 0))),
-            "{:?}",
-            state.timeblocking.drop_hover
-        );
-        // Building the view with the preview in it works.
-        let _ = row_bounds(&state, "Afternoon meeting");
-        let message = drop_at(&mut state, point);
-        assert_eq!(
-            dropped_at(&message),
-            Some((
-                day,
-                Some("afternoon".into()),
-                Some(calendar::at_clock(day, 15, 0))
-            )),
-            "{message:?}"
-        );
+			"{:?}",
+			state.timeblocking.drop_hover
+		);
+		// Building the view with the preview in it works.
+		let _ = row_bounds(&state, "Afternoon meeting");
+		let message = drop_at(&mut state, point);
+		assert_eq!(
+			dropped_at(&message),
+			Some((
+				day,
+				Some("afternoon".into()),
+				Some(calendar::at_clock(day, 15, 0))
+			)),
+			"{message:?}"
+		);
 
-        // The date beside the rows takes the task for the day as a whole.
-        let mut state = self::state(Screen::Inbox, false);
-        state.view = crate::app::CalendarView::Schedule;
-        with_meetings(&mut state, day);
-        start_drag(&mut state);
-        let date = row_bounds(
-            &state,
-            day.format("%b, %a").to_string().to_uppercase().as_str(),
-        );
-        let message = drop_at(&mut state, date.center());
-        assert!(
-            matches!(&message, Message::Task(TaskMessage::TaskDragDropped(_, Some(message)))
+		// The date beside the rows takes the task for the day as a whole.
+		let mut state = self::state(Screen::Inbox, false);
+		state.view = crate::app::CalendarView::Schedule;
+		with_meetings(&mut state, day);
+		start_drag(&mut state);
+		let date = row_bounds(
+			&state,
+			day.format("%b, %a").to_string().to_uppercase().as_str(),
+		);
+		let message = drop_at(&mut state, date.center());
+		assert!(
+			matches!(&message, Message::Task(TaskMessage::TaskDragDropped(_, Some(message)))
                 if matches!(&**message, Message::Calendar(CalendarMessage::WeekDayAction(d, inner))
                     if *d == day && matches!(&**inner, Message::TimeBlocking(Action::DropDay)))),
-            "{message:?}"
-        );
-    }
+			"{message:?}"
+		);
+	}
 }

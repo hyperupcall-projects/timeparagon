@@ -22,121 +22,121 @@ pub use timeslay_core::sounds::{CHANNELS, Pcm, SAMPLE_RATE, Tone};
 
 /// A request to play something.
 pub struct Play {
-    pub pcm: Pcm,
-    /// How many times to play it; 0 loops until stopped.
-    pub repeats: u8,
-    pub fade_in: Duration,
+	pub pcm: Pcm,
+	/// How many times to play it; 0 loops until stopped.
+	pub repeats: u8,
+	pub fade_in: Duration,
 }
 
 /// What the loop thread is being asked to do.
 pub enum Command {
-    Play(Play),
-    Stop,
-    Shutdown,
+	Play(Play),
+	Stop,
+	Shutdown,
 }
 
 /// Whether we can play anything.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Status {
-    /// Nothing has been played yet, so there is nothing to report.
-    #[default]
-    Unknown,
-    Ready,
-    /// PipeWire could not be reached. Carries something worth showing a user.
-    Unavailable(String),
+	/// Nothing has been played yet, so there is nothing to report.
+	#[default]
+	Unknown,
+	Ready,
+	/// PipeWire could not be reached. Carries something worth showing a user.
+	Unavailable(String),
 }
 
 impl Status {
-    pub fn is_unavailable(&self) -> bool {
-        matches!(self, Self::Unavailable(_))
-    }
+	pub fn is_unavailable(&self) -> bool {
+		matches!(self, Self::Unavailable(_))
+	}
 }
 
 /// State shared with the audio thread and its realtime callback.
 pub struct Shared {
-    /// Playback gain, as `f32` bits.
-    ///
-    /// An atomic rather than a channel message so that dragging the volume
-    /// slider changes the level of a sound that is already playing, without
-    /// the realtime thread ever having to synchronize with anyone.
-    gain: AtomicU32,
+	/// Playback gain, as `f32` bits.
+	///
+	/// An atomic rather than a channel message so that dragging the volume
+	/// slider changes the level of a sound that is already playing, without
+	/// the realtime thread ever having to synchronize with anyone.
+	gain: AtomicU32,
 
-    /// Handoff to the realtime callback.
-    ///
-    /// The callback only ever `try_lock`s this, so it cannot be blocked by
-    /// the loop thread holding it.
-    pending: Mutex<Option<Command>>,
+	/// Handoff to the realtime callback.
+	///
+	/// The callback only ever `try_lock`s this, so it cannot be blocked by
+	/// the loop thread holding it.
+	pending: Mutex<Option<Command>>,
 
-    /// Buffers the realtime callback has finished with, parked here so they
-    /// are freed on the loop thread instead.
-    retired: Mutex<Vec<Pcm>>,
+	/// Buffers the realtime callback has finished with, parked here so they
+	/// are freed on the loop thread instead.
+	retired: Mutex<Vec<Pcm>>,
 
-    /// Set by the realtime callback when a sound plays out.
-    finished: AtomicBool,
+	/// Set by the realtime callback when a sound plays out.
+	finished: AtomicBool,
 
-    /// Whether the audio thread is still running.
-    alive: AtomicBool,
+	/// Whether the audio thread is still running.
+	alive: AtomicBool,
 
-    status: Mutex<Status>,
+	status: Mutex<Status>,
 }
 
 impl Shared {
-    fn new() -> Self {
-        Self {
-            gain: AtomicU32::new(1.0_f32.to_bits()),
-            pending: Mutex::new(None),
-            retired: Mutex::new(Vec::new()),
-            finished: AtomicBool::new(false),
-            alive: AtomicBool::new(false),
-            status: Mutex::new(Status::Unknown),
-        }
-    }
+	fn new() -> Self {
+		Self {
+			gain: AtomicU32::new(1.0_f32.to_bits()),
+			pending: Mutex::new(None),
+			retired: Mutex::new(Vec::new()),
+			finished: AtomicBool::new(false),
+			alive: AtomicBool::new(false),
+			status: Mutex::new(Status::Unknown),
+		}
+	}
 
-    pub fn gain(&self) -> f32 {
-        f32::from_bits(self.gain.load(Ordering::Relaxed))
-    }
+	pub fn gain(&self) -> f32 {
+		f32::from_bits(self.gain.load(Ordering::Relaxed))
+	}
 
-    pub fn set_gain(&self, gain: f32) {
-        self.gain
-            .store(gain.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
-    }
+	pub fn set_gain(&self, gain: f32) {
+		self.gain
+			.store(gain.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+	}
 
-    /// Hands a command to the realtime callback.
-    fn submit(&self, command: Command) {
-        if let Ok(mut pending) = self.pending.lock() {
-            *pending = Some(command);
-        }
-    }
+	/// Hands a command to the realtime callback.
+	fn submit(&self, command: Command) {
+		if let Ok(mut pending) = self.pending.lock() {
+			*pending = Some(command);
+		}
+	}
 
-    /// Parks a finished buffer for the loop thread to free.
-    ///
-    /// Called from the realtime thread, so it must not block: if the loop
-    /// thread happens to hold the lock we drop the buffer here instead, which
-    /// is the rare case and still better than waiting.
-    fn retire(&self, pcm: Pcm) {
-        if let Ok(mut retired) = self.retired.try_lock() {
-            retired.push(pcm);
-        }
-    }
+	/// Parks a finished buffer for the loop thread to free.
+	///
+	/// Called from the realtime thread, so it must not block: if the loop
+	/// thread happens to hold the lock we drop the buffer here instead, which
+	/// is the rare case and still better than waiting.
+	fn retire(&self, pcm: Pcm) {
+		if let Ok(mut retired) = self.retired.try_lock() {
+			retired.push(pcm);
+		}
+	}
 
-    fn collect_retired(&self) {
-        if let Ok(mut retired) = self.retired.lock() {
-            retired.clear();
-        }
-    }
+	fn collect_retired(&self) {
+		if let Ok(mut retired) = self.retired.lock() {
+			retired.clear();
+		}
+	}
 
-    fn set_status(&self, status: Status) {
-        if let Ok(mut current) = self.status.lock() {
-            *current = status;
-        }
-    }
+	fn set_status(&self, status: Status) {
+		if let Ok(mut current) = self.status.lock() {
+			*current = status;
+		}
+	}
 
-    pub fn status(&self) -> Status {
-        self.status
-            .lock()
-            .map(|status| status.clone())
-            .unwrap_or_default()
-    }
+	pub fn status(&self) -> Status {
+		self.status
+			.lock()
+			.map(|status| status.clone())
+			.unwrap_or_default()
+	}
 }
 
 /// The handle the rest of the app holds.
@@ -144,116 +144,116 @@ impl Shared {
 /// Cheap to construct: no thread is started and no connection is made until
 /// something actually needs to be played.
 pub struct Audio {
-    shared: Arc<Shared>,
-    #[cfg(feature = "pipewire-audio")]
-    sender: Option<pipewire::channel::Sender<Command>>,
+	shared: Arc<Shared>,
+	#[cfg(feature = "pipewire-audio")]
+	sender: Option<pipewire::channel::Sender<Command>>,
 }
 
 impl Default for Audio {
-    fn default() -> Self {
-        Self::new()
-    }
+	fn default() -> Self {
+		Self::new()
+	}
 }
 
 impl Audio {
-    pub fn new() -> Self {
-        Self {
-            shared: Arc::new(Shared::new()),
-            #[cfg(feature = "pipewire-audio")]
-            sender: None,
-        }
-    }
+	pub fn new() -> Self {
+		Self {
+			shared: Arc::new(Shared::new()),
+			#[cfg(feature = "pipewire-audio")]
+			sender: None,
+		}
+	}
 
-    pub fn status(&self) -> Status {
-        self.shared.status()
-    }
+	pub fn status(&self) -> Status {
+		self.shared.status()
+	}
 
-    /// Sets the playback gain, taking effect mid-sound.
-    pub fn set_gain(&self, gain: f32) {
-        self.shared.set_gain(gain);
-    }
+	/// Sets the playback gain, taking effect mid-sound.
+	pub fn set_gain(&self, gain: f32) {
+		self.shared.set_gain(gain);
+	}
 
-    /// Starts a sound, replacing whatever was playing.
-    #[cfg(feature = "pipewire-audio")]
-    pub fn play(&mut self, play: Play) {
-        self.send(Command::Play(play));
-    }
+	/// Starts a sound, replacing whatever was playing.
+	#[cfg(feature = "pipewire-audio")]
+	pub fn play(&mut self, play: Play) {
+		self.send(Command::Play(play));
+	}
 
-    #[cfg(not(feature = "pipewire-audio"))]
-    pub fn play(&mut self, _play: Play) {
-        self.shared.set_status(Status::Unavailable(
-            "this build was compiled without PipeWire support".to_owned(),
-        ));
-    }
+	#[cfg(not(feature = "pipewire-audio"))]
+	pub fn play(&mut self, _play: Play) {
+		self.shared.set_status(Status::Unavailable(
+			"this build was compiled without PipeWire support".to_owned(),
+		));
+	}
 
-    pub fn stop(&mut self) {
-        #[cfg(feature = "pipewire-audio")]
-        if self.is_running() {
-            self.send(Command::Stop);
-        }
-    }
+	pub fn stop(&mut self) {
+		#[cfg(feature = "pipewire-audio")]
+		if self.is_running() {
+			self.send(Command::Stop);
+		}
+	}
 
-    #[cfg(feature = "pipewire-audio")]
-    fn is_running(&self) -> bool {
-        self.sender.is_some() && self.shared.alive.load(Ordering::Acquire)
-    }
+	#[cfg(feature = "pipewire-audio")]
+	fn is_running(&self) -> bool {
+		self.sender.is_some() && self.shared.alive.load(Ordering::Acquire)
+	}
 
-    /// Sends a command, starting the audio thread if it has gone away.
-    ///
-    /// The thread shuts itself down when it has been idle for a while, so the
-    /// common case after a long gap is that there is nothing to send to and a
-    /// fresh thread has to be spawned.
-    #[cfg(feature = "pipewire-audio")]
-    fn send(&mut self, command: Command) {
-        if !self.is_running() {
-            self.spawn();
-        }
+	/// Sends a command, starting the audio thread if it has gone away.
+	///
+	/// The thread shuts itself down when it has been idle for a while, so the
+	/// common case after a long gap is that there is nothing to send to and a
+	/// fresh thread has to be spawned.
+	#[cfg(feature = "pipewire-audio")]
+	fn send(&mut self, command: Command) {
+		if !self.is_running() {
+			self.spawn();
+		}
 
-        let Some(sender) = &self.sender else {
-            return;
-        };
+		let Some(sender) = &self.sender else {
+			return;
+		};
 
-        if sender.send(command).is_err() {
-            // The thread went away between the check and the send. One retry
-            // on a fresh thread, then give up rather than spin.
-            log::debug!("audio thread went away; restarting it");
-            self.spawn();
+		if sender.send(command).is_err() {
+			// The thread went away between the check and the send. One retry
+			// on a fresh thread, then give up rather than spin.
+			log::debug!("audio thread went away; restarting it");
+			self.spawn();
 
-            if let Some(sender) = &self.sender {
-                let _ = sender.send(Command::Stop);
-            }
-        }
-    }
+			if let Some(sender) = &self.sender {
+				let _ = sender.send(Command::Stop);
+			}
+		}
+	}
 
-    #[cfg(feature = "pipewire-audio")]
-    fn spawn(&mut self) {
-        let (sender, receiver) = pipewire::channel::channel();
-        let shared = self.shared.clone();
+	#[cfg(feature = "pipewire-audio")]
+	fn spawn(&mut self) {
+		let (sender, receiver) = pipewire::channel::channel();
+		let shared = self.shared.clone();
 
-        shared.alive.store(true, Ordering::Release);
+		shared.alive.store(true, Ordering::Release);
 
-        match std::thread::Builder::new()
-            .name("timeslay-audio".to_owned())
-            .spawn(move || backend::run(shared, receiver))
-        {
-            Ok(_handle) => self.sender = Some(sender),
-            Err(error) => {
-                self.shared.alive.store(false, Ordering::Release);
-                self.shared.set_status(Status::Unavailable(format!(
-                    "could not start the audio thread: {error}"
-                )));
-            }
-        }
-    }
+		match std::thread::Builder::new()
+			.name("timeslay-audio".to_owned())
+			.spawn(move || backend::run(shared, receiver))
+		{
+			Ok(_handle) => self.sender = Some(sender),
+			Err(error) => {
+				self.shared.alive.store(false, Ordering::Release);
+				self.shared.set_status(Status::Unavailable(format!(
+					"could not start the audio thread: {error}"
+				)));
+			}
+		}
+	}
 }
 
 impl Drop for Audio {
-    fn drop(&mut self) {
-        #[cfg(feature = "pipewire-audio")]
-        if let Some(sender) = &self.sender {
-            let _ = sender.send(Command::Shutdown);
-        }
-    }
+	fn drop(&mut self) {
+		#[cfg(feature = "pipewire-audio")]
+		if let Some(sender) = &self.sender {
+			let _ = sender.send(Command::Shutdown);
+		}
+	}
 }
 
 /// Renders whichever sound the config asks for.
@@ -261,71 +261,71 @@ impl Drop for Audio {
 /// Decoding happens off the UI thread (this is called from a task), because a
 /// large file can take long enough to drop a frame.
 pub fn render(choice: &crate::config::SoundChoice) -> Result<Pcm, String> {
-    match choice {
-        crate::config::SoundChoice::Builtin(tone) => Ok(tone.render()),
-        crate::config::SoundChoice::Custom { file } => load_file(file),
-    }
+	match choice {
+		crate::config::SoundChoice::Builtin(tone) => Ok(tone.render()),
+		crate::config::SoundChoice::Custom { file } => load_file(file),
+	}
 }
 
 fn load_file(path: &Path) -> Result<Pcm, String> {
-    decode::load(path).map_err(|error| format!("{}: {error}", path.display()))
+	decode::load(path).map_err(|error| format!("{}: {error}", path.display()))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+	use super::*;
 
-    #[test]
-    fn gain_is_clamped_and_round_trips() {
-        let shared = Shared::new();
+	#[test]
+	fn gain_is_clamped_and_round_trips() {
+		let shared = Shared::new();
 
-        shared.set_gain(0.25);
-        assert_eq!(shared.gain(), 0.25);
+		shared.set_gain(0.25);
+		assert_eq!(shared.gain(), 0.25);
 
-        shared.set_gain(5.0);
-        assert_eq!(shared.gain(), 1.0);
+		shared.set_gain(5.0);
+		assert_eq!(shared.gain(), 1.0);
 
-        shared.set_gain(-1.0);
-        assert_eq!(shared.gain(), 0.0);
-    }
+		shared.set_gain(-1.0);
+		assert_eq!(shared.gain(), 0.0);
+	}
 
-    #[test]
-    fn a_fresh_handle_starts_no_thread_and_claims_nothing() {
-        let audio = Audio::new();
+	#[test]
+	fn a_fresh_handle_starts_no_thread_and_claims_nothing() {
+		let audio = Audio::new();
 
-        assert_eq!(audio.status(), Status::Unknown);
-        assert!(!audio.shared.alive.load(Ordering::Acquire));
-    }
+		assert_eq!(audio.status(), Status::Unknown);
+		assert!(!audio.shared.alive.load(Ordering::Acquire));
+	}
 
-    #[test]
-    fn retired_buffers_are_freed_on_collection() {
-        let shared = Shared::new();
-        let pcm: Pcm = vec![0.0; 16].into();
+	#[test]
+	fn retired_buffers_are_freed_on_collection() {
+		let shared = Shared::new();
+		let pcm: Pcm = vec![0.0; 16].into();
 
-        shared.retire(pcm.clone());
-        assert_eq!(Arc::strong_count(&pcm), 2);
+		shared.retire(pcm.clone());
+		assert_eq!(Arc::strong_count(&pcm), 2);
 
-        shared.collect_retired();
-        assert_eq!(Arc::strong_count(&pcm), 1);
-    }
+		shared.collect_retired();
+		assert_eq!(Arc::strong_count(&pcm), 1);
+	}
 
-    #[test]
-    fn rendering_a_builtin_choice_goes_through_the_synth() {
-        use crate::config::SoundChoice;
+	#[test]
+	fn rendering_a_builtin_choice_goes_through_the_synth() {
+		use crate::config::SoundChoice;
 
-        let pcm = render(&SoundChoice::Builtin(Tone::Beep)).unwrap();
-        assert!(!pcm.is_empty());
-    }
+		let pcm = render(&SoundChoice::Builtin(Tone::Beep)).unwrap();
+		assert!(!pcm.is_empty());
+	}
 
-    #[test]
-    fn rendering_a_missing_file_explains_which_file() {
-        use crate::config::SoundChoice;
+	#[test]
+	fn rendering_a_missing_file_explains_which_file() {
+		use crate::config::SoundChoice;
 
-        let error = render(&SoundChoice::Custom {
-            file: "/nonexistent/alarm.wav".into(),
-        })
-        .unwrap_err();
+		let error = render(&SoundChoice::Custom {
+			file: "/nonexistent/alarm.wav".into(),
+		})
+		.unwrap_err();
 
-        assert!(error.contains("/nonexistent/alarm.wav"), "got {error}");
-    }
+		assert!(error.contains("/nonexistent/alarm.wav"), "got {error}");
+	}
 }

@@ -4,158 +4,158 @@ use iced_test::{Simulator, core::Settings};
 use timeslay::app::{CalendarMessage, EventMessage, SettingsMessage};
 use timeslay::calendar::first_day::FirstDayOfWeek;
 use timeslay::{
-    app::{self, Message, State},
-    calendar::{self, Store},
+	app::{self, Message, State},
+	calendar::{self, Store},
 };
 
 fn date(year: i32, month: u32, day: u32) -> NaiveDate {
-    NaiveDate::from_ymd_opt(year, month, day).unwrap()
+	NaiveDate::from_ymd_opt(year, month, day).unwrap()
 }
 
 fn state() -> State {
-    let mut state = State::blank();
-    let mut snapshot = calendar::sample_snapshot();
-    snapshot.day = date(2026, 8, 15); // Six-week month, including July and September.
-    let template = snapshot
-        .events
-        .iter()
-        .find(|e| e.id == "standup")
-        .unwrap()
-        .clone();
-    snapshot.events = calendar::month_grid(snapshot.day, state.config.calendar.first_day_of_week)
-        .into_iter()
-        .map(|day| {
-            let mut event = template.clone();
-            event.id = day.to_string();
-            event.title = format!("Meeting on {day}");
-            event.start = Local
-                .from_local_datetime(&day.and_hms_opt(9, 0, 0).unwrap())
-                .single()
-                .unwrap();
-            event.end = event.start + Duration::hours(1);
-            event
-        })
-        .collect();
-    state.calendar = Store::with_snapshot(calendar::Snapshot {
-        events: vec![],
-        ..snapshot.clone()
-    });
-    state.view = timeslay::app::CalendarView::Month;
-    state.week_anchor = snapshot.day;
-    let dates = state.calendar_dates();
-    state.calendar.apply_week_snapshot(snapshot, &dates);
-    state
+	let mut state = State::blank();
+	let mut snapshot = calendar::sample_snapshot();
+	snapshot.day = date(2026, 8, 15); // Six-week month, including July and September.
+	let template = snapshot
+		.events
+		.iter()
+		.find(|e| e.id == "standup")
+		.unwrap()
+		.clone();
+	snapshot.events = calendar::month_grid(snapshot.day, state.config.calendar.first_day_of_week)
+		.into_iter()
+		.map(|day| {
+			let mut event = template.clone();
+			event.id = day.to_string();
+			event.title = format!("Meeting on {day}");
+			event.start = Local
+				.from_local_datetime(&day.and_hms_opt(9, 0, 0).unwrap())
+				.single()
+				.unwrap();
+			event.end = event.start + Duration::hours(1);
+			event
+		})
+		.collect();
+	state.calendar = Store::with_snapshot(calendar::Snapshot {
+		events: vec![],
+		..snapshot.clone()
+	});
+	state.view = timeslay::app::CalendarView::Month;
+	state.week_anchor = snapshot.day;
+	let dates = state.calendar_dates();
+	state.calendar.apply_week_snapshot(snapshot, &dates);
+	state
 }
 
 fn render(state: &State, size: Size) -> Simulator<'_, Message> {
-    let view: Element<'_, Message> = timeslay::ui::editor_window(state);
-    Simulator::with_size(Settings::default(), size, view)
+	let view: Element<'_, Message> = timeslay::ui::editor_window(state);
+	Simulator::with_size(Settings::default(), size, view)
 }
 
 #[test]
 fn whole_month_survives_cache_pruning_and_day_interactions() {
-    let mut state = state();
-    let dates = state.calendar_dates();
-    assert_eq!(dates.len(), 42);
-    for day in &dates {
-        assert!(
-            state
-                .calendar
-                .events_on(*day)
-                .iter()
-                .any(|event| event.id == day.to_string()),
-            "missing {day}"
-        );
-    }
-    let last = *dates.last().unwrap();
-    let _ = app::update(
-        &mut state,
-        Message::Calendar(CalendarMessage::WeekDayAction(
-            last,
-            Box::new(Message::Event(EventMessage::EventOpened(last.to_string()))),
-        )),
-    );
-    assert_eq!(state.calendar.day, last);
-    assert_eq!(state.week_anchor, date(2026, 8, 15));
-    assert_eq!(state.calendar_dates(), dates);
-    for day in &dates {
-        assert!(!state.calendar.events_on(*day).is_empty(), "lost {day}");
-    }
+	let mut state = state();
+	let dates = state.calendar_dates();
+	assert_eq!(dates.len(), 42);
+	for day in &dates {
+		assert!(
+			state
+				.calendar
+				.events_on(*day)
+				.iter()
+				.any(|event| event.id == day.to_string()),
+			"missing {day}"
+		);
+	}
+	let last = *dates.last().unwrap();
+	let _ = app::update(
+		&mut state,
+		Message::Calendar(CalendarMessage::WeekDayAction(
+			last,
+			Box::new(Message::Event(EventMessage::EventOpened(last.to_string()))),
+		)),
+	);
+	assert_eq!(state.calendar.day, last);
+	assert_eq!(state.week_anchor, date(2026, 8, 15));
+	assert_eq!(state.calendar_dates(), dates);
+	for day in &dates {
+		assert!(!state.calendar.events_on(*day).is_empty(), "lost {day}");
+	}
 }
 
 #[test]
 fn the_grid_follows_the_first_day_of_the_week_and_keeps_the_month_in_view() {
-    let mut state = state();
-    let anchor = state.week_anchor;
-    for (first_day, first_date) in [
-        (FirstDayOfWeek::Sunday, date(2026, 7, 26)),
-        (FirstDayOfWeek::Monday, date(2026, 7, 27)),
-        // August 2026 starts on a Saturday, so nothing leads it.
-        (FirstDayOfWeek::Saturday, date(2026, 8, 1)),
-    ] {
-        let _ = app::update(
-            &mut state,
-            Message::Settings(SettingsMessage::FirstDayOfWeekSelected(first_day)),
-        );
-        let dates = state.calendar_dates();
-        assert_eq!(dates[0], first_date, "{first_day}");
-        assert_eq!(state.week_anchor, anchor);
-        assert!(
-            render(&state, Size::new(1400.0, 1000.0))
-                .find("Mon")
-                .is_ok()
-        );
-    }
+	let mut state = state();
+	let anchor = state.week_anchor;
+	for (first_day, first_date) in [
+		(FirstDayOfWeek::Sunday, date(2026, 7, 26)),
+		(FirstDayOfWeek::Monday, date(2026, 7, 27)),
+		// August 2026 starts on a Saturday, so nothing leads it.
+		(FirstDayOfWeek::Saturday, date(2026, 8, 1)),
+	] {
+		let _ = app::update(
+			&mut state,
+			Message::Settings(SettingsMessage::FirstDayOfWeekSelected(first_day)),
+		);
+		let dates = state.calendar_dates();
+		assert_eq!(dates[0], first_date, "{first_day}");
+		assert_eq!(state.week_anchor, anchor);
+		assert!(
+			render(&state, Size::new(1400.0, 1000.0))
+				.find("Mon")
+				.is_ok()
+		);
+	}
 }
 
 #[test]
 fn navigation_steps_calendar_months_across_years_and_leap_february() {
-    let mut state = state();
-    state.calendar.follow_today = false;
-    for (origin, shift, expected) in [
-        (date(2026, 12, 31), 1, date(2027, 1, 1)),
-        (date(2028, 3, 31), -1, date(2028, 2, 1)),
-        (date(2028, 2, 29), 1, date(2028, 3, 1)),
-    ] {
-        state.week_anchor = origin;
-        let _ = app::update(
-            &mut state,
-            Message::Calendar(CalendarMessage::CalendarViewMonthShift(shift)),
-        );
-        assert_eq!(state.week_anchor, expected);
-        assert_eq!(state.calendar.day, expected);
-        assert!(state.monthly());
-        assert!(!state.weekly());
-    }
+	let mut state = state();
+	state.calendar.follow_today = false;
+	for (origin, shift, expected) in [
+		(date(2026, 12, 31), 1, date(2027, 1, 1)),
+		(date(2028, 3, 31), -1, date(2028, 2, 1)),
+		(date(2028, 2, 29), 1, date(2028, 3, 1)),
+	] {
+		state.week_anchor = origin;
+		let _ = app::update(
+			&mut state,
+			Message::Calendar(CalendarMessage::CalendarViewMonthShift(shift)),
+		);
+		assert_eq!(state.week_anchor, expected);
+		assert_eq!(state.calendar.day, expected);
+		assert!(state.monthly());
+		assert!(!state.weekly());
+	}
 }
 
 #[test]
 fn month_event_click_selects_its_day_and_opens_details() {
-    let mut state = state();
-    let day = date(2026, 7, 27);
-    let mut ui = render(&state, Size::new(1100.0, 1100.0));
-    let clock = calendar::time_format::clock(
-        chrono::NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
-        state.config.appearance.time_format,
-    );
-    ui.click(format!("{clock} Meeting on {day}")).unwrap();
-    let action = ui.into_messages().find(|m| matches!(m, Message::Calendar(CalendarMessage::WeekDayAction(d, inner)) if *d == day && matches!(inner.as_ref(), Message::Event(EventMessage::EventOpened(_))))).unwrap();
-    let _ = app::update(&mut state, action);
-    assert_eq!(state.calendar.day, day);
-    assert_eq!(state.week_anchor.month(), 8);
-    let mut ui = render(&state, Size::new(1100.0, 1100.0));
-    assert!(ui.find("Meeting on 2026-07-27").is_ok());
+	let mut state = state();
+	let day = date(2026, 7, 27);
+	let mut ui = render(&state, Size::new(1100.0, 1100.0));
+	let clock = calendar::time_format::clock(
+		chrono::NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+		state.config.appearance.time_format,
+	);
+	ui.click(format!("{clock} Meeting on {day}")).unwrap();
+	let action = ui.into_messages().find(|m| matches!(m, Message::Calendar(CalendarMessage::WeekDayAction(d, inner)) if *d == day && matches!(inner.as_ref(), Message::Event(EventMessage::EventOpened(_))))).unwrap();
+	let _ = app::update(&mut state, action);
+	assert_eq!(state.calendar.day, day);
+	assert_eq!(state.week_anchor.month(), 8);
+	let mut ui = render(&state, Size::new(1100.0, 1100.0));
+	assert!(ui.find("Meeting on 2026-07-27").is_ok());
 }
 
 #[test]
 fn date_click_updates_day_panel_and_keeps_month_overlay_anchored() {
-    let mut state = state();
-    let anchor = state.week_anchor;
-    let dates = state.calendar_dates();
-    for (label, day) in [("16", date(2026, 8, 16)), ("Sep 5", date(2026, 9, 5))] {
-        let mut ui = render(&state, Size::new(1100.0, 1100.0));
-        ui.click(label).unwrap();
-        let action = ui
+	let mut state = state();
+	let anchor = state.week_anchor;
+	let dates = state.calendar_dates();
+	for (label, day) in [("16", date(2026, 8, 16)), ("Sep 5", date(2026, 9, 5))] {
+		let mut ui = render(&state, Size::new(1100.0, 1100.0));
+		ui.click(label).unwrap();
+		let action = ui
             .into_messages()
             .find(|m| {
                 matches!(m,
@@ -164,154 +164,154 @@ fn date_click_updates_day_panel_and_keeps_month_overlay_anchored() {
                 )
             })
             .unwrap();
-        let _ = app::update(&mut state, action);
-        assert_eq!(state.calendar.day, day);
-        assert!(state.monthly() && !state.weekly());
-        assert_eq!(state.week_anchor, anchor);
-        assert_eq!(state.calendar_dates(), dates);
-        assert!(
-            state
-                .calendar
-                .events
-                .iter()
-                .any(|event| event.id == day.to_string())
-        );
-        let mut month = render(&state, Size::new(1100.0, 1100.0));
-        assert!(month.find("August 2026 ▾").is_ok());
-        assert!(month.find("Close view").is_err());
-        let mut panel = Simulator::with_size(
-            Settings::default(),
-            Size::new(400.0, 900.0),
-            timeslay::ui::view(&state),
-        );
-        let month_button = format!("{} ▾", timeslay::calendar::month_day_label(day));
-        assert!(panel.find(month_button).is_ok());
-    }
+		let _ = app::update(&mut state, action);
+		assert_eq!(state.calendar.day, day);
+		assert!(state.monthly() && !state.weekly());
+		assert_eq!(state.week_anchor, anchor);
+		assert_eq!(state.calendar_dates(), dates);
+		assert!(
+			state
+				.calendar
+				.events
+				.iter()
+				.any(|event| event.id == day.to_string())
+		);
+		let mut month = render(&state, Size::new(1100.0, 1100.0));
+		assert!(month.find("August 2026 ▾").is_ok());
+		assert!(month.find("Close view").is_err());
+		let mut panel = Simulator::with_size(
+			Settings::default(),
+			Size::new(400.0, 900.0),
+			timeslay::ui::view(&state),
+		);
+		let month_button = format!("{} ▾", timeslay::calendar::month_day_label(day));
+		assert!(panel.find(month_button).is_ok());
+	}
 }
 
 #[test]
 fn calendar_modes_are_exclusive() {
-    let mut state = state();
-    let _ = app::update(
-        &mut state,
-        Message::Calendar(CalendarMessage::CalendarModeSelected(false)),
-    );
-    assert!(!state.monthly() && !state.weekly());
-    let _ = app::update(
-        &mut state,
-        Message::Calendar(CalendarMessage::CalendarMonthViewSelected),
-    );
-    assert!(state.monthly() && !state.weekly());
-    let _ = app::update(
-        &mut state,
-        Message::Calendar(CalendarMessage::CalendarModeSelected(true)),
-    );
-    assert!(state.weekly() && !state.monthly());
+	let mut state = state();
+	let _ = app::update(
+		&mut state,
+		Message::Calendar(CalendarMessage::CalendarModeSelected(false)),
+	);
+	assert!(!state.monthly() && !state.weekly());
+	let _ = app::update(
+		&mut state,
+		Message::Calendar(CalendarMessage::CalendarMonthViewSelected),
+	);
+	assert!(state.monthly() && !state.weekly());
+	let _ = app::update(
+		&mut state,
+		Message::Calendar(CalendarMessage::CalendarModeSelected(true)),
+	);
+	assert!(state.weekly() && !state.monthly());
 }
 
 #[test]
 fn month_navigation_remains_reachable_at_small_widths() {
-    let state = state();
-    for width in [180.0, 260.0, 420.0, 1100.0] {
-        let mut ui = render(&state, Size::new(width, 900.0));
-        for label in ["Month", "Today", "View", "August 2026 ▾"] {
-            let bounds = ui.find(label).unwrap().bounds();
-            assert!(
-                bounds.x >= 0.0 && bounds.x + bounds.width <= width + 0.5,
-                "{label} at {width}: {bounds:?}"
-            );
-        }
-    }
+	let state = state();
+	for width in [180.0, 260.0, 420.0, 1100.0] {
+		let mut ui = render(&state, Size::new(width, 900.0));
+		for label in ["Month", "Today", "View", "August 2026 ▾"] {
+			let bounds = ui.find(label).unwrap().bounds();
+			assert!(
+				bounds.x >= 0.0 && bounds.x + bounds.width <= width + 0.5,
+				"{label} at {width}: {bounds:?}"
+			);
+		}
+	}
 }
 
 #[test]
 fn habit_month_filters_other_events_and_retains_completion_history() {
-    use timeslay::habits::{Action, Habit, Series};
-    let mut state = state();
-    let day = date(2026, 8, 16);
-    let mut completed = state.calendar.events_on(day)[0].clone();
-    completed.id = "stretch-instance".into();
-    completed.title = "Stretch".into();
-    completed.details.habit = true;
-    completed.details.recurring_event_id = Some("stretch-master".into());
-    completed.completed = true;
-    completed.details.habit_completed_at = Some(completed.start + Duration::minutes(20));
-    state
-        .habits
-        .library
-        .habits
-        .push(Habit::new("stretch", "Stretch"));
-    state.habits.recompute();
-    state.habits.calendar_habit = Some("stretch".into());
-    for id in ["stretch-master", "another-series"] {
-        state.habits.series.push(Series {
-            id: id.into(),
-            calendar_id: completed.calendar_id.clone(),
-            title: "Stretch".into(),
-            notes: String::new(),
-            start: completed.start,
-            end: completed.end,
-            recurrence: Default::default(),
-            color_id: None,
-            habit_id: Some("stretch".into()),
-        });
-    }
-    let mut pending = completed.clone();
-    pending.id = "another-series-instance".into();
-    pending.details.recurring_event_id = Some("another-series".into());
-    pending.completed = false;
-    pending.details.habit_completed_at = None;
-    let mut other = completed.clone();
-    other.id = "other-habit".into();
-    other.title = "Read".into();
-    other.details.recurring_event_id = Some("reading".into());
-    let dates = state.calendar_dates();
-    let mut snapshot = calendar::sample_snapshot();
-    snapshot.day = day;
-    snapshot.events = vec![completed.clone(), pending, other];
-    state.calendar.apply_week_snapshot(snapshot, &dates);
-    let format = state.config.appearance.time_format;
-    let label = format!(
-        "Completed at {}",
-        calendar::time_format::clock(completed.details.habit_completed_at.unwrap(), format)
-    );
-    let mut ui = render(&state, Size::new(1100.0, 1100.0));
-    assert!(ui.find(label.as_str()).is_ok());
-    assert!(ui.find("Not completed").is_ok());
-    assert!(ui.find("Read").is_err());
-    assert!(ui.find("Not scheduled").is_ok());
-    ui.click("Mark complete").unwrap();
-    let action = ui.into_messages().find(|message| matches!(message, Message::Calendar(CalendarMessage::WeekDayAction(d, inner)) if *d == day && matches!(inner.as_ref(), Message::Habits(Action::ToggleCompleted(_))))).unwrap();
-    let _ = app::update(&mut state, action);
-    assert_eq!(state.calendar.day, day);
-    assert!(state.habits.completing.contains("another-series-instance"));
-    // A write response arriving after navigation updates the cached day too.
-    let _ = app::update(
-        &mut state,
-        Message::Calendar(CalendarMessage::CalendarDayOpened(date(2026, 8, 17))),
-    );
-    completed.details.habit_completed_at = Some(completed.start + Duration::minutes(25));
-    let _ = app::update(
-        &mut state,
-        Message::Habits(Action::CompletionSaved(
-            completed.id.clone(),
-            Ok(completed.clone()),
-        )),
-    );
-    assert_eq!(
-        state
-            .calendar
-            .events_on(day)
-            .iter()
-            .find(|e| e.id == completed.id)
-            .unwrap()
-            .details
-            .habit_completed_at,
-        completed.details.habit_completed_at
-    );
-    let _ = app::update(
-        &mut state,
-        Message::Calendar(CalendarMessage::CalendarViewMonthShift(1)),
-    );
-    assert!(state.habits.calendar_habit.is_some());
+	use timeslay::habits::{Action, Habit, Series};
+	let mut state = state();
+	let day = date(2026, 8, 16);
+	let mut completed = state.calendar.events_on(day)[0].clone();
+	completed.id = "stretch-instance".into();
+	completed.title = "Stretch".into();
+	completed.details.habit = true;
+	completed.details.recurring_event_id = Some("stretch-master".into());
+	completed.completed = true;
+	completed.details.habit_completed_at = Some(completed.start + Duration::minutes(20));
+	state
+		.habits
+		.library
+		.habits
+		.push(Habit::new("stretch", "Stretch"));
+	state.habits.recompute();
+	state.habits.calendar_habit = Some("stretch".into());
+	for id in ["stretch-master", "another-series"] {
+		state.habits.series.push(Series {
+			id: id.into(),
+			calendar_id: completed.calendar_id.clone(),
+			title: "Stretch".into(),
+			notes: String::new(),
+			start: completed.start,
+			end: completed.end,
+			recurrence: Default::default(),
+			color_id: None,
+			habit_id: Some("stretch".into()),
+		});
+	}
+	let mut pending = completed.clone();
+	pending.id = "another-series-instance".into();
+	pending.details.recurring_event_id = Some("another-series".into());
+	pending.completed = false;
+	pending.details.habit_completed_at = None;
+	let mut other = completed.clone();
+	other.id = "other-habit".into();
+	other.title = "Read".into();
+	other.details.recurring_event_id = Some("reading".into());
+	let dates = state.calendar_dates();
+	let mut snapshot = calendar::sample_snapshot();
+	snapshot.day = day;
+	snapshot.events = vec![completed.clone(), pending, other];
+	state.calendar.apply_week_snapshot(snapshot, &dates);
+	let format = state.config.appearance.time_format;
+	let label = format!(
+		"Completed at {}",
+		calendar::time_format::clock(completed.details.habit_completed_at.unwrap(), format)
+	);
+	let mut ui = render(&state, Size::new(1100.0, 1100.0));
+	assert!(ui.find(label.as_str()).is_ok());
+	assert!(ui.find("Not completed").is_ok());
+	assert!(ui.find("Read").is_err());
+	assert!(ui.find("Not scheduled").is_ok());
+	ui.click("Mark complete").unwrap();
+	let action = ui.into_messages().find(|message| matches!(message, Message::Calendar(CalendarMessage::WeekDayAction(d, inner)) if *d == day && matches!(inner.as_ref(), Message::Habits(Action::ToggleCompleted(_))))).unwrap();
+	let _ = app::update(&mut state, action);
+	assert_eq!(state.calendar.day, day);
+	assert!(state.habits.completing.contains("another-series-instance"));
+	// A write response arriving after navigation updates the cached day too.
+	let _ = app::update(
+		&mut state,
+		Message::Calendar(CalendarMessage::CalendarDayOpened(date(2026, 8, 17))),
+	);
+	completed.details.habit_completed_at = Some(completed.start + Duration::minutes(25));
+	let _ = app::update(
+		&mut state,
+		Message::Habits(Action::CompletionSaved(
+			completed.id.clone(),
+			Ok(completed.clone()),
+		)),
+	);
+	assert_eq!(
+		state
+			.calendar
+			.events_on(day)
+			.iter()
+			.find(|e| e.id == completed.id)
+			.unwrap()
+			.details
+			.habit_completed_at,
+		completed.details.habit_completed_at
+	);
+	let _ = app::update(
+		&mut state,
+		Message::Calendar(CalendarMessage::CalendarViewMonthShift(1)),
+	);
+	assert!(state.habits.calendar_habit.is_some());
 }

@@ -3,286 +3,285 @@
 use super::*;
 
 pub(super) fn day_grid<'a>(
-    state: &'a State,
-    metrics: &Metrics,
-    now: DateTime<Local>,
+	state: &'a State,
+	metrics: &Metrics,
+	now: DateTime<Local>,
 ) -> Element<'a, Message> {
-    let edge = || {
-        iced::widget::rule::horizontal(1).style(|theme: &Theme| iced::widget::rule::Style {
-            color: crate::ui::controls::edge_color(theme),
-            radius: 0.0.into(),
-            fill_mode: iced::widget::rule::FillMode::Full,
-            snap: true,
-        })
-    };
-    container(iced::widget::column![
-        edge(),
-        crate::ui::controls::scrollable(day_canvas(state, metrics, now, state.calendar.day, false))
-            .direction(scrollable::Direction::Vertical(grid_scrollbar()))
-            .id(iced::widget::Id::new(DAY_SCROLL))
-            .on_scroll(grid_scrolled)
-            .height(Fill)
-            .width(Fill),
-    ])
-    .height(Fill)
-    .width(Fill)
-    .style(|theme: &Theme| container::Style {
-        border: iced::Border::default(),
-        shadow: iced::Shadow::default(),
-        ..crate::ui::controls::card_surface(theme)
-    })
-    .into()
+	let edge = || {
+		iced::widget::rule::horizontal(1).style(|theme: &Theme| iced::widget::rule::Style {
+			color: crate::ui::controls::edge_color(theme),
+			radius: 0.0.into(),
+			fill_mode: iced::widget::rule::FillMode::Full,
+			snap: true,
+		})
+	};
+	container(iced::widget::column![
+		edge(),
+		crate::ui::controls::scrollable(day_canvas(state, metrics, now, state.calendar.day, false))
+			.direction(scrollable::Direction::Vertical(grid_scrollbar()))
+			.id(iced::widget::Id::new(DAY_SCROLL))
+			.on_scroll(grid_scrolled)
+			.height(Fill)
+			.width(Fill),
+	])
+	.height(Fill)
+	.width(Fill)
+	.style(|theme: &Theme| container::Style {
+		border: iced::Border::default(),
+		shadow: iced::Shadow::default(),
+		..crate::ui::controls::card_surface(theme)
+	})
+	.into()
 }
 
 pub(super) fn day_canvas<'a>(
-    state: &'a State,
-    metrics: &Metrics,
-    now: DateTime<Local>,
-    day: NaiveDate,
-    weekly: bool,
+	state: &'a State,
+	metrics: &Metrics,
+	now: DateTime<Local>,
+	day: NaiveDate,
+	weekly: bool,
 ) -> Element<'a, Message> {
-    let hour_height = state.calendar.hour_height;
-    let gutter = if weekly {
-        32.0
-    } else if state.config.appearance.time_format.is_compact() {
-        COMPACT_GUTTER
-    } else {
-        GUTTER
-    };
+	let hour_height = state.calendar.hour_height;
+	let gutter = if weekly {
+		32.0
+	} else if state.config.appearance.time_format.is_compact() {
+		COMPACT_GUTTER
+	} else {
+		GUTTER
+	};
 
-    let offset = state.config.calendar.day_end_minutes();
-    let day_start_hour = state.config.calendar.day_start_hour();
+	let offset = state.config.calendar.day_end_minutes();
+	let day_start_hour = state.config.calendar.day_start_hour();
 
-    let deadlines = state
-        .calendar
-        .deadline_markers_on(day, &state.config.calendar);
-    let timed: Vec<_> = state
-        .calendar
-        .timed_events_on(day, &state.config.calendar)
-        .into_iter()
-        .chain(deadlines.iter().filter(|event| !event.all_day))
-        .filter(|event| {
-            state
-                .calendar
-                .search_shows(event, day, &state.config.calendar)
-        })
-        .collect();
-    let spans: Vec<Span> = timed
-        .iter()
-        .map(|event| {
-            let start = minutes_into_day(event.start, day, offset);
-            let end = minutes_into_day(event.end, day, offset);
-            let (start_min, end_min) = layout::clamp_day(start, end).unwrap_or_else(|| {
-                let start = start.clamp(0, DAY_MINUTES);
-                (start, (start + 15).min(DAY_MINUTES))
-            });
-            Span { start_min, end_min }
-        })
-        .collect();
-    let sources = state.calendar.display_sources(&state.config.calendar);
-    let priorities: Vec<_> = timed
-        .iter()
-        .map(|event| {
-            sources
-                .iter()
-                .position(|source| source.id == event.source_id())
-                .unwrap_or(usize::MAX)
-        })
-        .collect();
-    let packed = layout::pack_prioritized(&spans, &priorities);
+	let deadlines = state
+		.calendar
+		.deadline_markers_on(day, &state.config.calendar);
+	let timed: Vec<_> = state
+		.calendar
+		.timed_events_on(day, &state.config.calendar)
+		.into_iter()
+		.chain(deadlines.iter().filter(|event| !event.all_day))
+		.filter(|event| {
+			state
+				.calendar
+				.search_shows(event, day, &state.config.calendar)
+		})
+		.collect();
+	let spans: Vec<Span> = timed
+		.iter()
+		.map(|event| {
+			let start = minutes_into_day(event.start, day, offset);
+			let end = minutes_into_day(event.end, day, offset);
+			let (start_min, end_min) = layout::clamp_day(start, end).unwrap_or_else(|| {
+				let start = start.clamp(0, DAY_MINUTES);
+				(start, (start + 15).min(DAY_MINUTES))
+			});
+			Span { start_min, end_min }
+		})
+		.collect();
+	let sources = state.calendar.display_sources(&state.config.calendar);
+	let priorities: Vec<_> = timed
+		.iter()
+		.map(|event| {
+			sources
+				.iter()
+				.position(|source| source.id == event.source_id())
+				.unwrap_or(usize::MAX)
+		})
+		.collect();
+	let packed = layout::pack_prioritized(&spans, &priorities);
 
-    let blocks: Vec<Block> = timed
-        .iter()
-        .zip(spans.iter())
-        .zip(packed.iter())
-        .map(|((event, span), slot)| {
-            let hidden = state.calendar.search.hides_details(event);
-            let time_block =
-                crate::timeblocking::is_block(event, &state.config.calendar) && !hidden;
-            Block {
-                id: event.id.clone(),
-                title: if hidden {
-                    PRIVATE_TITLE.to_owned()
-                } else if event.details.sleep.is_some() {
-                    calendar::sleep::title(event)
-                } else if event.is_task() {
-                    crate::timeblocking::task_label(event)
-                } else {
-                    event.title.clone()
-                },
-                when: if hidden {
-                    String::new()
-                } else if event.details.sleep.is_some() {
-                    calendar::sleep::time_label(event, state.config.appearance.time_format)
-                } else {
-                    calendar::time_format::event(event, state.config.appearance.time_format)
-                },
-                start_min: span.start_min,
-                end_min: span.end_min,
-                column: slot.column,
-                columns: slot.columns,
-                column_span: slot.column_span,
-                color: if hidden {
-                    PRIVATE_COLOR
-                } else {
-                    event.display_color(&state.config.calendar, &state.calendar.calendars)
-                },
-                editable: !calendar::deadline::is_marker(event)
-                    && !hidden
-                    && (!event.is_task() || event.is_calendar_task()),
-                pending: event.details.sending
-                    || state.calendar.pending_time(&event.id).is_some()
-                    || state.timeblocking.busy.contains_task(&event.id)
-                    || (event.is_task() && !state.timeblocking.busy.is_empty())
-                    || state.habits.completing.contains(&event.id),
-                time_block,
-                habit: (event.details.habit && !hidden)
-                    .then(|| state.habits.habit_of(event))
-                    .flatten()
-                    .map(|id| (id.to_owned(), event.start.date_naive())),
-                completion: event_completion(state, event),
-                sleep_timer: (!hidden)
-                    .then(|| calendar::sleep::timer(event, now))
-                    .flatten(),
-                // A block owns its task rows independently of standalone task visibility.
-                tasks: if time_block {
-                    crate::timeblocking::tasks_in(
-                        event,
-                        state.calendar.events_on(day),
-                        crate::timeblocking::day_start_hour(state),
-                    )
-                    .into_iter()
-                    .filter(|e| state.calendar.search_shows_in_block(e, event))
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .map(|e| {
-                        if state.calendar.search.hides_details(e) {
-                            (e.id.clone(), PRIVATE_TITLE.to_owned(), 0)
-                        } else {
-                            (
-                                e.id.clone(),
-                                crate::timeblocking::task_label(e),
-                                crate::timeblocking::metadata(e).minutes,
-                            )
-                        }
-                    })
-                    .collect()
-                } else {
-                    Vec::new()
-                },
-            }
-        })
-        .collect();
+	let blocks: Vec<Block> = timed
+		.iter()
+		.zip(spans.iter())
+		.zip(packed.iter())
+		.map(|((event, span), slot)| {
+			let hidden = state.calendar.search.hides_details(event);
+			let time_block =
+				crate::timeblocking::is_block(event, &state.config.calendar) && !hidden;
+			Block {
+				id: event.id.clone(),
+				title: if hidden {
+					PRIVATE_TITLE.to_owned()
+				} else if event.details.sleep.is_some() {
+					calendar::sleep::title(event)
+				} else if event.is_task() {
+					crate::timeblocking::task_label(event)
+				} else {
+					event.title.clone()
+				},
+				when: if hidden {
+					String::new()
+				} else if event.details.sleep.is_some() {
+					calendar::sleep::time_label(event, state.config.appearance.time_format)
+				} else {
+					calendar::time_format::event(event, state.config.appearance.time_format)
+				},
+				start_min: span.start_min,
+				end_min: span.end_min,
+				column: slot.column,
+				columns: slot.columns,
+				column_span: slot.column_span,
+				color: if hidden {
+					PRIVATE_COLOR
+				} else {
+					event.display_color(&state.config.calendar, &state.calendar.calendars)
+				},
+				editable: !calendar::deadline::is_marker(event)
+					&& !hidden && (!event.is_task() || event.is_calendar_task()),
+				pending: event.details.sending
+					|| state.calendar.pending_time(&event.id).is_some()
+					|| state.timeblocking.busy.contains_task(&event.id)
+					|| (event.is_task() && !state.timeblocking.busy.is_empty())
+					|| state.habits.completing.contains(&event.id),
+				time_block,
+				habit: (event.details.habit && !hidden)
+					.then(|| state.habits.habit_of(event))
+					.flatten()
+					.map(|id| (id.to_owned(), event.start.date_naive())),
+				completion: event_completion(state, event),
+				sleep_timer: (!hidden)
+					.then(|| calendar::sleep::timer(event, now))
+					.flatten(),
+				// A block owns its task rows independently of standalone task visibility.
+				tasks: if time_block {
+					crate::timeblocking::tasks_in(
+						event,
+						state.calendar.events_on(day),
+						crate::timeblocking::day_start_hour(state),
+					)
+					.into_iter()
+					.filter(|e| state.calendar.search_shows_in_block(e, event))
+					.collect::<Vec<_>>()
+					.into_iter()
+					.map(|e| {
+						if state.calendar.search.hides_details(e) {
+							(e.id.clone(), PRIVATE_TITLE.to_owned(), 0)
+						} else {
+							(
+								e.id.clone(),
+								crate::timeblocking::task_label(e),
+								crate::timeblocking::metadata(e).minutes,
+							)
+						}
+					})
+					.collect()
+				} else {
+					Vec::new()
+				},
+			}
+		})
+		.collect();
 
-    // The needle only belongs to the day whose window holds "now".
-    let needle = (day == calendar::day_at(now, day_start_hour))
-        .then(|| minutes_into_day(now, day, offset).clamp(0, DAY_MINUTES));
+	// The needle only belongs to the day whose window holds "now".
+	let needle = (day == calendar::day_at(now, day_start_hour))
+		.then(|| minutes_into_day(now, day, offset).clamp(0, DAY_MINUTES));
 
-    // Alarms sit on the day their time falls in, whichever day is in view
-    // when they are set.
-    let alarm_marks: Vec<AlarmMark> = state
-        .alarms
-        .items()
-        .iter()
-        .filter_map(|alarm| {
-            let minutes = minutes_into_day(alarm.at, day, offset);
-            (0..=DAY_MINUTES).contains(&minutes).then(|| AlarmMark {
-                id: alarm.id,
-                minutes,
-                label: alarm_label(alarm, state.config.appearance.time_format),
-            })
-        })
-        .collect();
+	// Alarms sit on the day their time falls in, whichever day is in view
+	// when they are set.
+	let alarm_marks: Vec<AlarmMark> = state
+		.alarms
+		.items()
+		.iter()
+		.filter_map(|alarm| {
+			let minutes = minutes_into_day(alarm.at, day, offset);
+			(0..=DAY_MINUTES).contains(&minutes).then(|| AlarmMark {
+				id: alarm.id,
+				minutes,
+				label: alarm_label(alarm, state.config.appearance.time_format),
+			})
+		})
+		.collect();
 
-    // Trips join up the whole day's events, so they stop making sense once a
-    // search has taken some of those events away, and they name the events
-    // and places that hidden details are meant to keep out of sight.
-    let travel = if state.travel.show && !state.calendar.search.is_modified() {
-        travel_boxes(state, &blocks, day)
-    } else {
-        Vec::new()
-    };
+	// Trips join up the whole day's events, so they stop making sense once a
+	// search has taken some of those events away, and they name the events
+	// and places that hidden details are meant to keep out of sight.
+	let travel = if state.travel.show && !state.calendar.search.is_modified() {
+		travel_boxes(state, &blocks, day)
+	} else {
+		Vec::new()
+	};
 
-    let height = hour_height * 24.0;
-    let compact = metrics.breakpoint.is_compact();
+	let height = hour_height * 24.0;
+	let compact = metrics.breakpoint.is_compact();
 
-    // Empty grid space draws out a new event, unless a card is already open:
-    // then a click there is how the card is dismissed.
-    let can_create =
-        state.calendar.open_event.is_none() && state.calendar.draft.is_none() && !state.alarms.mode;
-    let selection = state.calendar.draft.as_ref().and_then(|draft| {
-        let start = minutes_into_day(draft.start, day, offset);
-        let end = minutes_into_day(draft.end, day, offset).min(DAY_MINUTES);
-        (0..DAY_MINUTES)
-            .contains(&start)
-            .then_some((start, end.max(start + 1)))
-    });
+	// Empty grid space draws out a new event, unless a card is already open:
+	// then a click there is how the card is dismissed.
+	let can_create =
+		state.calendar.open_event.is_none() && state.calendar.draft.is_none() && !state.alarms.mode;
+	let selection = state.calendar.draft.as_ref().and_then(|draft| {
+		let start = minutes_into_day(draft.start, day, offset);
+		let end = minutes_into_day(draft.end, day, offset).min(DAY_MINUTES);
+		(0..DAY_MINUTES)
+			.contains(&start)
+			.then_some((start, end.max(start + 1)))
+	});
 
-    // While a task is in the air, show it where letting go would put it.
-    let dragged = state
-        .timeblocking
-        .dragging
-        .as_deref()
-        .and_then(|id| state.calendar.event(id));
-    let drop_preview = crate::ui::drop_preview::timed(state).and_then(|event| {
-        let (start_min, end_min) = layout::clamp_day(
-            minutes_into_day(event.start, day, offset),
-            minutes_into_day(event.end, day, offset),
-        )?;
-        Some(Block {
-            id: event.id.clone(),
-            title: crate::timeblocking::task_label(&event),
-            when: calendar::time_format::event(&event, state.config.appearance.time_format),
-            start_min,
-            end_min,
-            column: 0,
-            columns: 1,
-            column_span: 1,
-            color: event.display_color(&state.config.calendar, &state.calendar.calendars),
-            editable: false,
-            pending: false,
-            tasks: Vec::new(),
-            time_block: false,
-            habit: None,
-            completion: event_completion(state, &event),
-            sleep_timer: None,
-        })
-    });
-    let drop_block = crate::ui::drop_preview::block_or_row(state).and_then(|target| {
-        let task = dragged.filter(|task| task.id != target)?;
-        let block = blocks.iter().find(|block| {
-            block.time_block
-                && (block.id == target || block.tasks.iter().any(|row| row.0 == target))
-        })?;
-        Some((
-            block.id.clone(),
-            crate::timeblocking::task_label(task),
-            crate::timeblocking::metadata(task).minutes,
-        ))
-    });
+	// While a task is in the air, show it where letting go would put it.
+	let dragged = state
+		.timeblocking
+		.dragging
+		.as_deref()
+		.and_then(|id| state.calendar.event(id));
+	let drop_preview = crate::ui::drop_preview::timed(state).and_then(|event| {
+		let (start_min, end_min) = layout::clamp_day(
+			minutes_into_day(event.start, day, offset),
+			minutes_into_day(event.end, day, offset),
+		)?;
+		Some(Block {
+			id: event.id.clone(),
+			title: crate::timeblocking::task_label(&event),
+			when: calendar::time_format::event(&event, state.config.appearance.time_format),
+			start_min,
+			end_min,
+			column: 0,
+			columns: 1,
+			column_span: 1,
+			color: event.display_color(&state.config.calendar, &state.calendar.calendars),
+			editable: false,
+			pending: false,
+			tasks: Vec::new(),
+			time_block: false,
+			habit: None,
+			completion: event_completion(state, &event),
+			sleep_timer: None,
+		})
+	});
+	let drop_block = crate::ui::drop_preview::block_or_row(state).and_then(|target| {
+		let task = dragged.filter(|task| task.id != target)?;
+		let block = blocks.iter().find(|block| {
+			block.time_block
+				&& (block.id == target || block.tasks.iter().any(|row| row.0 == target))
+		})?;
+		Some((
+			block.id.clone(),
+			crate::timeblocking::task_label(task),
+			crate::timeblocking::metadata(task).minutes,
+		))
+	});
 
-    canvas_widget(DayCanvas {
-        time_format: state.config.appearance.time_format,
-        blocks,
-        travel,
-        needle,
-        alarms: alarm_marks,
-        alarm_mode: state.alarms.mode,
-        hour_height,
-        gutter,
-        compact,
-        day_start_hour,
-        day,
-        can_create,
-        selection,
-        external_drag: state.timeblocking.dragging.is_some(),
-        dragged_task: state.timeblocking.dragging.clone(),
-        drop_preview,
-        drop_block,
-    })
-    .width(Fill)
-    .height(Length::Fixed(height))
-    .into()
+	canvas_widget(DayCanvas {
+		time_format: state.config.appearance.time_format,
+		blocks,
+		travel,
+		needle,
+		alarms: alarm_marks,
+		alarm_mode: state.alarms.mode,
+		hour_height,
+		gutter,
+		compact,
+		day_start_hour,
+		day,
+		can_create,
+		selection,
+		external_drag: state.timeblocking.dragging.is_some(),
+		dragged_task: state.timeblocking.dragging.clone(),
+		drop_preview,
+		drop_block,
+	})
+	.width(Fill)
+	.height(Length::Fixed(height))
+	.into()
 }
 
 /// Minutes in a day, the height of the grid in minutes.
@@ -291,14 +290,14 @@ pub(super) const DAY_MINUTES: i32 = 24 * 60;
 /// What an alarm's needle says beside it: its time, and its label if it has
 /// one.
 pub(super) fn alarm_label(alarm: &alarms::Alarm, time_format: TimeFormat) -> String {
-    let time = calendar::time_format::clock(alarm.at, time_format);
-    let label = alarm.label.trim();
+	let time = calendar::time_format::clock(alarm.at, time_format);
+	let label = alarm.label.trim();
 
-    if label.is_empty() {
-        time
-    } else {
-        format!("{time} {label}")
-    }
+	if label.is_empty() {
+		time
+	} else {
+		format!("{time} {label}")
+	}
 }
 
 /// Minutes from the start of the displayed day.
@@ -308,8 +307,8 @@ pub(super) fn alarm_label(alarm: &alarms::Alarm, time_format: TimeFormat) -> Str
 /// time are never touched; only this offset moves. Values outside the window
 /// come back negative or past 24h and are clamped away by the caller.
 pub(super) fn minutes_into_day(when: DateTime<Local>, day: chrono::NaiveDate, offset: i32) -> i32 {
-    let days = (when.date_naive() - day).num_days() as i32;
-    days * DAY_MINUTES + calendar::minutes_from_midnight(when) - offset
+	let days = (when.date_naive() - day).num_days() as i32;
+	days * DAY_MINUTES + calendar::minutes_from_midnight(when) - offset
 }
 
 pub(super) const DAY_SCROLL: &str = "cal-day";
@@ -320,44 +319,44 @@ pub(super) const RANGE_SCROLL: &str = "cal-range";
 
 /// Reports a grid's scroll, so a zoom knows which row is in the middle of it.
 pub(super) fn grid_scrolled(viewport: scrollable::Viewport) -> Message {
-    Message::Calendar(CalendarMessage::CalendarGridScrolled(
-        viewport.absolute_offset().y,
-        viewport.bounds().height,
-    ))
+	Message::Calendar(CalendarMessage::CalendarGridScrolled(
+		viewport.absolute_offset().y,
+		viewport.bounds().height,
+	))
 }
 
 pub fn scroll_week_to_start() -> iced::Task<Message> {
-    iced::Task::batch([WEEK_SCROLL, RANGE_SCROLL].map(|id| {
-        iced::widget::operation::scroll_to(
-            iced::widget::Id::new(id),
-            iced::widget::operation::AbsoluteOffset { x: 0.0, y: 0.0 },
-        )
-    }))
+	iced::Task::batch([WEEK_SCROLL, RANGE_SCROLL].map(|id| {
+		iced::widget::operation::scroll_to(
+			iced::widget::Id::new(id),
+			iced::widget::operation::AbsoluteOffset { x: 0.0, y: 0.0 },
+		)
+	}))
 }
 
 /// Scrolls the day grid so the needle sits a little below the top, the way
 /// Google Calendar opens on "now" rather than the start of the day.
 pub fn scroll_to_now(hour_height: f32, day_end_minutes: i32) -> iced::Task<Message> {
-    scroll_now(DAY_SCROLL, hour_height, day_end_minutes)
+	scroll_now(DAY_SCROLL, hour_height, day_end_minutes)
 }
 
 pub fn scroll_week_to_now(hour_height: f32, day_end_minutes: i32) -> iced::Task<Message> {
-    scroll_now(WEEK_DAY_SCROLL, hour_height, day_end_minutes)
+	scroll_now(WEEK_DAY_SCROLL, hour_height, day_end_minutes)
 }
 
 pub(super) fn scroll_now(
-    id: &'static str,
-    hour_height: f32,
-    day_end_minutes: i32,
+	id: &'static str,
+	hour_height: f32,
+	day_end_minutes: i32,
 ) -> iced::Task<Message> {
-    let minutes = (calendar::minutes_from_midnight(crate::clock::now()) - day_end_minutes)
-        .rem_euclid(DAY_MINUTES);
-    let y = ((minutes - 90) as f32 * (hour_height / 60.0)).max(0.0);
+	let minutes = (calendar::minutes_from_midnight(crate::clock::now()) - day_end_minutes)
+		.rem_euclid(DAY_MINUTES);
+	let y = ((minutes - 90) as f32 * (hour_height / 60.0)).max(0.0);
 
-    iced::widget::operation::scroll_to(
-        iced::widget::Id::new(id),
-        iced::widget::operation::AbsoluteOffset { x: 0.0, y },
-    )
+	iced::widget::operation::scroll_to(
+		iced::widget::Id::new(id),
+		iced::widget::operation::AbsoluteOffset { x: 0.0, y },
+	)
 }
 
 /// Scrolls the grid of a calendar view by a pixel amount.
@@ -365,16 +364,16 @@ pub(super) fn scroll_now(
 /// Used after a zoom to keep a row still: the grid grows or shrinks around that
 /// row, so the scroll follows it by the same delta.
 pub fn scroll_by(view: crate::app::CalendarView, delta: f32) -> iced::Task<Message> {
-    use crate::app::CalendarView;
-    let id = match view {
-        CalendarView::Day => DAY_SCROLL,
-        CalendarView::Week => WEEK_DAY_SCROLL,
-        CalendarView::TwoWeek | CalendarView::Month | CalendarView::Schedule => RANGE_SCROLL,
-    };
-    iced::widget::operation::scroll_by(
-        iced::widget::Id::new(id),
-        iced::widget::operation::AbsoluteOffset { x: 0.0, y: delta },
-    )
+	use crate::app::CalendarView;
+	let id = match view {
+		CalendarView::Day => DAY_SCROLL,
+		CalendarView::Week => WEEK_DAY_SCROLL,
+		CalendarView::TwoWeek | CalendarView::Month | CalendarView::Schedule => RANGE_SCROLL,
+	};
+	iced::widget::operation::scroll_by(
+		iced::widget::Id::new(id),
+		iced::widget::operation::AbsoluteOffset { x: 0.0, y: delta },
+	)
 }
 
 /// The scroll adjustment that keeps a row still while the
@@ -384,9 +383,9 @@ pub fn scroll_by(view: crate::app::CalendarView, delta: f32) -> iced::Task<Messa
 /// `after / before`, so that row slides down by `anchor * (ratio - 1)` and the
 /// scroll has to follow it by the same amount for it to stay put on screen.
 pub fn zoom_scroll_delta(anchor: f32, before: f32, after: f32) -> f32 {
-    if !before.is_finite() || !after.is_finite() || before <= 0.0 {
-        return 0.0;
-    }
+	if !before.is_finite() || !after.is_finite() || before <= 0.0 {
+		return 0.0;
+	}
 
-    anchor * (after / before - 1.0)
+	anchor * (after / before - 1.0)
 }

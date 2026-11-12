@@ -15,73 +15,73 @@ use crate::recurrence::{self, EndKind, MonthlyMode, RepeatMode};
 use super::layout::Metrics;
 
 const NTH_LABELS: [(i8, &str); 6] = [
-    (1, "First"),
-    (2, "Second"),
-    (3, "Third"),
-    (4, "Fourth"),
-    (5, "Fifth"),
-    (-1, "Last"),
+	(1, "First"),
+	(2, "Second"),
+	(3, "Third"),
+	(4, "Fourth"),
+	(5, "Fifth"),
+	(-1, "Last"),
 ];
 
 /// A choice that looks selected when it is the current one.
 fn choice<'a>(
-    label: &str,
-    selected: bool,
-    on_press: Message,
-    metrics: &Metrics,
+	label: &str,
+	selected: bool,
+	on_press: Message,
+	metrics: &Metrics,
 ) -> Element<'a, Message> {
-    let style: fn(&Theme, button::Status) -> button::Style = if selected {
-        crate::ui::controls::primary
-    } else {
-        crate::ui::controls::secondary
-    };
-    button(text(label.to_owned()).size(metrics.label()).center())
-        .padding([3, 7])
-        .style(style)
-        .on_press(on_press)
-        .into()
+	let style: fn(&Theme, button::Status) -> button::Style = if selected {
+		crate::ui::controls::primary
+	} else {
+		crate::ui::controls::secondary
+	};
+	button(text(label.to_owned()).size(metrics.label()).center())
+		.padding([3, 7])
+		.style(style)
+		.on_press(on_press)
+		.into()
 }
 
 /// The full repeat editor: simple modes, the controls each mode needs and
 /// when the series ends.
 pub fn editor<'a, F>(
-    rule: &'a recurrence::Rule,
-    anchor: NaiveDate,
-    first_day: FirstDayOfWeek,
-    metrics: &Metrics,
-    busy: bool,
-    map: F,
+	rule: &'a recurrence::Rule,
+	anchor: NaiveDate,
+	first_day: FirstDayOfWeek,
+	metrics: &Metrics,
+	busy: bool,
+	map: F,
 ) -> Element<'a, Message>
 where
-    F: Fn(recurrence::Action) -> Message + Clone + Send + Sync + 'static,
+	F: Fn(recurrence::Action) -> Message + Clone + Send + Sync + 'static,
 {
-    let label = |name: &'static str| crate::ui::controls::field_label(name, metrics.label());
-    let send_map = map.clone();
-    let send = move |action| send_map(action);
+	let label = |name: &'static str| crate::ui::controls::field_label(name, metrics.label());
+	let send_map = map.clone();
+	let send = move |action| send_map(action);
 
-    let mut modes = Vec::new();
-    for mode in RepeatMode::SIMPLE {
-        modes.push(choice(
-            mode.label(),
-            rule.repeat == mode,
-            send(recurrence::Action::Repeat(mode)),
-            metrics,
-        ));
-    }
+	let mut modes = Vec::new();
+	for mode in RepeatMode::SIMPLE {
+		modes.push(choice(
+			mode.label(),
+			rule.repeat == mode,
+			send(recurrence::Action::Repeat(mode)),
+			metrics,
+		));
+	}
 
-    let mut body = column![
-        label("Repeat"),
-        row(modes).spacing(4).wrap().vertical_spacing(4),
-        text(rule.summary(anchor))
-            .size(metrics.label() - 1.0)
-            .style(text::secondary),
-    ]
-    .spacing(4)
-    .width(Length::Fill);
+	let mut body = column![
+		label("Repeat"),
+		row(modes).spacing(4).wrap().vertical_spacing(4),
+		text(rule.summary(anchor))
+			.size(metrics.label() - 1.0)
+			.style(text::secondary),
+	]
+	.spacing(4)
+	.width(Length::Fill);
 
-    match rule.repeat {
-        RepeatMode::Custom => {
-            body = body
+	match rule.repeat {
+		RepeatMode::Custom => {
+			body = body
                 .push(
                     text("This item has a custom schedule that the simple editor cannot show. You can keep it as it is, or replace it with a simple schedule.")
                         .size(metrics.label() - 1.0)
@@ -93,241 +93,241 @@ where
                         .style(crate::ui::controls::secondary)
                         .on_press(send(recurrence::Action::SimpleRepeat)),
                 );
-        }
-        RepeatMode::Never => {}
-        mode => {
-            if mode != RepeatMode::Weekdays {
-                let mut interval = crate::ui::controls::text_input("1", &rule.interval)
-                    .size(metrics.label())
-                    .width(52);
-                if !busy {
-                    let send = map.clone();
-                    interval =
-                        interval.on_input(move |value| send(recurrence::Action::Interval(value)));
-                }
-                body = body.push(
-                    row![
-                        text("Every").size(metrics.label()),
-                        interval,
-                        text(mode.unit()).size(metrics.label()),
-                    ]
-                    .spacing(6)
-                    .align_y(Alignment::Center),
-                );
-            }
+		}
+		RepeatMode::Never => {}
+		mode => {
+			if mode != RepeatMode::Weekdays {
+				let mut interval = crate::ui::controls::text_input("1", &rule.interval)
+					.size(metrics.label())
+					.width(52);
+				if !busy {
+					let send = map.clone();
+					interval =
+						interval.on_input(move |value| send(recurrence::Action::Interval(value)));
+				}
+				body = body.push(
+					row![
+						text("Every").size(metrics.label()),
+						interval,
+						text(mode.unit()).size(metrics.label()),
+					]
+					.spacing(6)
+					.align_y(Alignment::Center),
+				);
+			}
 
-            if mode == RepeatMode::Weekly {
-                let mut days = Vec::new();
-                for (weekday, day) in first_day
-                    .weekdays()
-                    .into_iter()
-                    .zip(first_day.short_labels())
-                {
-                    // The rule keeps its flags Monday first whatever the order shown.
-                    let index = weekday.num_days_from_monday() as usize;
-                    days.push(choice(
-                        day,
-                        rule.weekdays.get(index).copied().unwrap_or(false),
-                        send(recurrence::Action::ToggleWeekday(index)),
-                        metrics,
-                    ));
-                }
-                body = body
-                    .push(label("On"))
-                    .push(row(days).spacing(4).wrap().vertical_spacing(4));
-            }
+			if mode == RepeatMode::Weekly {
+				let mut days = Vec::new();
+				for (weekday, day) in first_day
+					.weekdays()
+					.into_iter()
+					.zip(first_day.short_labels())
+				{
+					// The rule keeps its flags Monday first whatever the order shown.
+					let index = weekday.num_days_from_monday() as usize;
+					days.push(choice(
+						day,
+						rule.weekdays.get(index).copied().unwrap_or(false),
+						send(recurrence::Action::ToggleWeekday(index)),
+						metrics,
+					));
+				}
+				body = body
+					.push(label("On"))
+					.push(row(days).spacing(4).wrap().vertical_spacing(4));
+			}
 
-            if mode == RepeatMode::Monthly {
-                let monthly: Element<'a, Message> = match rule.monthly {
-                    MonthlyMode::Day => {
-                        let mut day = crate::ui::controls::text_input("28", &rule.monthly_day)
-                            .size(metrics.label())
-                            .width(52);
-                        if !busy {
-                            let send = map.clone();
-                            day = day
-                                .on_input(move |value| send(recurrence::Action::MonthlyDay(value)));
-                        }
-                        row![
-                            text("On day").size(metrics.label()),
-                            day,
-                            text("of the month").size(metrics.label()),
-                        ]
-                        .spacing(6)
-                        .align_y(Alignment::Center)
-                        .into()
-                    }
-                    MonthlyMode::NthWeekday => {
-                        let mut positions = Vec::new();
-                        for (nth, name) in NTH_LABELS {
-                            positions.push(choice(
-                                name,
-                                rule.monthly_nth == nth,
-                                send(recurrence::Action::MonthlyNth(nth)),
-                                metrics,
-                            ));
-                        }
-                        let mut weekdays = Vec::new();
-                        for (weekday, day) in first_day
-                            .weekdays()
-                            .into_iter()
-                            .zip(first_day.short_labels())
-                        {
-                            weekdays.push(choice(
-                                day,
-                                weekday == rule.monthly_weekday,
-                                send(recurrence::Action::MonthlyWeekday(weekday)),
-                                metrics,
-                            ));
-                        }
-                        column![
-                            row(positions).spacing(4).wrap().vertical_spacing(4),
-                            row(weekdays).spacing(4).wrap().vertical_spacing(4)
-                        ]
-                        .spacing(4)
-                        .into()
-                    }
-                    MonthlyMode::LastDay => text("On the last day of each month.")
-                        .size(metrics.label() - 1.0)
-                        .style(text::secondary)
-                        .into(),
-                };
-                body = body
-                    .push(
-                        row![
-                            choice(
-                                "Day of the month",
-                                rule.monthly == MonthlyMode::Day,
-                                send(recurrence::Action::MonthlyMode(MonthlyMode::Day)),
-                                metrics,
-                            ),
-                            choice(
-                                "Weekday",
-                                rule.monthly == MonthlyMode::NthWeekday,
-                                send(recurrence::Action::MonthlyMode(MonthlyMode::NthWeekday)),
-                                metrics,
-                            ),
-                            choice(
-                                "Last day",
-                                rule.monthly == MonthlyMode::LastDay,
-                                send(recurrence::Action::MonthlyMode(MonthlyMode::LastDay)),
-                                metrics,
-                            ),
-                        ]
-                        .spacing(4)
-                        .wrap()
-                        .vertical_spacing(4),
-                    )
-                    .push(monthly);
-            }
+			if mode == RepeatMode::Monthly {
+				let monthly: Element<'a, Message> = match rule.monthly {
+					MonthlyMode::Day => {
+						let mut day = crate::ui::controls::text_input("28", &rule.monthly_day)
+							.size(metrics.label())
+							.width(52);
+						if !busy {
+							let send = map.clone();
+							day = day
+								.on_input(move |value| send(recurrence::Action::MonthlyDay(value)));
+						}
+						row![
+							text("On day").size(metrics.label()),
+							day,
+							text("of the month").size(metrics.label()),
+						]
+						.spacing(6)
+						.align_y(Alignment::Center)
+						.into()
+					}
+					MonthlyMode::NthWeekday => {
+						let mut positions = Vec::new();
+						for (nth, name) in NTH_LABELS {
+							positions.push(choice(
+								name,
+								rule.monthly_nth == nth,
+								send(recurrence::Action::MonthlyNth(nth)),
+								metrics,
+							));
+						}
+						let mut weekdays = Vec::new();
+						for (weekday, day) in first_day
+							.weekdays()
+							.into_iter()
+							.zip(first_day.short_labels())
+						{
+							weekdays.push(choice(
+								day,
+								weekday == rule.monthly_weekday,
+								send(recurrence::Action::MonthlyWeekday(weekday)),
+								metrics,
+							));
+						}
+						column![
+							row(positions).spacing(4).wrap().vertical_spacing(4),
+							row(weekdays).spacing(4).wrap().vertical_spacing(4)
+						]
+						.spacing(4)
+						.into()
+					}
+					MonthlyMode::LastDay => text("On the last day of each month.")
+						.size(metrics.label() - 1.0)
+						.style(text::secondary)
+						.into(),
+				};
+				body = body
+					.push(
+						row![
+							choice(
+								"Day of the month",
+								rule.monthly == MonthlyMode::Day,
+								send(recurrence::Action::MonthlyMode(MonthlyMode::Day)),
+								metrics,
+							),
+							choice(
+								"Weekday",
+								rule.monthly == MonthlyMode::NthWeekday,
+								send(recurrence::Action::MonthlyMode(MonthlyMode::NthWeekday)),
+								metrics,
+							),
+							choice(
+								"Last day",
+								rule.monthly == MonthlyMode::LastDay,
+								send(recurrence::Action::MonthlyMode(MonthlyMode::LastDay)),
+								metrics,
+							),
+						]
+						.spacing(4)
+						.wrap()
+						.vertical_spacing(4),
+					)
+					.push(monthly);
+			}
 
-            if mode == RepeatMode::Yearly {
-                body = body.push(
-                    text("Once a year on the day it starts.")
-                        .size(metrics.label() - 1.0)
-                        .style(text::secondary),
-                );
-            }
+			if mode == RepeatMode::Yearly {
+				body = body.push(
+					text("Once a year on the day it starts.")
+						.size(metrics.label() - 1.0)
+						.style(text::secondary),
+				);
+			}
 
-            body = body.push(
-                row![
-                    label("Ends"),
-                    choice(
-                        "Never",
-                        rule.ends == EndKind::Never,
-                        send(recurrence::Action::Ends(EndKind::Never)),
-                        metrics,
-                    ),
-                    choice(
-                        "On date",
-                        rule.ends == EndKind::OnDate,
-                        send(recurrence::Action::Ends(EndKind::OnDate)),
-                        metrics,
-                    ),
-                    choice(
-                        "After",
-                        rule.ends == EndKind::After,
-                        send(recurrence::Action::Ends(EndKind::After)),
-                        metrics,
-                    ),
-                ]
-                .spacing(4)
-                .align_y(Alignment::Center)
-                .wrap()
-                .vertical_spacing(4),
-            );
+			body = body.push(
+				row![
+					label("Ends"),
+					choice(
+						"Never",
+						rule.ends == EndKind::Never,
+						send(recurrence::Action::Ends(EndKind::Never)),
+						metrics,
+					),
+					choice(
+						"On date",
+						rule.ends == EndKind::OnDate,
+						send(recurrence::Action::Ends(EndKind::OnDate)),
+						metrics,
+					),
+					choice(
+						"After",
+						rule.ends == EndKind::After,
+						send(recurrence::Action::Ends(EndKind::After)),
+						metrics,
+					),
+				]
+				.spacing(4)
+				.align_y(Alignment::Center)
+				.wrap()
+				.vertical_spacing(4),
+			);
 
-            match rule.ends {
-                EndKind::OnDate => {
-                    let send = map.clone();
-                    let until = super::controls::date(
-                        crate::calendar::time_format::TimeFormat::TwelveHour,
-                        &rule.until,
-                        false,
-                        false,
-                        !busy,
-                        metrics.label(),
-                        move |value| send(recurrence::Action::Until(value)),
-                    );
-                    body = body.push(
-                        row![text("Last day").size(metrics.label()), until,]
-                            .spacing(6)
-                            .align_y(Alignment::Center),
-                    );
-                }
-                EndKind::After => {
-                    let mut count = crate::ui::controls::text_input("10", &rule.count)
-                        .size(metrics.label())
-                        .width(52);
-                    if !busy {
-                        let send = map.clone();
-                        count = count.on_input(move |value| send(recurrence::Action::Count(value)));
-                    }
-                    body = body.push(
-                        row![
-                            text("For").size(metrics.label()),
-                            count,
-                            text("repeats").size(metrics.label()),
-                        ]
-                        .spacing(6)
-                        .align_y(Alignment::Center),
-                    );
-                }
-                EndKind::Never => {}
-            }
-        }
-    }
+			match rule.ends {
+				EndKind::OnDate => {
+					let send = map.clone();
+					let until = super::controls::date(
+						crate::calendar::time_format::TimeFormat::TwelveHour,
+						&rule.until,
+						false,
+						false,
+						!busy,
+						metrics.label(),
+						move |value| send(recurrence::Action::Until(value)),
+					);
+					body = body.push(
+						row![text("Last day").size(metrics.label()), until,]
+							.spacing(6)
+							.align_y(Alignment::Center),
+					);
+				}
+				EndKind::After => {
+					let mut count = crate::ui::controls::text_input("10", &rule.count)
+						.size(metrics.label())
+						.width(52);
+					if !busy {
+						let send = map.clone();
+						count = count.on_input(move |value| send(recurrence::Action::Count(value)));
+					}
+					body = body.push(
+						row![
+							text("For").size(metrics.label()),
+							count,
+							text("repeats").size(metrics.label()),
+						]
+						.spacing(6)
+						.align_y(Alignment::Center),
+					);
+				}
+				EndKind::Never => {}
+			}
+		}
+	}
 
-    body.into()
+	body.into()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::app::EventDraftMessage;
-    use iced_test::{Simulator, core::Settings};
+	use super::*;
+	use crate::app::EventDraftMessage;
+	use iced_test::{Simulator, core::Settings};
 
-    #[test]
-    fn weekday_choices_keep_their_day_whatever_the_order_shown() {
-        let size = iced::Size::new(400.0, 600.0);
-        let day = NaiveDate::from_ymd_opt(2026, 10, 29).unwrap();
-        let mut rule = recurrence::Rule::weekly(day);
-        rule.repeat = RepeatMode::Weekly;
-        for first_day in FirstDayOfWeek::ALL {
-            let mut ui = Simulator::with_size(
-                Settings::default(),
-                size,
-                editor(&rule, day, first_day, &Metrics::of(size), false, |action| {
-                    Message::EventDraft(EventDraftMessage::EventDraftRecurrence(action))
-                }),
-            );
-            ui.click("Sun").unwrap();
-            assert!(ui.into_messages().any(|message| matches!(
-                message,
-                Message::EventDraft(EventDraftMessage::EventDraftRecurrence(
-                    recurrence::Action::ToggleWeekday(6)
-                ))
-            )));
-        }
-    }
+	#[test]
+	fn weekday_choices_keep_their_day_whatever_the_order_shown() {
+		let size = iced::Size::new(400.0, 600.0);
+		let day = NaiveDate::from_ymd_opt(2026, 10, 29).unwrap();
+		let mut rule = recurrence::Rule::weekly(day);
+		rule.repeat = RepeatMode::Weekly;
+		for first_day in FirstDayOfWeek::ALL {
+			let mut ui = Simulator::with_size(
+				Settings::default(),
+				size,
+				editor(&rule, day, first_day, &Metrics::of(size), false, |action| {
+					Message::EventDraft(EventDraftMessage::EventDraftRecurrence(action))
+				}),
+			);
+			ui.click("Sun").unwrap();
+			assert!(ui.into_messages().any(|message| matches!(
+				message,
+				Message::EventDraft(EventDraftMessage::EventDraftRecurrence(
+					recurrence::Action::ToggleWeekday(6)
+				))
+			)));
+		}
+	}
 }

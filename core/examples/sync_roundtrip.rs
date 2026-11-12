@@ -1,13 +1,13 @@
 //! Isolated native replication test. Creates and removes its own scratch table.
 use std::time::Duration;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let url = std::env::args().nth(1).ok_or("usage: sync_roundtrip URL")?;
-    let mut random = [0u8; 8];
-    getrandom::fill(&mut random)?;
-    let name = format!("timeslay_probe_{}", u64::from_le_bytes(random));
-    let directory = tempfile::tempdir()?;
-    tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(async {
+	let _ = rustls::crypto::ring::default_provider().install_default();
+	let url = std::env::args().nth(1).ok_or("usage: sync_roundtrip URL")?;
+	let mut random = [0u8; 8];
+	getrandom::fill(&mut random)?;
+	let name = format!("timeslay_probe_{}", u64::from_le_bytes(random));
+	let directory = tempfile::tempdir()?;
+	tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(async {
         tokio::time::timeout(Duration::from_secs(120),async {
             let a_path=directory.path().join("a.db");let b_path=directory.path().join("b.db");
             let a=turso::sync::Builder::new_remote(a_path.to_str().unwrap()).with_remote_url(&url).build().await?;

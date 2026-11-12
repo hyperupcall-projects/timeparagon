@@ -45,18 +45,18 @@ use chrono::{DateTime, Datelike, Local, NaiveDate};
 use iced::font::Weight;
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Style, Text};
 use iced::widget::{
-    Space, button, canvas as canvas_widget, column, container, mouse_area, responsive, row,
-    scrollable, stack, text,
+	Space, button, canvas as canvas_widget, column, container, mouse_area, responsive, row,
+	scrollable, stack, text,
 };
 use iced::{
-    Alignment, Color, Element, Fill, Font, Length, Pixels, Point, Rectangle, Renderer, Size, Theme,
-    mouse,
+	Alignment, Color, Element, Fill, Font, Length, Pixels, Point, Rectangle, Renderer, Size, Theme,
+	mouse,
 };
 
 use crate::alarms;
 use crate::app::{
-    CalendarMessage, EventDraftMessage, EventEditMessage, EventMessage, SettingsMessage,
-    SystemMessage, TaskMessage,
+	CalendarMessage, EventDraftMessage, EventEditMessage, EventMessage, SettingsMessage,
+	SystemMessage, TaskMessage,
 };
 use crate::app::{Message, MonthPicker, State};
 use crate::calendar::colors::{self, on_color};
@@ -75,13 +75,13 @@ const GRID_SCROLLBAR_SPACE: f32 = GRID_SCROLLBAR_WIDTH + GRID_SCROLLBAR_SPACING;
 
 /// Keep the calendar and its rounded event edges clear of the scrollbars.
 fn grid_scrollbar() -> scrollable::Scrollbar {
-    scrollable::Scrollbar::new()
-        .width(GRID_SCROLLBAR_WIDTH)
-        .spacing(GRID_SCROLLBAR_SPACING)
+	scrollable::Scrollbar::new()
+		.width(GRID_SCROLLBAR_WIDTH)
+		.spacing(GRID_SCROLLBAR_SPACING)
 }
 
 use timeslay_core::theme::{
-    BLOCK_PADDING, BLOCK_PADDING_RIGHT, BLOCK_TOP, EVENT_GAP, EVENT_RADIUS, NEEDLE_RADIUS,
+	BLOCK_PADDING, BLOCK_PADDING_RIGHT, BLOCK_TOP, EVENT_GAP, EVENT_RADIUS, NEEDLE_RADIUS,
 };
 
 /// The gap between a block's title and the time label under it.
@@ -105,190 +105,190 @@ const MIN_DURATION: i32 = SNAP_MINUTES;
 const DEFAULT_DURATION: i32 = 60;
 
 pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-    let grid = day_grid(state, metrics, crate::clock::now());
+	let grid = day_grid(state, metrics, crate::clock::now());
 
-    // The pointer watch records where the click landed without publishing a
-    // message, so scrolling stays on the widget's own path.
-    let mut body = column![].spacing(metrics.spacing).height(Fill).width(Fill);
-    if let Some(all_day) = all_day_row(state, metrics) {
-        body = body.push(container(all_day).padding([0.0, metrics.padding]));
-    }
-    let body = body.push(grid);
+	// The pointer watch records where the click landed without publishing a
+	// message, so scrolling stays on the widget's own path.
+	let mut body = column![].spacing(metrics.spacing).height(Fill).width(Fill);
+	if let Some(all_day) = all_day_row(state, metrics) {
+		body = body.push(container(all_day).padding([0.0, metrics.padding]));
+	}
+	let body = body.push(grid);
 
-    let heading =
-        container(heading_with_alarm_hint(state, metrics, false)).padding([0.0, metrics.padding]);
-    let mut content = column![heading, body]
-        .spacing(metrics.spacing)
-        // No bottom padding: the panel footer sits flush beneath the grid.
-        .padding(iced::Padding {
-            top: metrics.padding,
-            ..iced::Padding::ZERO
-        })
-        .width(Fill)
-        .height(Fill);
+	let heading =
+		container(heading_with_alarm_hint(state, metrics, false)).padding([0.0, metrics.padding]);
+	let mut content = column![heading, body]
+		.spacing(metrics.spacing)
+		// No bottom padding: the panel footer sits flush beneath the grid.
+		.padding(iced::Padding {
+			top: metrics.padding,
+			..iced::Padding::ZERO
+		})
+		.width(Fill)
+		.height(Fill);
 
-    // The bar comes last, so it appearing and going leaves the grid alone.
-    if let Some(dismiss) = dismiss_bar(state, metrics) {
-        content = content.push(dismiss);
-    }
+	// The bar comes last, so it appearing and going leaves the grid alone.
+	if let Some(dismiss) = dismiss_bar(state, metrics) {
+		content = content.push(dismiss);
+	}
 
-    // The root stays a stack whether or not a card is open. Swapping the root
-    // widget throws away the day grid's scroll state, which jumps the bar.
-    // Event details are no longer an overlay: they are a pane beside the view.
-    let overlay = if state.range_view_active() {
-        // The range view hosts its own dialogs, but this picker is the panel's.
-        if state.calendar.month_open {
-            month_overlay(state, MonthPicker::Panel, metrics)
-        } else {
-            Space::new().width(0).height(0).into()
-        }
-    } else if state
-        .calendar
-        .draft
-        .as_ref()
-        .is_some_and(|d| !d.editor_open)
-    {
-        draft_overlay(state, metrics)
-    } else if state.alarms.editor.is_some() {
-        super::alarms::editor_overlay(state, metrics)
-    } else if state.calendar.month_open {
-        month_overlay(state, MonthPicker::Panel, metrics)
-    } else if state.calendar.menu_open {
-        menu_overlay(state, metrics)
-    } else if state.calendar.search.open {
-        search_overlay(state, metrics)
-    } else if state.calendar.actions_open {
-        actions_overlay(state, metrics, true)
-    } else {
-        iced::widget::Space::new().width(0.0).height(0.0).into()
-    };
+	// The root stays a stack whether or not a card is open. Swapping the root
+	// widget throws away the day grid's scroll state, which jumps the bar.
+	// Event details are no longer an overlay: they are a pane beside the view.
+	let overlay = if state.range_view_active() {
+		// The range view hosts its own dialogs, but this picker is the panel's.
+		if state.calendar.month_open {
+			month_overlay(state, MonthPicker::Panel, metrics)
+		} else {
+			Space::new().width(0).height(0).into()
+		}
+	} else if state
+		.calendar
+		.draft
+		.as_ref()
+		.is_some_and(|d| !d.editor_open)
+	{
+		draft_overlay(state, metrics)
+	} else if state.alarms.editor.is_some() {
+		super::alarms::editor_overlay(state, metrics)
+	} else if state.calendar.month_open {
+		month_overlay(state, MonthPicker::Panel, metrics)
+	} else if state.calendar.menu_open {
+		menu_overlay(state, metrics)
+	} else if state.calendar.search.open {
+		search_overlay(state, metrics)
+	} else if state.calendar.actions_open {
+		actions_overlay(state, metrics, true)
+	} else {
+		iced::widget::Space::new().width(0.0).height(0.0).into()
+	};
 
-    pointer_watch(stack![content, overlay])
+	pointer_watch(stack![content, overlay])
 }
 
 fn habit_occurrence<'a>(
-    state: &'a State,
-    event: &'a Event,
-    metrics: &Metrics,
+	state: &'a State,
+	event: &'a Event,
+	metrics: &Metrics,
 ) -> Element<'a, Message> {
-    let format = state.config.appearance.time_format;
-    let completed = if event.completed {
-        match event.details.habit_completed_at {
-            Some(when) => format!(
-                "Completed at {}{}",
-                calendar::time_format::clock(when, format),
-                if when.date_naive() != event.start.date_naive() {
-                    format!(" ({})", when.format("%b %-d"))
-                } else {
-                    String::new()
-                }
-            ),
-            None => "Completed · time unknown".to_owned(),
-        }
-    } else {
-        "Not completed".to_owned()
-    };
-    let mut toggle = button(
-        text(if event.completed {
-            "Mark incomplete"
-        } else {
-            "Mark complete"
-        })
-        .size(metrics.label() - 1.0),
-    )
-    .padding([2, 4])
-    .style(crate::ui::controls::secondary);
-    if !state.habits.completing.contains(&event.id) {
-        toggle = toggle.on_press(Message::Habits(crate::habits::Action::ToggleCompleted(
-            event.id.clone(),
-        )));
-    }
-    container(
-        column![
-            text(format!(
-                "Scheduled {}",
-                calendar::time_format::range(event.start, event.end, format)
-            ))
-            .size(metrics.label() - 1.0),
-            text(completed).size(metrics.label() - 1.0),
-            toggle,
-        ]
-        .spacing(2),
-    )
-    .padding(3)
-    .width(Fill)
-    .style(crate::ui::controls::card_surface)
-    .into()
+	let format = state.config.appearance.time_format;
+	let completed = if event.completed {
+		match event.details.habit_completed_at {
+			Some(when) => format!(
+				"Completed at {}{}",
+				calendar::time_format::clock(when, format),
+				if when.date_naive() != event.start.date_naive() {
+					format!(" ({})", when.format("%b %-d"))
+				} else {
+					String::new()
+				}
+			),
+			None => "Completed · time unknown".to_owned(),
+		}
+	} else {
+		"Not completed".to_owned()
+	};
+	let mut toggle = button(
+		text(if event.completed {
+			"Mark incomplete"
+		} else {
+			"Mark complete"
+		})
+		.size(metrics.label() - 1.0),
+	)
+	.padding([2, 4])
+	.style(crate::ui::controls::secondary);
+	if !state.habits.completing.contains(&event.id) {
+		toggle = toggle.on_press(Message::Habits(crate::habits::Action::ToggleCompleted(
+			event.id.clone(),
+		)));
+	}
+	container(
+		column![
+			text(format!(
+				"Scheduled {}",
+				calendar::time_format::range(event.start, event.end, format)
+			))
+			.size(metrics.label() - 1.0),
+			text(completed).size(metrics.label() - 1.0),
+			toggle,
+		]
+		.spacing(2),
+	)
+	.padding(3)
+	.width(Fill)
+	.style(crate::ui::controls::card_surface)
+	.into()
 }
 
 /// A calendar checkbox uses the existing persistence flow for its item type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Completion {
-    Habit(bool),
-    Task(bool),
+	Habit(bool),
+	Task(bool),
 }
 
 impl Completion {
-    fn completed(self) -> bool {
-        match self {
-            Self::Habit(completed) | Self::Task(completed) => completed,
-        }
-    }
+	fn completed(self) -> bool {
+		match self {
+			Self::Habit(completed) | Self::Task(completed) => completed,
+		}
+	}
 
-    fn toggle(self, id: &str) -> Message {
-        match self {
-            Self::Habit(_) => {
-                Message::Habits(crate::habits::Action::ToggleCompleted(id.to_owned()))
-            }
-            Self::Task(_) => Message::Task(TaskMessage::TaskToggled(id.to_owned())),
-        }
-    }
+	fn toggle(self, id: &str) -> Message {
+		match self {
+			Self::Habit(_) => {
+				Message::Habits(crate::habits::Action::ToggleCompleted(id.to_owned()))
+			}
+			Self::Task(_) => Message::Task(TaskMessage::TaskToggled(id.to_owned())),
+		}
+	}
 
-    fn enabled(self, state: &State, event: &Event) -> bool {
-        if event.details.sending {
-            return false;
-        }
-        match self {
-            Self::Habit(_) => !state.habits.completing.contains(&event.id),
-            Self::Task(_) => state.timeblocking.busy.is_empty(),
-        }
-    }
+	fn enabled(self, state: &State, event: &Event) -> bool {
+		if event.details.sending {
+			return false;
+		}
+		match self {
+			Self::Habit(_) => !state.habits.completing.contains(&event.id),
+			Self::Task(_) => state.timeblocking.busy.is_empty(),
+		}
+	}
 }
 
 fn event_completion(state: &State, event: &Event) -> Option<Completion> {
-    if state.calendar.search.hides_details(event) || calendar::deadline::is_marker(event) {
-        None
-    } else if event.is_task() {
-        Some(Completion::Task(event.completed))
-    } else if event.details.habit {
-        Some(Completion::Habit(event.completed))
-    } else {
-        None
-    }
+	if state.calendar.search.hides_details(event) || calendar::deadline::is_marker(event) {
+		None
+	} else if event.is_task() {
+		Some(Completion::Task(event.completed))
+	} else if event.details.habit {
+		Some(Completion::Habit(event.completed))
+	} else {
+		None
+	}
 }
 
 /// The same completion control in all-day bars and compact calendar lists.
 fn event_label<'a>(state: &State, event: &Event, label: String, size: f32) -> Element<'a, Message> {
-    let mut content = row![
-        text(label)
-            .size(size)
-            .font(crate::ui::controls::pending_font(
-                iced::Font::DEFAULT,
-                event.details.sending,
-            ))
-            .wrapping(text::Wrapping::None)
-            .width(Fill)
-    ]
-    .spacing(6)
-    .align_y(Alignment::Center)
-    .width(Fill);
-    if let Some(completion) = event_completion(state, event) {
-        let id = event.id.clone();
-        let mut checkbox = crate::ui::controls::checkbox(event.completed).size(14);
-        if completion.enabled(state, event) {
-            checkbox = checkbox.on_toggle(move |_| completion.toggle(&id));
-        }
-        content = content.push(checkbox);
-    }
-    content.into()
+	let mut content = row![
+		text(label)
+			.size(size)
+			.font(crate::ui::controls::pending_font(
+				iced::Font::DEFAULT,
+				event.details.sending,
+			))
+			.wrapping(text::Wrapping::None)
+			.width(Fill)
+	]
+	.spacing(6)
+	.align_y(Alignment::Center)
+	.width(Fill);
+	if let Some(completion) = event_completion(state, event) {
+		let id = event.id.clone();
+		let mut checkbox = crate::ui::controls::checkbox(event.completed).size(14);
+		if completion.enabled(state, event) {
+			checkbox = checkbox.on_toggle(move |_| completion.toggle(&id));
+		}
+		content = content.push(checkbox);
+	}
+	content.into()
 }
