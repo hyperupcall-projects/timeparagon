@@ -2,6 +2,7 @@
 name = "timeslay"
 version = "0.31.0"
 edition = "2024"
+publish = false
 description = "Slay the day with TimeSlay"
 license = "GPL-3.0"
 
