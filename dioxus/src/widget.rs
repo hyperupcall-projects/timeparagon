@@ -107,7 +107,7 @@ fn widget_day(
         .map(|((timed, span), slot)| WidgetItem {
             title: timed.title.clone(),
             time: time_format::event(&timed.event, FORMAT),
-            color: hex(timed.event.display_color(settings)),
+            color: hex(timed.color),
             start: span.start_min,
             end: span.end_min,
             column: slot.column,
@@ -136,7 +136,7 @@ fn widget_day(
             .iter()
             .map(|event| WidgetAllDay {
                 title: event.title.clone(),
-                color: hex(event.display_color(settings)),
+                color: hex(event.display_color(settings, &model.calendars)),
             })
             .collect(),
         items,

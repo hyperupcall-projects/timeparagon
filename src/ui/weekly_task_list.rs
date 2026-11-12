@@ -392,7 +392,7 @@ fn card<'a>(state: &'a State, event: &CalendarEvent, preview: bool) -> Element<'
         .iter()
         .filter_map(|id| state.config.projects.get(*id).and_then(|p| p.color()))
         .next()
-        .unwrap_or_else(|| event.display_color(&state.config.calendar));
+        .unwrap_or_else(|| event.display_color(&state.config.calendar, &state.calendar.calendars));
     let mut badges = row![].align_y(Alignment::Center);
     if !event.all_day {
         badges = badges.push(

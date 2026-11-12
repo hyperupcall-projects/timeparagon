@@ -370,7 +370,7 @@ fn TaskEditor(
     let is_busy = busy();
     let status = tb::task_status(&current);
     let source = day::source_label(&current, &context);
-    let color = css_color(current.display_color(&context.settings));
+    let color = css_color(current.display_color(&context.settings, &context.calendars));
     let untriaged = day::untriaged(&current, &context);
     let triage_error = task_edit::triage_error(&current, &context.settings.triage);
     let place = places::place_of(
@@ -956,7 +956,7 @@ fn EventEditor(
     let is_busy = busy() || values.loading;
     let habit = source_event.details.habit;
     let source = day::source_label(&source_event, &context);
-    let color = css_color(source_event.display_color(&context.settings));
+    let color = css_color(source_event.display_color(&context.settings, &context.calendars));
     let place = places::place_of(
         &context.places.places,
         &context.places.event_places,
@@ -1622,7 +1622,7 @@ fn SleepEditor(
         .flatten();
     let timer_disabled = is_busy || !crate::sleep::can_press(&night);
     let source = day::source_label(&event, &context);
-    let color = css_color(event.display_color(&context.settings));
+    let color = css_color(event.display_color(&context.settings, &context.calendars));
     let weekday = calendar::sleep::weekday_label(record.wake_date);
     let footer = if pending_scope() {
         rsx! {

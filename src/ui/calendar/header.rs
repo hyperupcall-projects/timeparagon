@@ -357,7 +357,7 @@ pub(super) fn all_day_chip<'a>(
     let color = if hidden {
         PRIVATE_COLOR
     } else {
-        event.display_color(&state.config.calendar)
+        event.display_color(&state.config.calendar, &state.calendar.calendars)
     };
     let ink = on_color(color);
 

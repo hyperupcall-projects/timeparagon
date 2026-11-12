@@ -97,7 +97,7 @@ pub fn segments(
                 id: event.id.clone(),
                 start_min: span.start_min,
                 end_min: span.end_min,
-                color: event.display_color(settings),
+                color: event.display_color(settings, &store.calendars),
                 completed: event.is_task() && event.completed,
                 priority,
                 card: card(event, &assigned, false, time_format),

@@ -116,26 +116,26 @@ impl Event {
     /// The color this item is drawn in, resolved from what the item is rather
     /// than from a color previously written into the event.
     ///
-    /// An explicit Google event color wins for a habit or a plain event. The
-    /// app's own kinds then use the color configured for their kind, a task
-    /// list uses its list's color, and an event on another calendar uses that
-    /// calendar's configured or Google color. The event's raw `color` is only a
-    /// fallback for an external calendar with no configured color; it is never
-    /// used for app-owned items.
-    pub fn display_color(&self, settings: &CalendarSettings) -> Color {
+    /// Sleep is always drawn in the sleep color. Otherwise an explicit Google
+    /// event color wins, whether the event is a habit, a scheduled task, a
+    /// time block or a plain event. The app's own kinds then use the color
+    /// configured for their kind, a task
+    /// list uses its list's color, and any other event, including an all-day
+    /// event on the app's calendar, uses its calendar's configured or Google
+    /// color from `calendars`. The event's raw `color` is only a fallback for a
+    /// calendar that is not in `calendars`; it is never used for app-owned
+    /// items.
+    pub fn display_color(&self, settings: &CalendarSettings, calendars: &[Calendar]) -> Color {
         if self.details.sleep.is_some() {
             return settings.sleep_color();
         }
-        if self.details.habit {
-            return self
-                .details
-                .color_id
-                .as_deref()
-                .and_then(colors::event)
-                .unwrap_or_else(|| settings.habit_color());
-        }
+        // A color picked for this one event beats the color of its kind or
+        // calendar. Google Tasks have no such color, so their list's applies.
         if let Some(color) = self.details.color_id.as_deref().and_then(colors::event) {
             return color;
+        }
+        if self.details.habit {
+            return settings.habit_color();
         }
         if self.is_calendar_task() {
             return settings.task_event_color();
@@ -143,17 +143,20 @@ impl Event {
         if self.is_task() {
             return task_color(settings, &self.calendar_id);
         }
-        if settings.app_calendar.as_deref() == Some(self.calendar_id.as_str()) {
-            return if self.all_day {
-                settings.event_color()
-            } else {
-                settings.time_block_color()
-            };
+        if settings.app_calendar.as_deref() == Some(self.calendar_id.as_str()) && !self.all_day {
+            return settings.time_block_color();
         }
         settings
             .calendar_colors
             .get(&self.calendar_id)
-            .map_or(self.color, |color| color.0)
+            .map(|color| color.0)
+            .or_else(|| {
+                calendars
+                    .iter()
+                    .find(|calendar| calendar.id == self.calendar_id)
+                    .map(|calendar| calendar.color)
+            })
+            .unwrap_or(self.color)
     }
 
     /// Source used for calendar visibility and overlap ordering.
@@ -252,12 +255,12 @@ impl EventKind {
     }
 
     /// The kind's chip: its name, in the color configured for it. Plain
-    /// events on other calendars keep their event color.
+    /// events keep their calendar's color.
     pub fn chip(
         self,
         event: &Event,
         settings: &CalendarSettings,
-        _calendars: &[Calendar],
+        calendars: &[Calendar],
     ) -> (String, Color) {
         let color = match self {
             Self::Sleep => settings.sleep_color(),
@@ -267,8 +270,7 @@ impl EventKind {
                 .task_color(&event.calendar_id)
                 .unwrap_or(colors::TASK),
             Self::TimeBlock => settings.time_block_color(),
-            Self::AppEvent => settings.event_color(),
-            Self::External => event.display_color(settings),
+            Self::AppEvent | Self::External => event.display_color(settings, calendars),
         };
         (self.label().unwrap_or_default().to_owned(), color)
     }
@@ -3858,7 +3860,7 @@ mod tests {
             .iter()
             .filter(|e| e.calendar_id == "tasks:list")
         {
-            assert_eq!(event.display_color(&settings), red);
+            assert_eq!(event.display_color(&settings, &store.calendars), red);
         }
     }
 
@@ -3900,14 +3902,20 @@ mod tests {
         store.apply_task_colors(&settings);
         store.cache_days_in(Some(scratch.path().to_path_buf()));
         assert_eq!(
-            store.event(&id).unwrap().display_color(&settings),
+            store
+                .event(&id)
+                .unwrap()
+                .display_color(&settings, &store.calendars),
             colors::HABIT
         );
         snapshot.events[0].color = colors::event("4").unwrap();
         store.apply_snapshot(snapshot);
         // Render correctly even before any caller reapplies display settings.
         assert_eq!(
-            store.event(&id).unwrap().display_color(&settings),
+            store
+                .event(&id)
+                .unwrap()
+                .display_color(&settings, &store.calendars),
             colors::HABIT
         );
     }
@@ -3919,15 +3927,18 @@ mod tests {
         let mut settings = CalendarSettings::default();
         event.color = colors::event("4").unwrap();
         event.details.color_id = None;
-        assert_eq!(event.display_color(&settings), colors::HABIT);
+        assert_eq!(event.display_color(&settings, &[]), colors::HABIT);
         // The raw color stays as Google supplied it; only drawing follows
         // settings.
         assert_eq!(event.color, colors::event("4").unwrap());
         settings.set_habit_color(Some(colors::TASK));
-        assert_eq!(event.display_color(&settings), colors::TASK);
+        assert_eq!(event.display_color(&settings, &[]), colors::TASK);
         event.details.color_id = Some("4".into());
         // Even a stale cached rendered color cannot hide the Google override.
-        assert_eq!(event.display_color(&settings), colors::event("4").unwrap());
+        assert_eq!(
+            event.display_color(&settings, &[]),
+            colors::event("4").unwrap()
+        );
     }
 
     #[test]
@@ -3950,20 +3961,119 @@ mod tests {
         });
         task.color = calendar_red;
         assert!(task.is_calendar_task());
-        assert_eq!(task.display_color(&settings), settings.task_event_color());
+        assert_eq!(
+            task.display_color(&settings, &[]),
+            settings.task_event_color()
+        );
 
         let mut block = task.clone();
         block.details.task_data = None;
         block.all_day = false;
         block.color = calendar_red;
-        assert_eq!(block.display_color(&settings), settings.time_block_color());
+        assert_eq!(
+            block.display_color(&settings, &[]),
+            settings.time_block_color()
+        );
 
+        // An all-day event on the app's calendar is a plain event, drawn in
+        // that calendar's color rather than the built-in event color.
         let mut all_day = block.clone();
         all_day.all_day = true;
-        assert_eq!(all_day.display_color(&settings), settings.event_color());
+        all_day.color = colors::DEFAULT_EVENT;
+        let app = Calendar {
+            id: "app".into(),
+            name: CalendarSettings::APP_CALENDAR_NAME.into(),
+            color: calendar_red,
+            primary: false,
+            selected_by_google: true,
+        };
+        assert_eq!(
+            all_day.display_color(&settings, std::slice::from_ref(&app)),
+            calendar_red
+        );
 
         settings.set_task_event_color(Some(colors::HABIT));
-        assert_eq!(task.display_color(&settings), colors::HABIT);
+        assert_eq!(task.display_color(&settings, &[]), colors::HABIT);
+    }
+
+    #[test]
+    fn a_color_picked_for_an_event_beats_its_kinds_color() {
+        let settings = CalendarSettings {
+            app_calendar: Some("app".into()),
+            ..CalendarSettings::default()
+        };
+        let banana = colors::event("5").unwrap();
+        let mut base = sample_snapshot().events.remove(0);
+        base.calendar_id = "app".into();
+        base.all_day = false;
+        base.details.color_id = Some("5".into());
+
+        let mut scheduled_task = base.clone();
+        scheduled_task.details.task_data = Some(crate::task_db::TaskData {
+            id: 0,
+            metadata: Default::default(),
+        });
+        assert!(scheduled_task.is_calendar_task());
+
+        let mut habit = base.clone();
+        habit.details.habit = true;
+
+        let block = base.clone();
+
+        for event in [&scheduled_task, &habit, &block] {
+            assert_eq!(event.display_color(&settings, &[]), banana);
+        }
+
+        // Sleep is the one kind that keeps its own color.
+        let mut night = base;
+        night.details.sleep = Some(sleep::Record {
+            wake_date: night.end.date_naive(),
+            automatic: false,
+            estimated_start: false,
+            estimated_end: false,
+            actual_start: None,
+            actual_end: None,
+        });
+        assert_eq!(night.display_color(&settings, &[]), settings.sleep_color());
+    }
+
+    #[test]
+    fn plain_events_always_take_their_calendars_color() {
+        let mut settings = CalendarSettings::default();
+        let green = colors::calendar("8").unwrap();
+        let work = Calendar {
+            id: "work".into(),
+            name: "Work".into(),
+            color: green,
+            primary: false,
+            selected_by_google: true,
+        };
+        let mut event = sample_snapshot().events.remove(0);
+        event.calendar_id = "work".into();
+        event.details.color_id = None;
+        // A placeholder written before the calendar was known, as a freshly
+        // created or refreshed event can carry.
+        event.color = colors::DEFAULT_EVENT;
+        let calendars = std::slice::from_ref(&work);
+        assert_eq!(event.display_color(&settings, calendars), green);
+        assert_eq!(
+            EventKind::External.chip(&event, &settings, calendars).1,
+            green
+        );
+
+        // A local override of the calendar's color wins over Google's.
+        let red = colors::calendar("2").unwrap();
+        settings
+            .calendar_colors
+            .insert("work".into(), crate::hex::HexColor(red));
+        assert_eq!(event.display_color(&settings, calendars), red);
+
+        // A Google color set on the event itself still wins.
+        event.details.color_id = Some("5".into());
+        assert_eq!(
+            event.display_color(&settings, calendars),
+            colors::event("5").unwrap()
+        );
     }
 
     #[test]

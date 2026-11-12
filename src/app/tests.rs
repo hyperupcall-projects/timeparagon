@@ -552,7 +552,7 @@ fn picking_a_task_color_recolors_the_list_and_its_events() {
             .calendar
             .event("deep")
             .unwrap()
-            .display_color(&state.config.calendar),
+            .display_color(&state.config.calendar, &state.calendar.calendars),
         red,
         "the task's own chip should follow the list color"
     );
@@ -568,7 +568,7 @@ fn picking_a_task_color_recolors_the_list_and_its_events() {
             .calendar
             .event("deep")
             .unwrap()
-            .display_color(&state.config.calendar),
+            .display_color(&state.config.calendar, &state.calendar.calendars),
         calendar::colors::TASK
     );
 }

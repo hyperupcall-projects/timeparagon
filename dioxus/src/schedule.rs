@@ -265,7 +265,7 @@ fn schedule_grid(
                             {
                                 let opened = event.clone();
                                 rsx! {
-                                    button { class: "all-day-chip", "data-sending": event.details.sending, style: "background:{crate::css_color(event.display_color(settings))};color:{crate::css_color(calendar::colors::on_color(event.display_color(settings)))};",
+                                    button { class: "all-day-chip", "data-sending": event.details.sending, style: "background:{crate::css_color(event.display_color(settings, &model.calendars))};color:{crate::css_color(calendar::colors::on_color(event.display_color(settings, &model.calendars)))};",
                                         onclick: move |_| on_open.call(opened.clone()), "{event.title}"
                                     }
                                 }

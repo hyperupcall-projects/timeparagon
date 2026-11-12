@@ -657,7 +657,7 @@ fn timed_chip<'a>(state: &State, event: &Event, metrics: &Metrics) -> Element<'a
     let color = if hidden {
         PRIVATE_COLOR
     } else {
-        event.display_color(&state.config.calendar)
+        event.display_color(&state.config.calendar, &state.calendar.calendars)
     };
     button(event_label(state, event, label, metrics.label()))
         .width(Fill)

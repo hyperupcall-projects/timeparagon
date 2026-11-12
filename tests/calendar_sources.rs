@@ -45,7 +45,7 @@ fn regular_calendar_colors_survive_sync_and_reset_without_changing_event_colors(
                 .calendar
                 .event("standup")
                 .unwrap()
-                .display_color(&state.config.calendar),
+                .display_color(&state.config.calendar, &state.calendar.calendars),
             color
         );
         assert_eq!(
@@ -73,7 +73,7 @@ fn regular_calendar_colors_survive_sync_and_reset_without_changing_event_colors(
     explicit.details.color_id = Some("4".into());
     explicit.color = calendar::colors::event("4").unwrap();
     assert_eq!(
-        explicit.display_color(&state.config.calendar),
+        explicit.display_color(&state.config.calendar, &state.calendar.calendars),
         explicit.color
     );
     state.config.calendar.app_calendar = Some("work".into());
@@ -82,7 +82,7 @@ fn regular_calendar_colors_survive_sync_and_reset_without_changing_event_colors(
             .calendar
             .event("standup")
             .unwrap()
-            .display_color(&state.config.calendar),
+            .display_color(&state.config.calendar, &state.calendar.calendars),
         state.config.calendar.time_block_color()
     );
     state.config.calendar.app_calendar = None;
@@ -95,7 +95,7 @@ fn regular_calendar_colors_survive_sync_and_reset_without_changing_event_colors(
             .calendar
             .event("standup")
             .unwrap()
-            .display_color(&state.config.calendar),
+            .display_color(&state.config.calendar, &state.calendar.calendars),
         original
     );
     assert!(!state.config.calendar.calendar_colors.contains_key("work"));
@@ -448,7 +448,7 @@ fn list_colors_and_visibility_are_independent_and_persist() {
                 .iter()
                 .find(|e| e.calendar_id == id)
                 .unwrap()
-                .display_color(&state.config.calendar),
+                .display_color(&state.config.calendar, &state.calendar.calendars),
             color
         );
         assert_eq!(
@@ -655,7 +655,7 @@ fn timeslay_colors_are_chosen_from_the_menu_and_not_from_settings() {
             .find(|event| TimeSlaySource::of(event, "app") == Some(source))
             .unwrap();
         assert_eq!(
-            event.display_color(&state.config.calendar),
+            event.display_color(&state.config.calendar, &state.calendar.calendars),
             color,
             "{} was not recolored",
             source.label()

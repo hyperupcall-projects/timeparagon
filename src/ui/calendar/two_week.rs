@@ -314,7 +314,7 @@ fn all_day_row<'a>(
     let color = if hidden {
         PRIVATE_COLOR
     } else {
-        event.display_color(&state.config.calendar)
+        event.display_color(&state.config.calendar, &state.calendar.calendars)
     };
     let ink = on_color(color);
     let title = if hidden {
@@ -354,7 +354,7 @@ fn timed_row<'a>(
     let color = if hidden {
         PRIVATE_COLOR
     } else {
-        event.display_color(&state.config.calendar)
+        event.display_color(&state.config.calendar, &state.calendar.calendars)
     };
     let alpha = if past { PAST_ALPHA } else { 1.0 };
     let clock = calendar::time_format::clock(event.start, state.config.appearance.time_format);

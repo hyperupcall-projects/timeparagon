@@ -109,7 +109,7 @@ pub(crate) fn outline(theme: &Theme) -> iced::Border {
 /// A one-line chip for the dragged task in its own color, for the day cells
 /// and all-day rows.
 pub(crate) fn chip<'a>(state: &State, task: &Event, size: f32) -> Element<'a, Message> {
-    let color = task.display_color(&state.config.calendar);
+    let color = task.display_color(&state.config.calendar, &state.calendar.calendars);
     let ink = calendar::colors::on_color(color);
     container(
         text(tb::task_label(task))

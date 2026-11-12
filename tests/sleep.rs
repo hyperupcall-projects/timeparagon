@@ -120,7 +120,10 @@ fn sleep_has_a_fixed_gray_source_and_an_independent_persisted_toggle() {
     let mut state = state();
     let sleep = state.calendar.event("sleep").unwrap();
     assert_eq!(sleep.source_id(), sleep::SOURCE_ID);
-    assert_eq!(sleep.display_color(&state.config.calendar), sleep::COLOR);
+    assert_eq!(
+        sleep.display_color(&state.config.calendar, &state.calendar.calendars),
+        sleep::COLOR
+    );
     assert!(!timeslay::timeblocking::is_block(
         sleep,
         &state.config.calendar

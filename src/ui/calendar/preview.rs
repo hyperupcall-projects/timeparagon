@@ -380,7 +380,7 @@ fn preview_canvas<'a>(
                 color: if hidden {
                     PRIVATE_COLOR
                 } else {
-                    event.display_color(settings)
+                    event.display_color(settings, &state.calendar.calendars)
                 },
                 proposal: None,
                 focused: false,

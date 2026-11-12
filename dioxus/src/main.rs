@@ -1963,11 +1963,12 @@ fn month_picker(
 fn all_day_chip(
     event: &Event,
     settings: &CalendarSettings,
+    calendars: &[calendar::Calendar],
     editing: Signal<Option<Event>>,
 ) -> Element {
     let mut editing = editing;
     let opened = event.clone();
-    let color = event.display_color(settings);
+    let color = event.display_color(settings, calendars);
     let style = format!(
         "background:{};color:{};",
         css_color(color),
@@ -2075,7 +2076,7 @@ fn timeline(
                     "{summary.overdue} overdue. \u{a0}{summary.inbox} in inbox. \u{a0}{summary.unslotted} not slotted in"
                 }
                 for event in &model.all_day {
-                    {all_day_chip(event, settings, editing)}
+                    {all_day_chip(event, settings, &model.calendars, editing)}
                 }
             }
             div { class: "timeline-card",
@@ -2308,7 +2309,11 @@ fn time_block_modal(
     let mut button_close = close;
     let title = block.event.title.clone();
     let time = calendar::event_time_label(&block.event);
-    let accent = css_color(block.event.display_color(&context.settings));
+    let accent = css_color(
+        block
+            .event
+            .display_color(&context.settings, &context.calendars),
+    );
     let planned = block.planned_minutes as i64;
     let capacity = block.capacity_minutes.max(1);
     let pct = (planned as f32 / capacity as f32 * 100.0).clamp(0.0, 100.0);

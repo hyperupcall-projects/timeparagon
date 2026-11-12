@@ -230,16 +230,10 @@ pub fn from_calendar_draft(state: &State, draft: &calendar::Draft) -> Proposal {
         DraftKind::Event => settings
             .calendar_colors
             .get(&draft.calendar_id)
-            .map(|color| color.0)
-            .or_else(|| {
-                state
-                    .calendar
-                    .calendars
-                    .iter()
-                    .find(|calendar| calendar.id == draft.calendar_id)
-                    .map(|calendar| calendar.color)
-            })
-            .unwrap_or_else(|| settings.event_color()),
+            .map_or_else(
+                || state.calendar.calendar_color(&draft.calendar_id),
+                |color| color.0,
+            ),
         DraftKind::TimeBlock => settings.time_block_color(),
         DraftKind::Habit => settings.habit_color(),
         DraftKind::Sleep => settings.sleep_color(),

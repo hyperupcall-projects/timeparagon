@@ -196,7 +196,7 @@ fn row_content<'a>(
     let mut color = if hidden {
         PRIVATE_COLOR
     } else {
-        event.display_color(&state.config.calendar)
+        event.display_color(&state.config.calendar, &state.calendar.calendars)
     };
     if past {
         color.a = 0.3;

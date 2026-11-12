@@ -125,7 +125,7 @@ pub(super) fn day_canvas<'a>(
                 color: if hidden {
                     PRIVATE_COLOR
                 } else {
-                    event.display_color(&state.config.calendar)
+                    event.display_color(&state.config.calendar, &state.calendar.calendars)
                 },
                 editable: !calendar::deadline::is_marker(event)
                     && !hidden
@@ -238,7 +238,7 @@ pub(super) fn day_canvas<'a>(
             column: 0,
             columns: 1,
             column_span: 1,
-            color: event.display_color(&state.config.calendar),
+            color: event.display_color(&state.config.calendar, &state.calendar.calendars),
             editable: false,
             pending: false,
             tasks: Vec::new(),

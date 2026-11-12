@@ -402,7 +402,7 @@ fn agenda_rows(
                     } else {
                         calendar::event_time_label(event)
                     },
-                    color: event.display_color(settings),
+                    color: event.display_color(settings, &snapshot.calendars),
                 })
                 .collect();
             (date, rows)
@@ -482,6 +482,8 @@ pub struct DayModel {
     /// belongs to this day.
     pub now_min: Option<i32>,
     pub hour_start: u32,
+    /// The day's calendars, which give its events their colors.
+    pub calendars: Vec<calendar::Calendar>,
 }
 
 /// The tasks that want attention, counted the way the desktop's day view does.
@@ -699,6 +701,7 @@ pub fn build_model(snapshot: &Snapshot, settings: &CalendarSettings) -> DayModel
         summary,
         now_min,
         hour_start,
+        calendars: snapshot.calendars.clone(),
     }
 }
 
@@ -884,7 +887,7 @@ fn timed_events(
                 columns: slot.columns,
                 column_span: slot.column_span,
                 time_block: block.is_some(),
-                color: event.display_color(settings),
+                color: event.display_color(settings, &snapshot.calendars),
                 tasks: block.map_or_else(Vec::new, |block| block.tasks.clone()),
             }
         })
@@ -2270,7 +2273,7 @@ mod tests {
             source_label(&meeting, &context),
             Source {
                 name: "Event".into(),
-                color: meeting.display_color(&context.settings)
+                color: meeting.display_color(&context.settings, &context.calendars)
             }
         );
         let mut habit = meeting.clone();
