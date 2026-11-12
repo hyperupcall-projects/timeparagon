@@ -585,7 +585,12 @@ pub(super) fn event_scope_control<'a>(
     // always a series even before its master has loaded.
     let scoped_choices =
         event.is_recurring() || event.details.habit || event.details.sleep.is_some();
-    if !scoped_choices {
+    // A time block can take the tasks and habits planned in it along.
+    let with_tasks = deleting && crate::timeblocking::is_block(event, &state.config.calendar);
+    // A single block only offers that when something is planned in it.
+    let single_with_tasks =
+        with_tasks && !scoped_choices && !crate::timeblocking::assigned(state, event).is_empty();
+    if !scoped_choices && !single_with_tasks {
         let single = button(
             text(if deleting {
                 "Delete"
@@ -667,8 +672,6 @@ pub(super) fn event_scope_control<'a>(
             .on_press(message)
             .style(super::super::controls::secondary)
     };
-    // A time block can take the tasks and habits planned in it along.
-    let with_tasks = deleting && crate::timeblocking::is_block(event, &state.config.calendar);
     let with_tasks_choice = |label, scope| {
         with_tasks.then(|| {
             choice(
@@ -677,30 +680,40 @@ pub(super) fn event_scope_control<'a>(
             )
         })
     };
-    let choices = column![choice(
-        if deleting {
-            "Delete current and future events"
-        } else {
-            "Save current and future events"
-        },
-        scoped(calendar::SaveScope::CurrentAndFuture),
-    )]
-    .push(with_tasks_choice(
-        "Delete current and future events including planned tasks",
-        calendar::SaveScope::CurrentAndFuture,
-    ))
-    .push(choice(
-        if deleting {
-            "Delete all events"
-        } else {
-            "Save all events"
-        },
-        scoped(calendar::SaveScope::All),
-    ))
-    .push(with_tasks_choice(
-        "Delete all events including planned tasks",
-        calendar::SaveScope::All,
-    ))
+    let choices = if single_with_tasks {
+        column![choice(
+            "Delete including planned tasks",
+            Message::Event(EventMessage::EventDeleteWithTasks(
+                event.id.clone(),
+                calendar::SaveScope::Current,
+            )),
+        )]
+    } else {
+        column![choice(
+            if deleting {
+                "Delete current and future events"
+            } else {
+                "Save current and future events"
+            },
+            scoped(calendar::SaveScope::CurrentAndFuture),
+        )]
+        .push(with_tasks_choice(
+            "Delete current and future events including planned tasks",
+            calendar::SaveScope::CurrentAndFuture,
+        ))
+        .push(choice(
+            if deleting {
+                "Delete all events"
+            } else {
+                "Save all events"
+            },
+            scoped(calendar::SaveScope::All),
+        ))
+        .push(with_tasks_choice(
+            "Delete all events including planned tasks",
+            calendar::SaveScope::All,
+        ))
+    }
     .spacing(4);
     let menu = container(choices)
         .padding(6)

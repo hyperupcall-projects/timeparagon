@@ -352,6 +352,124 @@ fn a_repeating_time_block_can_be_deleted_with_its_planned_tasks() {
 }
 
 #[test]
+fn a_single_time_block_with_planned_tasks_offers_deleting_them_too() {
+    use crate::timeblocking::{self as tb, Metadata};
+    let mut state = State::blank();
+    let mut snapshot = calendar::sample_snapshot();
+    let block = snapshot
+        .events
+        .iter()
+        .find(|event| event.id == "standup")
+        .unwrap()
+        .clone();
+    assert!(!block.is_recurring());
+    state.config.calendar.app_calendar = Some(block.calendar_id.clone());
+    let mut task = block.clone();
+    task.id = "task:planned".into();
+    task.calendar_id = "tasks:list".into();
+    task.title = "Assigned task".into();
+    task.all_day = true;
+    task.details.task_data = Some(crate::task_db::TaskData {
+        id: 100,
+        metadata: Metadata {
+            block: Some(tb::block_key(&block)),
+            minutes: 30,
+            ..Metadata::default()
+        },
+    });
+    snapshot.events = vec![block.clone()];
+    state.calendar = calendar::Store::with_snapshot(snapshot);
+    state.calendar.open_event = Some("standup".into());
+    state.calendar.edit_draft = Some(calendar::EditDraft::from_event(&block));
+    let metrics = Metrics::of(Size::new(360.0, 800.0));
+    let label = "Delete including planned tasks";
+    let _ = crate::app::update(
+        &mut state,
+        Message::EventEdit(EventEditMessage::EventEditDeleteMenuToggled),
+    );
+    // With nothing planned in it, Delete stays a plain button.
+    let mut ui = iced_test::Simulator::with_size(
+        Default::default(),
+        metrics.size,
+        details_pane(&state, &metrics),
+    );
+    assert!(ui.find("Delete").is_ok());
+    assert!(ui.find("▾").is_err());
+    assert!(ui.find(label).is_err());
+    drop(ui);
+    state.calendar.add_event(task);
+    assert!(!tb::assigned(&state, &block).is_empty());
+    let mut ui = iced_test::Simulator::with_size(
+        Default::default(),
+        metrics.size,
+        details_pane(&state, &metrics),
+    );
+    assert!(ui.find("Delete all events").is_err());
+    assert!(ui.find(label).unwrap().bounds().y > ui.find("Delete").unwrap().bounds().y);
+    ui.click(label).unwrap();
+    let message = ui.into_messages().next().unwrap();
+    assert!(matches!(
+        &message,
+        Message::Event(EventMessage::EventDeleteWithTasks(id, calendar::SaveScope::Current))
+            if id == "standup"
+    ));
+    let _ = crate::app::update(&mut state, message);
+    assert!(state.calendar.pending_delete_with_tasks);
+    let mut confirmation = iced_test::Simulator::with_size(
+        Default::default(),
+        metrics.size,
+        delete_confirmation(&state, &metrics),
+    );
+    assert!(
+        confirmation
+            .find("Delete this event and its planned tasks?")
+            .is_ok()
+    );
+    drop(confirmation);
+    // The planned tasks leave the view with the block, not after a refresh.
+    let _ = crate::app::update(
+        &mut state,
+        Message::Event(EventMessage::EventDeleted("standup".into(), Ok(()))),
+    );
+    assert!(state.calendar.event("standup").is_none());
+    assert!(state.calendar.event("task:planned").is_none());
+}
+
+#[test]
+fn a_plain_block_delete_leaves_its_planned_tasks_in_view() {
+    use crate::timeblocking::{self as tb, Metadata};
+    let mut state = State::blank();
+    let mut snapshot = calendar::sample_snapshot();
+    let block = snapshot
+        .events
+        .iter()
+        .find(|event| event.id == "standup")
+        .unwrap()
+        .clone();
+    state.config.calendar.app_calendar = Some(block.calendar_id.clone());
+    let mut task = block.clone();
+    task.id = "task:planned".into();
+    task.calendar_id = "tasks:list".into();
+    task.details.task_data = Some(crate::task_db::TaskData {
+        id: 100,
+        metadata: Metadata {
+            block: Some(tb::block_key(&block)),
+            ..Metadata::default()
+        },
+    });
+    snapshot.events = vec![block, task];
+    state.calendar = calendar::Store::with_snapshot(snapshot);
+    for message in [
+        EventMessage::EventDeleteRequested("standup".into()),
+        EventMessage::EventDeleted("standup".into(), Ok(())),
+    ] {
+        let _ = crate::app::update(&mut state, Message::Event(message));
+    }
+    assert!(state.calendar.event("standup").is_none());
+    assert!(state.calendar.event("task:planned").is_some());
+}
+
+#[test]
 fn save_split_button_keeps_the_arrow_target_separate_and_opens_scoped_actions() {
     let mut state = State::blank();
     state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());

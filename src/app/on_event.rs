@@ -542,13 +542,16 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
             Task::none()
         }
         EventMessage::EventDeleted(id, Ok(())) => {
+            let planned = planned_tasks_deleted_with(state, &id);
             state.calendar.pending_delete = None;
             // The event is gone on Google's side, so drop it from the day in
             // view. The next sync reconciles the cache.
-            if state.range_view_active() {
-                state.calendar.forget_event_everywhere(&id);
-            } else {
-                state.calendar.events.retain(|event| event.id != id);
+            for id in std::iter::once(&id).chain(&planned) {
+                if state.range_view_active() {
+                    state.calendar.forget_event_everywhere(id);
+                } else {
+                    state.calendar.events.retain(|event| &event.id != id);
+                }
             }
             let closing_details = state.calendar.open_event.as_deref() == Some(id.as_str());
             if closing_details {
@@ -575,6 +578,35 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
             Task::none()
         }
     }
+}
+
+/// The tasks planned in block `id` that its delete "including planned tasks"
+/// takes along. A planned task's own chip is hidden only while its block is
+/// in view, so they leave the view with the block; otherwise they would show
+/// loose until the refresh after the write drops them.
+fn planned_tasks_deleted_with(state: &State, id: &str) -> Vec<String> {
+    if !state.calendar.pending_delete_with_tasks
+        || state.calendar.pending_delete.as_deref() != Some(id)
+    {
+        return Vec::new();
+    }
+    let days = state.calendar.loaded_days();
+    let loaded = || days.iter().flat_map(|day| state.calendar.events_on(*day));
+    let Some(block) = state
+        .calendar
+        .event(id)
+        .or_else(|| loaded().find(|event| event.id == id))
+    else {
+        return Vec::new();
+    };
+    let hour = crate::timeblocking::day_start_hour(state);
+    let mut ids: Vec<String> = loaded()
+        .filter(|task| crate::timeblocking::in_block(task, block, hour))
+        .map(|task| task.id.clone())
+        .collect();
+    ids.sort();
+    ids.dedup();
+    ids
 }
 
 /// Shows the user's answer on the event, and on its form if that is open.
