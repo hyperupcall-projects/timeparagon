@@ -623,6 +623,7 @@ erDiagram
     LifeArea ||--o{ Objective : objectives
     Goal |o--o{ Objective : "objective.goal"
     Objective }o--o{ Habit : "objective.habits"
+    Objective }o--o{ Project : "objective.projects"
     LifeArea |o--o{ Project : "project.area"
     LifeArea |o--o{ Habit : "habit.area"
     Project }o--o{ Task : "metadata.projects"
@@ -637,10 +638,18 @@ erDiagram
   ],
   "areas": [
     {"id": 1, "name": "Personal", "color": null, "vision": "Markdown…",
-     "goals": [{"id": 1, "name": "Run a marathon", "description": ""}],
+     "goals": [{"id": 1, "name": "Run a marathon", "description": "",
+                "why": "Prove I can stick with something hard", "status": "active"}],
      "objectives": [{"id": 1, "name": "Run 30 km/week", "description": "",
-                     "goal": 1, "habits": ["h1"]}]}
-  ]
+                     "goal": 1, "habits": ["h1"], "projects": [7],
+                     "status": "active", "focus": true,
+                     "start": "2026-11-01", "due": "2026-12-31",
+                     "measure": "number", "baseline": 10, "target": 30, "unit": "km",
+                     "check_ins": [{"date": "2026-11-12", "value": 22, "note": ""}],
+                     "milestones": [{"id": 1, "name": "First 20 km week", "done": true}]}],
+     "ratings": [{"date": "2026-11-09", "score": 7}]}
+  ],
+  "reviews": [{"date": "2026-11-09", "reflection": "Markdown…", "done": true}]
 }
 ```
 
@@ -654,9 +663,25 @@ erDiagram
 | `LifeArea` | `id` | Area `1` is **Personal**. It always exists and cannot be removed, but it can be renamed |
 | | `vision` | Markdown |
 | | `goals`, `objectives` | Owned by the area |
-| `Goal` | `id`, `name`, `description` | Something you aspire to, which can be reached in more than one way |
-| `Objective` | `goal` | A goal of the **same** area. Unset or missing means unassigned |
+| | `ratings` | Satisfaction from 1 to 10, one per week (`date` is the week's first day), oldest first |
+| `Goal` | `id`, `name`, `description` | Something you aspire to, which can be reached in more than one way. It has no measure or deadline of its own: its progress is that of its objectives |
+| | `why` | Why it matters |
+| | `status` | `active` (default), `paused`, `done`, `dropped` |
+| `Objective` | | How a goal will be reached: specific, measurable and time-bound, like a SMART goal or key result |
+| | `goal` | A goal of the **same** area. Unset or missing means unassigned |
 | | `habits` | IDs of the habits that carry it out |
+| | `projects` | IDs of the projects that carry it out |
+| | `status` | As for goals. Only `active` objectives can be in focus |
+| | `focus` | Pinned to this week's focus |
+| | `start`, `due` | `YYYY-MM-DD`. Pace compares progress with the share of this span gone by; more than 10 points behind is *Behind*, past `due` is *Overdue* |
+| | `measure` | `none` (default; done or not), `number` (latest check-in between `baseline` and `target`, either direction), `milestones` (share done), `habits` (mean habit strength) |
+| | `baseline`, `target`, `unit`, `check_ins` | For `number`. One check-in per day |
+| | `milestones` | For `milestones`, in order |
+| `Review` | `date`, `reflection`, `done` | A weekly review, by the week's first day |
+
+Goal and objective IDs are unique across **all** areas, so either can be found
+by ID alone. Data from before that rule is repaired on first use: a duplicate
+in a later area gets a new ID, and its area's objectives follow their goal.
 
 ---
 

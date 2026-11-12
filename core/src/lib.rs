@@ -20,6 +20,7 @@ pub mod habit_edit;
 pub mod habits;
 pub mod hex;
 mod legacy_name;
+pub mod life;
 pub mod local_changes;
 pub mod notes;
 pub mod people;

@@ -2594,7 +2594,9 @@ fn life_area_opens_in_a_separate_panel_and_escape_closes_it() {
 	let main_size = state.main_size;
 	let actions = geometry_actions(update(
 		&mut state,
-		Message::Life(Action::Open(config::PERSONAL_AREA)),
+		Message::Life(Action::Open(crate::life::Selection::Area(
+			config::PERSONAL_AREA,
+		))),
 	));
 	assert!(
 		matches!(actions.as_slice(), [GeometryAction::Open(settings)]
@@ -2606,15 +2608,22 @@ fn life_area_opens_in_a_separate_panel_and_escape_closes_it() {
 	let size = Size::new(560.0, 900.0);
 	{
 		let mut list = Simulator::with_size(Settings::default(), size, ui::view(&state));
-		assert!(list.find("Personal").is_ok());
-		assert!(list.find("Implementation").is_err());
+		assert!(list.find("This week's focus").is_ok());
+		assert!(list.find("Vision").is_err());
+		list.click("Areas").unwrap();
+		assert!(list.into_messages().any(|message| matches!(
+			message,
+			Message::Life(Action::ShowPage(crate::life::Page::Areas))
+		)));
 		let mut panel = Simulator::with_size(Settings::default(), size, ui::editor_window(&state));
 		assert!(panel.find("Vision").is_ok());
-		panel.click("Implementation").unwrap();
-		assert!(panel.into_messages().any(|message| matches!(
-			message,
-			Message::Life(Action::ShowTab(crate::life::Tab::Implementation))
-		)));
+		assert!(panel.find("Personal").is_ok());
+		panel.click("Add goal").unwrap();
+		assert!(
+			panel
+				.into_messages()
+				.any(|message| matches!(message, Message::Life(Action::AddGoal)))
+		);
 	}
 	let escape = key_message(
 		&mut state,
@@ -2635,7 +2644,9 @@ fn closing_the_life_side_window_dismisses_the_area() {
 	state.main_window = Some(window::Id::unique());
 	let _ = update(
 		&mut state,
-		Message::Life(crate::life::Action::Open(config::PERSONAL_AREA)),
+		Message::Life(crate::life::Action::Open(crate::life::Selection::Area(
+			config::PERSONAL_AREA,
+		))),
 	);
 	let editor = state.editor_window.unwrap();
 	let _ = update(
@@ -2690,4 +2701,96 @@ fn an_opened_occurrence_shows_its_series_repeat_rule_unless_it_was_already_chang
 			assert_eq!(draft.series_id.as_deref(), Some("series"));
 		}
 	}
+}
+
+#[test]
+fn every_life_page_and_panel_renders_with_goals_objectives_and_reviews() {
+	use crate::life::{Action, Page, Selection};
+	use iced::Settings;
+	use iced_test::Simulator;
+
+	let mut state = State::blank();
+	state.screen = Screen::Life;
+	state.main_window = Some(window::Id::unique());
+	let life = |state: &mut State, action| {
+		let _ = update(state, Message::Life(action));
+	};
+	life(&mut state, Action::NewName("Health".into()));
+	life(&mut state, Action::Add);
+	let health = state.config.projects.areas[1].id;
+	life(&mut state, Action::NewGoal("Run a marathon".into()));
+	life(&mut state, Action::AddGoal);
+	let goal = state.config.projects.areas[1].goals[0].id;
+	life(&mut state, Action::Open(Selection::Goal(goal)));
+	for name in ["Run 30 km a week", "Finish a half", "Stretch daily"] {
+		life(&mut state, Action::NewObjective(name.into()));
+		life(&mut state, Action::AddObjective);
+	}
+	let ids: Vec<u64> = state.config.projects.areas[1]
+		.objectives
+		.iter()
+		.map(|o| o.id)
+		.collect();
+	life(&mut state, Action::Measure(ids[0], config::Measure::Number));
+	life(&mut state, Action::Open(Selection::Objective(ids[0])));
+	life(&mut state, Action::Baseline("0".into()));
+	life(&mut state, Action::Target("30".into()));
+	life(&mut state, Action::CheckInValue("12".into()));
+	life(&mut state, Action::CheckIn);
+	life(&mut state, Action::Focus(ids[0], true));
+	life(
+		&mut state,
+		Action::DueBy(ids[0], crate::life::Horizon::Month),
+	);
+	life(
+		&mut state,
+		Action::Measure(ids[1], config::Measure::Milestones),
+	);
+	life(&mut state, Action::Open(Selection::Objective(ids[1])));
+	life(&mut state, Action::NewMilestone("10k".into()));
+	life(&mut state, Action::AddMilestone);
+	life(&mut state, Action::Due(ids[1], "2020-01-01".into()));
+	life(&mut state, Action::Measure(ids[2], config::Measure::Habits));
+	life(&mut state, Action::Rate(health, 6));
+	let size = Size::new(560.0, 900.0);
+	for page in Page::ALL {
+		life(&mut state, Action::ShowPage(page));
+		let mut view = Simulator::with_size(Settings::default(), size, ui::view(&state));
+		assert!(view.find(page.label()).is_ok(), "{page:?}");
+	}
+	{
+		let mut view = Simulator::with_size(Settings::default(), size, ui::view(&state));
+		assert!(view.find("1. How is each area going?").is_ok());
+	}
+	life(&mut state, Action::ShowPage(Page::Focus));
+	{
+		let mut view = Simulator::with_size(Settings::default(), size, ui::view(&state));
+		assert!(view.find("Run 30 km a week").is_ok());
+		assert!(
+			view.find("Needs attention").is_ok(),
+			"the overdue objective"
+		);
+	}
+
+	let project = state.config.projects.items[0].id;
+	life(&mut state, Action::LinkProject(ids[0], project));
+	for selection in [
+		Selection::Area(health),
+		Selection::Goal(goal),
+		Selection::Objective(ids[0]),
+		Selection::Objective(ids[1]),
+		Selection::Objective(ids[2]),
+		Selection::Project(project),
+	] {
+		life(&mut state, Action::Open(selection));
+		let _ = Simulator::with_size(Settings::default(), size, ui::editor_window(&state));
+	}
+	let mut panel = Simulator::with_size(Settings::default(), size, ui::editor_window(&state));
+	assert!(panel.find("Objectives it serves").is_ok());
+	panel.click("‹ Back").unwrap();
+	assert!(
+		panel
+			.into_messages()
+			.any(|message| matches!(message, Message::Life(Action::Back)))
+	);
 }

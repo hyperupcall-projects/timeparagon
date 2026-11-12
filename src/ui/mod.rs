@@ -65,7 +65,10 @@ pub fn editor_window(state: &State) -> Element<'_, Message> {
 		}
 		if state.life_panel_open() {
 			let metrics = Metrics::of(size);
-			return container(life::panel(state, &metrics))
+			// Date pickers opened from the panel belong to this window.
+			let mut layers = vec![life::panel(state, &metrics)];
+			push_editor_dialogs(&mut layers, state, &metrics);
+			return container(iced::widget::stack(layers))
 				.width(Fill)
 				.height(Fill)
 				.style(controls::surface)

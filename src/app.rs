@@ -1019,14 +1019,14 @@ impl State {
 			&& (self.habits.selected.is_some() || self.habits.form.is_some())
 	}
 
-	/// A life area is open beside the Life list.
+	/// A life area, goal, objective or project is open beside the Life tab.
 	pub fn life_panel_open(&self) -> bool {
 		self.screen == Screen::Life
 			&& self
 				.life
 				.open
 				.as_ref()
-				.is_some_and(|open| self.config.projects.area(open.area).is_some())
+				.is_some_and(|open| open.selection.exists(&self.config.projects))
 	}
 
 	/// The map picker is shown in the floating window at the right of the

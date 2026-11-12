@@ -13,10 +13,12 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
 use crate::calendar::colors;
 use crate::hex::HexColor;
+pub use crate::life::{CheckIn, Measure, Milestone, Pace, Rating, Review, Status};
 use iced_core::Color;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -220,9 +222,24 @@ pub struct LifeArea {
 	pub goals: Vec<Goal>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub objectives: Vec<Objective>,
+	/// How satisfied one has been with this area, week by week, oldest first.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub ratings: Vec<Rating>,
 }
 
 impl LifeArea {
+	pub fn new(id: u64, name: String) -> Self {
+		Self {
+			id,
+			name,
+			color: None,
+			vision: String::new(),
+			goals: Vec::new(),
+			objectives: Vec::new(),
+			ratings: Vec::new(),
+		}
+	}
+
 	pub fn color(&self) -> Option<Color> {
 		self.color.map(Color::from)
 	}
@@ -241,19 +258,104 @@ impl LifeArea {
 			.iter()
 			.any(|objective| objective.habits.iter().any(|h| h == habit))
 	}
+
+	pub fn goal(&self, id: u64) -> Option<&Goal> {
+		self.goals.iter().find(|goal| goal.id == id)
+	}
+
+	pub fn objective(&self, id: u64) -> Option<&Objective> {
+		self.objectives.iter().find(|objective| objective.id == id)
+	}
+
+	/// The objectives listed under `goal`, or with none.
+	pub fn objectives_of(&self, goal: Option<u64>) -> impl Iterator<Item = &Objective> {
+		self.objectives
+			.iter()
+			.filter(move |objective| self.objective_goal(objective) == goal)
+	}
+
+	/// The latest satisfaction rating.
+	pub fn satisfaction(&self) -> Option<&Rating> {
+		self.ratings.last()
+	}
+
+	/// The rating given for the week starting `week`.
+	pub fn rating_for(&self, week: NaiveDate) -> Option<u8> {
+		self.ratings
+			.iter()
+			.find(|rating| rating.date == week)
+			.map(|rating| rating.score)
+	}
+
+	/// Rates the week starting `week`, replacing any rating already given for it.
+	pub fn rate(&mut self, week: NaiveDate, score: u8) {
+		let score = score.clamp(1, 10);
+		crate::life::upsert_by_date(
+			&mut self.ratings,
+			week,
+			Rating { date: week, score },
+			|rating| rating.date,
+		);
+	}
+
+	/// How far a goal has come: the mean progress of its objectives that are
+	/// measured and not dropped. A goal marked done is all the way there.
+	pub fn goal_progress(
+		&self,
+		goal: &Goal,
+		habit_score: &dyn Fn(&str) -> Option<f64>,
+	) -> Option<f64> {
+		if goal.status == Status::Done {
+			return Some(1.0);
+		}
+		crate::life::mean(
+			self.objectives_of(Some(goal.id))
+				.filter(|objective| objective.status != Status::Dropped)
+				.filter_map(|objective| objective.progress(habit_score)),
+		)
+	}
+
+	/// The mean progress of every measured objective that is not dropped.
+	pub fn progress(&self, habit_score: &dyn Fn(&str) -> Option<f64>) -> Option<f64> {
+		crate::life::mean(
+			self.objectives
+				.iter()
+				.filter(|objective| objective.status != Status::Dropped)
+				.filter_map(|objective| objective.progress(habit_score)),
+		)
+	}
 }
 
-/// One goal of a life area.
+/// One goal of a life area: something aspired to, which can be reached in
+/// more than one way. How it will be reached is up to its objectives.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Goal {
 	pub id: u64,
 	pub name: String,
 	#[serde(default, skip_serializing_if = "String::is_empty")]
 	pub description: String,
+	/// Why it matters, to come back to when motivation runs low.
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub why: String,
+	#[serde(default, skip_serializing_if = "Status::is_default")]
+	pub status: Status,
+}
+
+impl Goal {
+	pub fn new(id: u64, name: String) -> Self {
+		Self {
+			id,
+			name,
+			description: String::new(),
+			why: String::new(),
+			status: Status::Active,
+		}
+	}
 }
 
 /// Something concrete that a life area works towards, usually in service of
-/// one of its goals, and carried out by habits.
+/// one of its goals: specific, measurable and bound to a time frame, like a
+/// SMART goal or a key result. Carried out by habits and projects.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Objective {
 	pub id: u64,
@@ -267,17 +369,130 @@ pub struct Objective {
 	/// Habits that carry it out, by habit id.
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub habits: Vec<String>,
+	/// Projects that carry it out, by project id.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub projects: Vec<u64>,
+	#[serde(default, skip_serializing_if = "Status::is_default")]
+	pub status: Status,
+	/// Pinned to the Focus page: what this week is about.
+	#[serde(default, skip_serializing_if = "std::ops::Not::not")]
+	pub focus: bool,
+	/// When work on it began, which pace is measured from.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub start: Option<NaiveDate>,
+	/// When it should be reached by.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub due: Option<NaiveDate>,
+	#[serde(default, skip_serializing_if = "Measure::is_default")]
+	pub measure: Measure,
+	/// For [`Measure::Number`]: where it started.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub baseline: Option<f64>,
+	/// For [`Measure::Number`]: where it should end up.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub target: Option<f64>,
+	/// For [`Measure::Number`]: what is counted, such as `kg` or `km/week`.
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub unit: String,
+	/// For [`Measure::Number`]: the values recorded, oldest first.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub check_ins: Vec<CheckIn>,
+	/// For [`Measure::Milestones`], in order.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub milestones: Vec<Milestone>,
+}
+
+impl Objective {
+	pub fn new(id: u64, name: String, goal: Option<u64>) -> Self {
+		Self {
+			id,
+			name,
+			description: String::new(),
+			goal,
+			habits: Vec::new(),
+			projects: Vec::new(),
+			status: Status::Active,
+			focus: false,
+			start: None,
+			due: None,
+			measure: Measure::None,
+			baseline: None,
+			target: None,
+			unit: String::new(),
+			check_ins: Vec::new(),
+			milestones: Vec::new(),
+		}
+	}
+
+	/// The latest value of a [`Measure::Number`] objective: the last
+	/// check-in, or where it started.
+	pub fn current(&self) -> Option<f64> {
+		self.check_ins
+			.last()
+			.map(|check_in| check_in.value)
+			.or(self.baseline)
+	}
+
+	/// How far along it is, from 0 to 1, when that can be told. A done
+	/// objective is all the way there whatever its measure says.
+	pub fn progress(&self, habit_score: &dyn Fn(&str) -> Option<f64>) -> Option<f64> {
+		if self.status == Status::Done {
+			return Some(1.0);
+		}
+		match self.measure {
+			Measure::None => None,
+			Measure::Number => {
+				crate::life::number_progress(self.baseline?, self.target?, self.current()?)
+			}
+			Measure::Milestones => {
+				let done = self.milestones.iter().filter(|m| m.done).count();
+				(!self.milestones.is_empty()).then(|| done as f64 / self.milestones.len() as f64)
+			}
+			Measure::Habits => {
+				crate::life::mean(self.habits.iter().filter_map(|habit| habit_score(habit)))
+			}
+		}
+	}
+
+	pub fn pace(&self, today: NaiveDate, habit_score: &dyn Fn(&str) -> Option<f64>) -> Pace {
+		crate::life::pace(
+			self.status,
+			self.start,
+			self.due,
+			self.progress(habit_score),
+			today,
+		)
+	}
+
+	/// Records `value` for `date`, replacing what was recorded that day.
+	pub fn check_in(&mut self, date: NaiveDate, value: f64, note: String) {
+		crate::life::upsert_by_date(
+			&mut self.check_ins,
+			date,
+			CheckIn { date, value, note },
+			|check_in| check_in.date,
+		);
+	}
+
+	/// The last day anything was recorded for it.
+	pub fn last_check_in(&self) -> Option<NaiveDate> {
+		self.check_ins.last().map(|check_in| check_in.date)
+	}
+
+	/// Adds a milestone at the end and returns its id.
+	pub fn add_milestone(&mut self, name: String) -> u64 {
+		let id = unique_id(self.milestones.iter().map(|m| m.id));
+		self.milestones.push(Milestone {
+			id,
+			name,
+			done: false,
+		});
+		id
+	}
 }
 
 fn personal_area() -> LifeArea {
-	LifeArea {
-		id: PERSONAL_AREA,
-		name: "Personal".to_owned(),
-		color: None,
-		vision: String::new(),
-		goals: Vec::new(),
-		objectives: Vec::new(),
-	}
+	LifeArea::new(PERSONAL_AREA, "Personal".to_owned())
 }
 
 fn default_areas() -> Vec<LifeArea> {
@@ -293,6 +508,9 @@ pub struct ProjectsSettings {
 	/// In the order they are listed.
 	#[serde(default = "default_areas")]
 	pub areas: Vec<LifeArea>,
+	/// Weekly reviews, oldest first.
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	pub reviews: Vec<Review>,
 }
 
 impl Default for ProjectsSettings {
@@ -319,6 +537,7 @@ impl Default for ProjectsSettings {
 		let mut settings = Self {
 			items,
 			areas: default_areas(),
+			reviews: Vec::new(),
 		};
 		settings.sort();
 		settings
@@ -410,6 +629,47 @@ impl ProjectsSettings {
 		if self.area(PERSONAL_AREA).is_none() {
 			self.areas.insert(0, personal_area());
 		}
+		self.ensure_unique_life_ids();
+	}
+
+	/// Gives a new id to any goal or objective that shares its id with one in
+	/// an earlier area. Ids used to be unique only within their area, but
+	/// the Life tab finds goals and objectives by id alone. An objective
+	/// keeps pointing at its goal, since both are in the same area.
+	pub fn ensure_unique_life_ids(&mut self) -> bool {
+		let mut changed = false;
+		let mut goals = std::collections::HashSet::new();
+		let mut objectives = std::collections::HashSet::new();
+		let mut next = unique_id(self.areas.iter().flat_map(|a| {
+			a.goals
+				.iter()
+				.map(|g| g.id)
+				.chain(a.objectives.iter().map(|o| o.id))
+		}));
+		for area in &mut self.areas {
+			let mut renamed = BTreeMap::new();
+			for goal in &mut area.goals {
+				if !goals.insert(goal.id) {
+					renamed.insert(goal.id, next);
+					goal.id = next;
+					goals.insert(next);
+					next += 1;
+					changed = true;
+				}
+			}
+			for objective in &mut area.objectives {
+				if let Some(goal) = objective.goal.and_then(|g| renamed.get(&g)) {
+					objective.goal = Some(*goal);
+				}
+				if !objectives.insert(objective.id) {
+					objective.id = next;
+					objectives.insert(next);
+					next += 1;
+					changed = true;
+				}
+			}
+		}
+		changed
 	}
 
 	/// Tidies an area name and checks that no other area (`except` is the
@@ -432,14 +692,7 @@ impl ProjectsSettings {
 	/// Adds a life area at the end of the list and returns its id.
 	pub fn add_area(&mut self, name: String) -> u64 {
 		let id = unique_id(self.areas.iter().map(|area| area.id));
-		self.areas.push(LifeArea {
-			id,
-			name,
-			color: None,
-			vision: String::new(),
-			goals: Vec::new(),
-			objectives: Vec::new(),
-		});
+		self.areas.push(LifeArea::new(id, name));
 		id
 	}
 
@@ -451,29 +704,110 @@ impl ProjectsSettings {
 		}
 	}
 
+	/// Moves an area one place up or down the list.
+	pub fn shift_area(&mut self, id: u64, up: bool) {
+		let Some(index) = self.areas.iter().position(|area| area.id == id) else {
+			return;
+		};
+		let other = if up {
+			index.checked_sub(1)
+		} else {
+			Some(index + 1).filter(|i| *i < self.areas.len())
+		};
+		if let Some(other) = other {
+			self.areas.swap(index, other);
+		}
+	}
+
+	/// The area holding the goal with this id, with the goal.
+	pub fn find_goal(&self, id: u64) -> Option<(&LifeArea, &Goal)> {
+		self.areas
+			.iter()
+			.find_map(|area| area.goal(id).map(|goal| (area, goal)))
+	}
+
+	/// The area holding the objective with this id, with the objective.
+	pub fn find_objective(&self, id: u64) -> Option<(&LifeArea, &Objective)> {
+		self.areas
+			.iter()
+			.find_map(|area| area.objective(id).map(|objective| (area, objective)))
+	}
+
+	pub fn goal_mut(&mut self, id: u64) -> Option<&mut Goal> {
+		self.areas
+			.iter_mut()
+			.find_map(|area| area.goals.iter_mut().find(|goal| goal.id == id))
+	}
+
+	pub fn objective_mut(&mut self, id: u64) -> Option<&mut Objective> {
+		self.areas.iter_mut().find_map(|area| {
+			area.objectives
+				.iter_mut()
+				.find(|objective| objective.id == id)
+		})
+	}
+
+	/// Every objective, with the area it is in.
+	pub fn all_objectives(&self) -> impl Iterator<Item = (&LifeArea, &Objective)> {
+		self.areas
+			.iter()
+			.flat_map(|area| area.objectives.iter().map(move |o| (area, o)))
+	}
+
+	/// The objectives a project carries out.
+	pub fn objectives_of_project(
+		&self,
+		project: u64,
+	) -> impl Iterator<Item = (&LifeArea, &Objective)> {
+		self.all_objectives()
+			.filter(move |(_, objective)| objective.projects.contains(&project))
+	}
+
+	pub fn review(&self, week: NaiveDate) -> Option<&Review> {
+		self.reviews.iter().find(|review| review.date == week)
+	}
+
+	/// The review of the week starting `week`, made if there is none yet.
+	pub fn review_mut(&mut self, week: NaiveDate) -> &mut Review {
+		let index = match self
+			.reviews
+			.binary_search_by_key(&week, |review| review.date)
+		{
+			Ok(index) => index,
+			Err(index) => {
+				self.reviews.insert(
+					index,
+					Review {
+						date: week,
+						reflection: String::new(),
+						done: false,
+					},
+				);
+				index
+			}
+		};
+		&mut self.reviews[index]
+	}
+
 	/// Adds a goal to an area and returns its id.
 	pub fn add_goal(&mut self, area: u64, name: String) -> Option<u64> {
+		// Unique across every area, so a goal can be found by id alone.
+		let id = unique_id(self.areas.iter().flat_map(|a| a.goals.iter().map(|g| g.id)));
 		let area = self.area_mut(area)?;
-		let id = unique_id(area.goals.iter().map(|goal| goal.id));
-		area.goals.push(Goal {
-			id,
-			name,
-			description: String::new(),
-		});
+		area.goals.push(Goal::new(id, name));
 		Some(id)
 	}
 
 	/// Adds an objective to an area, under `goal` if given, and returns its id.
 	pub fn add_objective(&mut self, area: u64, goal: Option<u64>, name: String) -> Option<u64> {
+		// Unique across every area, so an objective can be found by id alone.
+		let id = unique_id(
+			self.areas
+				.iter()
+				.flat_map(|a| a.objectives.iter().map(|o| o.id)),
+		);
 		let area = self.area_mut(area)?;
-		let id = unique_id(area.objectives.iter().map(|objective| objective.id));
-		area.objectives.push(Objective {
-			id,
-			name,
-			description: String::new(),
-			goal,
-			habits: Vec::new(),
-		});
+		area.objectives.push(Objective::new(id, name, goal));
 		Some(id)
 	}
 

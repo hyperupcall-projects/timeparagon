@@ -92,14 +92,20 @@ Of course, there's also week, 2-week, and month views:
 	- For habits that can be done anytime during the week, "float" them in the day/week view (TODO)
 	- Show habits configurable amount of days before they are due so they can be scheduled before they are due (TODO)
 - **Track and direct your life:**
-	- Organize goals, objectives, and projects under a life area.
+	- Organize goals, objectives, and projects under a life area, each with a Markdown vision.
 	- **Set goals:**
 		- Aspirational or high-level goals, not bound to a particular way of achieving them.
+		- Record why each one matters, and mark it achieved, paused or dropped.
 	- **Set objectives:**
 		- Connected to a goal, specifying specifically how it will be achieved, usually like SMART goals, or OKRs.
-		- Tasks, certain amount of time per project. (TODO)
-		- Day, week, month, quarter, year. (TODO)
-	- Connect habits to objectives.
+		- Give them a start and due date, or pick "by end of week/month/quarter/year".
+		- Measure them by a number with check-ins (e.g. 90 kg → 80 kg), by milestones, or by the strength of their habits.
+		- See whether each is on track, behind or overdue.
+	- Connect habits and projects to objectives.
+	- **Focus:** pin this week's objectives, and see what needs attention and what is due soon.
+	- **Timeline:** objectives by when they are due.
+	- **Weekly review:** rate your satisfaction with each life area, check in on objectives, choose next week's focus, and reflect.
+	- **Balance:** see satisfaction across life areas over time.
 	- **Manage projects:** (TODO)
 		- Groups related events, tasks, notes, autolaunchers, objectives, and goals.
 		- View as list, kanban, or calendar (TODO).

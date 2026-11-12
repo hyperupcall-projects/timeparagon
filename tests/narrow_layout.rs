@@ -654,7 +654,7 @@ fn plan_day_has_task_tabs_and_more_opens_a_menu() -> Result<(), Error> {
 }
 
 #[test]
-fn life_lists_its_areas_and_opens_one_in_a_side_panel() -> Result<(), Error> {
+fn life_shows_its_pages_and_opens_an_area_in_a_side_panel() -> Result<(), Error> {
 	let mut state = state();
 	let mut ui = render(&state, Size::new(200.0, 500.0));
 	ui.click(tab_label(200.0, 2))?;
@@ -672,47 +672,47 @@ fn life_lists_its_areas_and_opens_one_in_a_side_panel() -> Result<(), Error> {
 
 	let mut ui = render(&state, Size::new(200.0, 500.0));
 	assert!(ui.find("Life").is_ok());
-	assert!(ui.find("Personal").is_ok());
-	// The projects themselves are no longer listed on the page.
-	assert!(ui.find("School/Calculus").is_err());
-	assert!(ui.find("Add").is_ok());
+	for page in ["Focus", "Areas", "Goals", "Timeline", "Review"] {
+		assert!(ui.find(page).is_ok(), "{page:?} is missing from the pages");
+	}
 	assert!(ui.find("Actions").is_err());
 	assert!(ui.find(tab_label(200.0, 0)).is_ok());
 	drop(ui);
 
 	let _ = app::update(
 		&mut state,
-		Message::Life(timeparagon::life::Action::Open(
-			timeparagon::config::PERSONAL_AREA,
+		Message::Life(timeparagon::life::Action::ShowPage(
+			timeparagon::life::Page::Areas,
 		)),
 	);
 	let mut ui = render(&state, Size::new(200.0, 700.0));
-	for label in ["Vision", "Implementation", "Goals", "Add goal", "Close"] {
-		assert!(
-			ui.find(label).is_ok(),
-			"{label:?} is missing from the panel"
-		);
-	}
+	assert!(ui.find("Personal").is_ok());
+	// The projects themselves are not listed on the page.
+	assert!(ui.find("School/Calculus").is_err());
+	assert!(ui.find("Add area").is_ok());
 	drop(ui);
 
 	let _ = app::update(
 		&mut state,
-		Message::Life(timeparagon::life::Action::ShowTab(
-			timeparagon::life::Tab::Implementation,
+		Message::Life(timeparagon::life::Action::Open(
+			timeparagon::life::Selection::Area(timeparagon::config::PERSONAL_AREA),
 		)),
 	);
-	let mut ui = render(&state, Size::new(200.0, 1400.0));
+	let mut ui = render(&state, Size::new(200.0, 2400.0));
 	for label in [
+		"Vision",
 		"Goals",
-		"Unassigned objectives",
-		"Unassigned habits",
+		"Add goal",
+		"Objectives without a goal",
 		"Projects",
 		"Work",
 		"Add project",
+		"Other habits",
+		"Close",
 	] {
 		assert!(
 			ui.find(label).is_ok(),
-			"{label:?} is missing from Implementation"
+			"{label:?} is missing from the panel"
 		);
 	}
 	Ok(())

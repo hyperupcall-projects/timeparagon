@@ -18,8 +18,9 @@ use crate::audio::Tone;
 use crate::hex::HexColor;
 
 pub use timeparagon_core::config::{
-	CalendarSettings, DatabaseSyncSettings, Goal, LifeArea, Objective, PERSONAL_AREA, Project,
-	ProjectsSettings, TriageRequirements, WeekRange, config_path, project_dirs,
+	CalendarSettings, DatabaseSyncSettings, Goal, LifeArea, Measure, Objective, PERSONAL_AREA,
+	Pace, Project, ProjectsSettings, Status, TriageRequirements, WeekRange, config_path,
+	project_dirs,
 };
 pub use timeparagon_core::places::{DistanceUnit, Place, RouteMode, SavedRoute, TravelMode};
 
