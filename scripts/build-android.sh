@@ -34,7 +34,6 @@
 #   For --release (keep the keystore outside the repository):
 #   TIMEPARAGON_KEYSTORE_BASE64       Base64-encoded .jks/.keystore file
 #   TIMEPARAGON_KEYSTORE_PASSWORD     Keystore (and key) password
-#   TIMEPARAGON_KEYSTORE_KEYALIAS     Key alias
 #   Passwords must not contain the characters " ' ` $ \ & < > =
 
 set -eu
@@ -258,11 +257,11 @@ trap 'exit 143' TERM
 if [ "$profile" = release ]; then
     keystore_base64=${TIMEPARAGON_KEYSTORE_BASE64:-}
     keystore_password=${TIMEPARAGON_KEYSTORE_PASSWORD:-}
-    key_alias=${TIMEPARAGON_KEYSTORE_KEYALIAS:-}
+    key_alias=timeparagon
     key_password=$keystore_password
 
-    [ -n "$keystore_base64" ] && [ -n "$keystore_password" ] && [ -n "$key_alias" ] || fail \
-        "--release needs TIMEPARAGON_KEYSTORE_BASE64, TIMEPARAGON_KEYSTORE_PASSWORD and TIMEPARAGON_KEYSTORE_KEYALIAS (see --help)"
+    [ -n "$keystore_base64" ] && [ -n "$keystore_password" ] || fail \
+        "--release needs TIMEPARAGON_KEYSTORE_BASE64 and TIMEPARAGON_KEYSTORE_PASSWORD (see --help)"
     keystore_tmp=$(mktemp)
     chmod 600 "$keystore_tmp"
     printf '%s' "$keystore_base64" | base64 -d >"$keystore_tmp" 2>/dev/null && [ -s "$keystore_tmp" ] || \

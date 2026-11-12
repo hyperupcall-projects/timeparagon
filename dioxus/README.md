@@ -114,7 +114,6 @@ Useful options:
 # Release profile, signed with your own keystore (see below)
 TIMEPARAGON_KEYSTORE_BASE64=$(base64 -w0 ~/keys/timeparagon.jks) \
 TIMEPARAGON_KEYSTORE_PASSWORD=... \
-TIMEPARAGON_KEYSTORE_KEYALIAS=timeparagon \
 ./scripts/build-android.sh --release
 
 # Build, install and launch on a connected device
@@ -127,8 +126,9 @@ version in the root `Cargo.toml`, and its `versionCode` is
 
 The default (debug) APK is debuggable and debug-signed: use it for development
 only. `--release` builds Gradle's release variant, signs it with the keystore
-given by `TIMEPARAGON_KEYSTORE_BASE64` (base64-encoded), `TIMEPARAGON_KEYSTORE_PASSWORD`
-and `TIMEPARAGON_KEYSTORE_KEYALIAS` (the key uses the keystore password), and fails
+given by `TIMEPARAGON_KEYSTORE_BASE64` (base64-encoded) and
+`TIMEPARAGON_KEYSTORE_PASSWORD` with the fixed `timeparagon` key alias (the key
+uses the keystore password), and fails
 unless the result is non-debuggable and not signed with the Android debug key.
 Create a keystore once with `keytool -genkeypair -v -keystore
 ~/keys/timeparagon.jks -alias timeparagon -keyalg RSA -keysize 4096 -validity
