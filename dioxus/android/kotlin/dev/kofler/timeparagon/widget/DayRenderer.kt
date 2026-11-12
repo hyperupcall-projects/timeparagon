@@ -1,4 +1,4 @@
-package dev.timeslay.day.widget
+package dev.kofler.timeparagon.widget
 
 import android.content.Context
 import android.content.res.Configuration
@@ -47,7 +47,7 @@ class WidgetColors(
         /** `Theme::load` in dioxus/src/day.rs: a JSON string in the local database. */
         private fun savedTheme(context: Context): String = try {
             SQLiteDatabase.openDatabase(
-                File(context.filesDir, "data/timeslay/timeslay.sqlite3").path,
+                File(context.filesDir, "data/timeparagon/timeparagon.sqlite3").path,
                 null,
                 SQLiteDatabase.OPEN_READONLY,
             ).use { database ->

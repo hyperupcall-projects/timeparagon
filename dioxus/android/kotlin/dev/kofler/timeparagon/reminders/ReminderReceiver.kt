@@ -1,4 +1,4 @@
-package dev.timeslay.day.reminders
+package dev.kofler.timeparagon.reminders
 
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -31,7 +31,7 @@ class ReminderReceiver : BroadcastReceiver() {
                     Intent.ACTION_TIMEZONE_CHANGED -> Reminders.sync(context)
                 }
             } catch (error: Exception) {
-                Log.e("TimeSlayReminders", "Could not handle ${intent.action}", error)
+                Log.e("TimeParagonReminders", "Could not handle ${intent.action}", error)
             } finally {
                 pending.finish()
             }

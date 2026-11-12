@@ -33,7 +33,7 @@ const MISSED_GRACE_MINUTES: i64 = 5;
 /// otherwise, so it never announces itself as a finished timer.
 const DEFAULT_SUMMARY: &str = "Alarm";
 
-pub use timeslay_core::alarms::Alarm;
+pub use timeparagon_core::alarms::Alarm;
 
 /// The popup that edits one alarm.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,7 +112,7 @@ impl Alarms {
 
 	/// Adds an alarm and returns its id.
 	pub fn add(&mut self, at: DateTime<Local>, profile: AlarmProfile) -> u64 {
-		let id = timeslay_core::alarms::new_id();
+		let id = timeparagon_core::alarms::new_id();
 
 		self.items.push(Alarm {
 			id,
@@ -672,7 +672,7 @@ mod tests {
 	#[test]
 	fn alarms_survive_a_restart() {
 		let path = std::env::temp_dir().join(format!(
-			"timeslay-alarms-{}-{}.sqlite3",
+			"timeparagon-alarms-{}-{}.sqlite3",
 			std::process::id(),
 			line!()
 		));
@@ -695,7 +695,7 @@ mod tests {
 	#[test]
 	fn an_alarm_long_overdue_at_startup_is_dropped() {
 		let path = std::env::temp_dir().join(format!(
-			"timeslay-alarms-{}-{}.sqlite3",
+			"timeparagon-alarms-{}-{}.sqlite3",
 			std::process::id(),
 			line!()
 		));

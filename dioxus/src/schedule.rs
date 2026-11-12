@@ -1,11 +1,11 @@
 //! Phone calendar: a date picker above day grids, a month, or a schedule list.
 use chrono::{Datelike, Duration, Months, NaiveDate};
 use dioxus::prelude::*;
-use timeslay_core::calendar::first_day::FirstDayOfWeek;
-use timeslay_core::calendar::search::Search;
-use timeslay_core::calendar::time_format::{self, TimeFormat};
-use timeslay_core::calendar::{self, Event, Snapshot};
-use timeslay_core::config::{CalendarSettings, Config};
+use timeparagon_core::calendar::first_day::FirstDayOfWeek;
+use timeparagon_core::calendar::search::Search;
+use timeparagon_core::calendar::time_format::{self, TimeFormat};
+use timeparagon_core::calendar::{self, Event, Snapshot};
+use timeparagon_core::config::{CalendarSettings, Config};
 
 use crate::{HOUR_HEIGHT, day, editor::worker, plan::PlanView};
 
@@ -375,13 +375,13 @@ mod tests {
 				assert!(html.contains("3 days"));
 				assert!(html.contains("Expand to month"));
 			}
-			if let Ok(directory) = std::env::var("TIMESLAY_PLANNER_PREVIEW_DIR") {
+			if let Ok(directory) = std::env::var("TIMEPARAGON_PLANNER_PREVIEW_DIR") {
 				let day = date(2026, 11, 8);
 				let snapshot = Snapshot {
 					calendars: vec![],
 					events: vec![],
 					day,
-					fetched_at: timeslay_core::clock::now(),
+					fetched_at: timeparagon_core::clock::now(),
 					notice: None,
 				};
 				let settings = CalendarSettings::default();
@@ -632,8 +632,8 @@ fn schedule_list(
 									{
 										let event = row.event.clone();
 										let hidden = search.hides_details(&event);
-										let title = if hidden { timeslay_core::calendar::search::PRIVATE_TITLE.into() } else { calendar::schedule::title(&event, date) };
-										let dot = crate::css_color(if hidden { timeslay_core::calendar::search::PRIVATE_COLOR } else { row.color });
+										let title = if hidden { timeparagon_core::calendar::search::PRIVATE_TITLE.into() } else { calendar::schedule::title(&event, date) };
+										let dot = crate::css_color(if hidden { timeparagon_core::calendar::search::PRIVATE_COLOR } else { row.color });
 										let past = !event.all_day && event.end <= now;
 										let time = calendar::schedule::time_label(&event, format);
 										rsx! {

@@ -1,13 +1,13 @@
 [Desktop Entry]
 Type=Application
 Version=1.0
-Name=TimeSlay
+Name=TimeParagon
 GenericName=Calendar
-Comment=Slay the day with TimeSlay
+Comment=Master the day with TimeParagon
 Exec=@EXEC@ sidebar
-Icon=timeslay
+Icon=timeparagon
 Terminal=false
 Categories=Utility;Clock;
 Keywords=calendar;alarm;
 StartupNotify=true
-StartupWMClass=timeslay
+StartupWMClass=timeparagon

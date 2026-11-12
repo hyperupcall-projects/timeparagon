@@ -1,5 +1,5 @@
-//! The shortcut daemon (`timeslay daemon`): global shortcuts that show,
-//! hide and reshape TimeSlay **itself**.
+//! The shortcut daemon (`timeparagon daemon`): global shortcuts that show,
+//! hide and reshape TimeParagon **itself**.
 //!
 //! Two mechanisms (documented in `IMPLEMENTATION.md`):
 //!
@@ -7,9 +7,9 @@
 //! 2. a long-running daemon that owns them, so pressing one never pays for a
 //!    process to be registered first.
 //!
-//! TimeSlay has two shapes, both started from the one binary: the **panel**
-//! (`timeslay sidebar`, the full app in a wide edge strip) and the
-//! **dock** (`timeslay dock`, a very thin strip of today). The daemon
+//! TimeParagon has two shapes, both started from the one binary: the **panel**
+//! (`timeparagon sidebar`, the full app in a wide edge strip) and the
+//! **dock** (`timeparagon dock`, a very thin strip of today). The daemon
 //! draws neither. It has three actions, each of which can have several
 //! shortcuts:
 //!
@@ -49,7 +49,7 @@ use crate::ipc;
 /// How long a freshly started shape gets to announce itself.
 const START_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The two forms TimeSlay takes on screen.
+/// The two forms TimeParagon takes on screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Shape {
 	Panel,
@@ -189,7 +189,7 @@ impl Controller {
 
 /// Runs the daemon: register the shortcuts, then act on every press.
 pub fn run() -> Result<()> {
-	env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("timeslay=info"))
+	env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("timeparagon=info"))
 		.init();
 
 	let config = PanelConfig::load();

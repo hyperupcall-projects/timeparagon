@@ -1,10 +1,10 @@
 //! The Filter tab of the View sheet: narrows the calendar down to what matches. The rules, and what
-//! each filter means, are `timeslay_core::calendar::search`.
+//! each filter means, are `timeparagon_core::calendar::search`.
 
 use dioxus::prelude::*;
-use timeslay_core::calendar::projects;
-use timeslay_core::calendar::search::{Action, AvailabilityFilter, Search};
-use timeslay_core::config::ProjectsSettings;
+use timeparagon_core::calendar::projects;
+use timeparagon_core::calendar::search::{Action, AvailabilityFilter, Search};
+use timeparagon_core::config::ProjectsSettings;
 
 #[component]
 pub fn SearchFields(

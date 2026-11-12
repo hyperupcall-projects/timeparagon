@@ -1,11 +1,11 @@
-package dev.timeslay.day.widget
+package dev.kofler.timeparagon.widget
 
 import android.appwidget.AppWidgetManager
 import android.content.Context
 import android.content.Intent
 import android.widget.RemoteViews
 import android.widget.RemoteViewsService
-import dev.timeslay.day.R
+import dev.kofler.timeparagon.R
 
 /** Supplies the widget's list: all-day chips first, then one row per hour. */
 class DayWidgetService : RemoteViewsService() {

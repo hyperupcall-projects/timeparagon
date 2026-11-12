@@ -1,4 +1,4 @@
-# TimeSlay — shortcut and panel implementation notes
+# TimeParagon — shortcut and panel implementation notes
 
 How the two hard parts of the side panel and dock were built: **(1)** getting a
 global keyboard shortcut on KDE Plasma Wayland, and **(2)** putting a
@@ -8,7 +8,7 @@ finally worked.
 
 The code samples below come from the original standalone `sidepanel` prototype
 (hence names like `sidepanel` in the layer-shell namespace); the current
-implementation lives in `src/panel/` (shortcuts, daemon) and `src/dock/`. TimeSlay is
+implementation lives in `src/panel/` (shortcuts, daemon) and `src/dock/`. TimeParagon is
 Wayland-only; there is deliberately no X11 path anywhere.
 
 ---

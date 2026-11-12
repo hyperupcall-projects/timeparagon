@@ -264,7 +264,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 			// does not pop back up the next time the menu is opened.
 			state.calendar.color_editor = None;
 			if state.calendar.menu_open {
-				// The old single TimeSlay toggle is replaced by per-kind
+				// The old single TimeParagon toggle is replaced by per-kind
 				// toggles. Preserve its hidden state without leaving an
 				// invisible calendar-wide switch behind the new controls.
 				let hidden_app_ids: Vec<_> = state
@@ -282,8 +282,8 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 					.cloned()
 					.collect();
 				if !hidden_app_ids.is_empty() {
-					for source in calendar::sources::TimeSlaySource::ALL {
-						if source != calendar::sources::TimeSlaySource::Sleep {
+					for source in calendar::sources::TimeParagonSource::ALL {
+						if source != calendar::sources::TimeParagonSource::Sleep {
 							state
 								.config
 								.calendar

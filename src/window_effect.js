@@ -14,7 +14,7 @@
         // Force also cancels Scale/Fade if their signal handler ran first.
         effect.grab(window, Effect.WindowAddedGrabRole, true);
         if (DURATION > 0) {
-            window.timeSlayOpeningAnimation = animate({
+            window.timeParagonOpeningAnimation = animate({
                 window: window,
                 duration: DURATION,
                 curve: QEasingCurve.Linear,
@@ -26,9 +26,9 @@
     });
     effects.windowClosed.connect(function (window) {
         if (!applies(window)) return;
-        if (window.timeSlayOpeningAnimation) {
-            cancel(window.timeSlayOpeningAnimation);
-            delete window.timeSlayOpeningAnimation;
+        if (window.timeParagonOpeningAnimation) {
+            cancel(window.timeParagonOpeningAnimation);
+            delete window.timeParagonOpeningAnimation;
         }
         // Force also cancels Scale/Fade's close animation.
         effect.grab(window, Effect.WindowClosedGrabRole, true);

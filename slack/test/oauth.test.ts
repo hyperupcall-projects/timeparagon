@@ -14,7 +14,7 @@ import { loadConfig } from "../src/config.ts";
 const entry: Installation = { teamId: "T1", ownerUserId: "U1", botToken: "bot-one", botUserId: "UB1", botId: "B1" };
 const config = { clientId: "client", clientSecret: "secret", redirectUri: "https://example.org/slack/oauth/callback", port: 3000, installationsFile: "unused" };
 function fixture(t: test.TestContext) {
-  const dir = mkdtempSync(join(tmpdir(), "timeslay-oauth-"));
+  const dir = mkdtempSync(join(tmpdir(), "timeparagon-oauth-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const path = join(dir, "installations.json");
   return { path, store: new Installations(path, "client") };

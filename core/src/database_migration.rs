@@ -86,10 +86,10 @@ pub fn backup(source: &Path, destination: &Path) -> io::Result<Snapshot> {
 		.unwrap_or(Path::new("."));
 	fs::create_dir_all(parent)?;
 	let temporary = tempfile::Builder::new()
-		.prefix(".timeslay-backup-")
+		.prefix(".timeparagon-backup-")
 		.tempdir_in(parent)?;
 	crate::fsutil::make_private(temporary.path())?;
-	let backup_path = temporary.path().join("timeslay.sqlite3");
+	let backup_path = temporary.path().join("timeparagon.sqlite3");
 	let db =
 		Connection::open_with_flags(source, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(error)?;
 	db.busy_timeout(Duration::from_secs(10)).map_err(error)?;
@@ -129,7 +129,7 @@ pub fn backup(source: &Path, destination: &Path) -> io::Result<Snapshot> {
 pub fn verify(directory: &Path) -> io::Result<Snapshot> {
 	let snapshot: Snapshot =
 		serde_json::from_slice(&fs::read(directory.join("manifest.json"))?).map_err(error)?;
-	let path = directory.join("timeslay.sqlite3");
+	let path = directory.join("timeparagon.sqlite3");
 	if format!("{:x}", Sha256::digest(fs::read(&path)?)) != snapshot.sha256 {
 		return Err(error("backup checksum mismatch"));
 	}
@@ -151,7 +151,7 @@ mod tests {
 		let destination = directory.path().join("backup");
 		backup(&source, &destination).unwrap();
 		verify(&destination).unwrap();
-		let restored = Connection::open(destination.join("timeslay.sqlite3")).unwrap();
+		let restored = Connection::open(destination.join("timeparagon.sqlite3")).unwrap();
 		assert_eq!(
 			restored
 				.query_row("SELECT value FROM future_data", [], |r| r
@@ -169,7 +169,7 @@ mod tests {
 			backup(&source, &destination).unwrap_err().kind(),
 			io::ErrorKind::AlreadyExists
 		);
-		fs::write(destination.join("timeslay.sqlite3"), b"damaged").unwrap();
+		fs::write(destination.join("timeparagon.sqlite3"), b"damaged").unwrap();
 		assert!(verify(&destination).is_err());
 	}
 	#[test]

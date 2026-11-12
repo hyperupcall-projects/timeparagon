@@ -1,4 +1,4 @@
-package dev.timeslay.day.widget
+package dev.kofler.timeparagon.widget
 
 import android.content.Context
 import android.graphics.Color

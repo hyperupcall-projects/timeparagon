@@ -25,7 +25,7 @@ use crate::app::{Message, State};
 use crate::blocking;
 use crate::calendar::oauth::{self, Tokens};
 use crate::config::CalendarSettings;
-use timeslay_core::people::api::profile_email;
+use timeparagon_core::people::api::profile_email;
 
 /// Serializes reads and rewrites of the token file. Two lookups may refresh
 /// different accounts at once; without this one would overwrite the other.
@@ -46,7 +46,7 @@ struct File {
 
 /// An account a link can be tried against. Shared with the Dioxus app, whose
 /// People sheet keeps the same cache.
-pub use timeslay_core::people::Login;
+pub use timeparagon_core::people::Login;
 
 /// Every account a Gmail link may belong to, in the order they are tried: the
 /// calendar's account first, if it is signed in, then the connected ones.

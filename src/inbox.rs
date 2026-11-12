@@ -841,7 +841,7 @@ fn create_event_with_metadata(
 	due: Option<NaiveDate>,
 	metadata: Option<tb::Metadata>,
 ) -> Result<Event, String> {
-	timeslay_core::task_edit::create_inbox_task(settings, token, title, notes, due, metadata)
+	timeparagon_core::task_edit::create_inbox_task(settings, token, title, notes, due, metadata)
 }
 
 fn created(state: &mut State, result: Result<Event, String>) -> Task<Message> {
@@ -1368,13 +1368,13 @@ mod tests {
 		overdue
 			.details
 			.task_data
-			.get_or_insert_with(|| timeslay_core::task_db::TaskData {
+			.get_or_insert_with(|| timeparagon_core::task_db::TaskData {
 				id: 100,
 				metadata: Default::default(),
 			})
 			.metadata
 			.deadline = Some(
-			timeslay_core::calendar::deadline::parse_input(&format!(
+			timeparagon_core::calendar::deadline::parse_input(&format!(
 				"{} 00:00",
 				today.pred_opt().unwrap()
 			))
@@ -1430,24 +1430,24 @@ mod tests {
 		deadline
 			.details
 			.task_data
-			.get_or_insert_with(|| timeslay_core::task_db::TaskData {
+			.get_or_insert_with(|| timeparagon_core::task_db::TaskData {
 				id: 100,
 				metadata: Default::default(),
 			})
 			.metadata
-			.deadline = Some(timeslay_core::calendar::deadline::parse_input("2026-10-30 11:59").unwrap());
+			.deadline = Some(timeparagon_core::calendar::deadline::parse_input("2026-10-30 11:59").unwrap());
 		let mut later_deadline = deadline.clone();
 		later_deadline.id = "task:later".into();
 		later_deadline.details.description = "".into();
 		later_deadline
 			.details
 			.task_data
-			.get_or_insert_with(|| timeslay_core::task_db::TaskData {
+			.get_or_insert_with(|| timeparagon_core::task_db::TaskData {
 				id: 100,
 				metadata: Default::default(),
 			})
 			.metadata
-			.deadline = Some(timeslay_core::calendar::deadline::parse_input("2026-10-30 12:01").unwrap());
+			.deadline = Some(timeparagon_core::calendar::deadline::parse_input("2026-10-30 12:01").unwrap());
 		let mut done = task("done", "inbox", today.pred_opt().unwrap());
 		done.completed = true;
 		let mut ignored = task("ignored", "inbox", today.pred_opt().unwrap());

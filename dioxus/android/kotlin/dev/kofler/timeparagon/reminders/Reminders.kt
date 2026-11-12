@@ -1,4 +1,4 @@
-package dev.timeslay.day.reminders
+package dev.kofler.timeparagon.reminders
 
 import android.app.AlarmManager
 import android.app.Notification
@@ -15,7 +15,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
-import dev.timeslay.day.R
+import dev.kofler.timeparagon.R
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -62,10 +62,10 @@ class Plan(
  * the sound changes.
  */
 object Reminders {
-    const val ACTION_SYNC = "dev.timeslay.day.reminders.SYNC"
-    const val ACTION_FIRE = "dev.timeslay.day.reminders.FIRE"
-    const val ACTION_TEST = "dev.timeslay.day.reminders.TEST"
-    const val ACTION_DEVICE_INFO = "dev.timeslay.day.reminders.DEVICE_INFO"
+    const val ACTION_SYNC = "dev.kofler.timeparagon.reminders.SYNC"
+    const val ACTION_FIRE = "dev.kofler.timeparagon.reminders.FIRE"
+    const val ACTION_TEST = "dev.kofler.timeparagon.reminders.TEST"
+    const val ACTION_DEVICE_INFO = "dev.kofler.timeparagon.reminders.DEVICE_INFO"
 
     const val EXTRA_KEY = "key"
     const val EXTRA_CATEGORY = "category"
@@ -73,13 +73,13 @@ object Reminders {
     const val EXTRA_BODY = "body"
     const val EXTRA_AT = "at"
 
-    private const val TAG = "TimeSlayReminders"
-    private const val PREFS = "timeslay-reminders"
+    private const val TAG = "TimeParagonReminders"
+    private const val PREFS = "timeparagon-reminders"
     private const val PREF_SCHEDULED = "scheduled"
     private const val PREF_POSTED = "posted"
     private const val CHANNEL_PREFIX = "reminder_"
     private const val GROUP = "reminders"
-    private const val SCHEME = "timeslay-reminder"
+    private const val SCHEME = "timeparagon-reminder"
 
     /** Matches `LATE_GRACE_MINUTES` in core: older reminders are dropped. */
     private const val LATE_GRACE_MILLIS = 5 * 60 * 1000L
@@ -150,7 +150,7 @@ object Reminders {
         ensureChannels(context, plan)
         // The widget's job keeps the calendar, and so this plan, fresh while
         // the app is closed.
-        runCatching { dev.timeslay.day.widget.WidgetRefreshService.schedule(context) }
+        runCatching { dev.kofler.timeparagon.widget.WidgetRefreshService.schedule(context) }
 
         val now = System.currentTimeMillis()
         val posted = prefs.getStringSet(PREF_POSTED, emptySet()).orEmpty()
@@ -230,7 +230,7 @@ object Reminders {
             context,
             category,
             "${category.label} reminder",
-            "This is how TimeSlay reminds you.",
+            "This is how TimeParagon reminds you.",
             System.currentTimeMillis(),
             "test-${category.id}".hashCode(),
         )
@@ -317,7 +317,7 @@ object Reminders {
             }
         }
         builder
-            .setSmallIcon(R.drawable.timeslay_reminder)
+            .setSmallIcon(R.drawable.timeparagon_reminder)
             .setContentTitle(title)
             .setContentText(body)
             .setStyle(Notification.BigTextStyle().bigText(body))

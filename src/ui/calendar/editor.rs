@@ -4,7 +4,7 @@ use super::*;
 use iced::widget::column;
 
 fn high_contrast(theme: &Theme) -> bool {
-	use timeslay_core::theme::Scheme;
+	use timeparagon_core::theme::Scheme;
 	[
 		Scheme::LightHighContrast.palette(),
 		Scheme::DarkHighContrast.palette(),
@@ -1093,7 +1093,7 @@ fn event_habit_picker<'a>(
 			.library
 			.habits
 			.iter()
-			.filter(|habit| !habit.archived && habit.kind != timeslay_core::habits::Kind::No)
+			.filter(|habit| !habit.archived && habit.kind != timeparagon_core::habits::Kind::No)
 			.map(|habit| HabitChoice {
 				id: Some(habit.id.clone()),
 				name: habit.name.clone(),

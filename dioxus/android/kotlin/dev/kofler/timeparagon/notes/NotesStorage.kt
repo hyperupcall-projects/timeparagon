@@ -1,4 +1,4 @@
-package dev.timeslay.day.notes
+package dev.kofler.timeparagon.notes
 
 import android.app.Activity
 import android.content.Context

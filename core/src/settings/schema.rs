@@ -67,7 +67,7 @@ pub(crate) const DEVICE_SETTINGS: Table = Table {
 	noun: "device setting",
 };
 
-/// What the user chose for each calendar, task list or TimeSlay source.
+/// What the user chose for each calendar, task list or TimeParagon source.
 pub(crate) const CALENDAR_SOURCES: Table = Table {
 	name: "calendar_sources",
 	key: &["id"],

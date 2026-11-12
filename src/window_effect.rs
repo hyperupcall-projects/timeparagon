@@ -15,7 +15,7 @@ use std::sync::Mutex;
 use crate::config::{ViewSettings, WindowAnimation};
 
 const SCRIPT: &str = include_str!("window_effect.js");
-const PREFIX: &str = "timeslay-opening-";
+const PREFIX: &str = "timeparagon-opening-";
 
 /// How long the transition lasts, or `None` to leave it to the desktop.
 fn duration(views: &ViewSettings) -> Option<u32> {
@@ -127,7 +127,7 @@ impl Effect {
 			"KPackageStructure": "KWin/Effect",
 			"KPlugin": {
 				"Id": effect.name,
-				"Name": "TimeSlay window transitions",
+				"Name": "TimeParagon window transitions",
 				"EnabledByDefault": false,
 				"License": "MIT"
 			},

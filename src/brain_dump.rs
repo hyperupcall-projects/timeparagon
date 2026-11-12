@@ -6,7 +6,7 @@
 use crate::app::{Message, State};
 use chrono::NaiveDate;
 
-pub use timeslay_core::brain_dump::{Dumps, Entry};
+pub use timeparagon_core::brain_dump::{Dumps, Entry};
 
 /// What the Brain dump screen and its editor are in the middle of.
 pub struct Workspace {

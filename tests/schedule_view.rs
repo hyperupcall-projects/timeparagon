@@ -1,7 +1,7 @@
 use chrono::{Duration, Local, NaiveDate, TimeZone};
 use iced::Size;
 use iced_test::{Simulator, core::Settings};
-use timeslay::{
+use timeparagon::{
 	app::{self, CalendarMessage, CalendarView, EventMessage, Message, MonthPicker, State},
 	calendar::{self, Store},
 };
@@ -39,11 +39,11 @@ fn schedule_renders_overnight_occurrences_at_both_widths_and_opens_event() {
 	for width in [390.0, 1200.0] {
 		let mut state = state();
 		let size = Size::new(width, 1000.0);
-		let metrics = timeslay::ui::layout::Metrics::of(size);
+		let metrics = timeparagon::ui::layout::Metrics::of(size);
 		let mut ui = Simulator::with_size(
 			Settings::default(),
 			size,
-			timeslay::ui::calendar::schedule_view(&state, &metrics),
+			timeparagon::ui::calendar::schedule_view(&state, &metrics),
 		);
 		assert!(ui.find("Overnight study (Day 1/2)").is_ok());
 		assert!(ui.find("Overnight study (Day 2/2)").is_ok());

@@ -1,6 +1,6 @@
 //! Regression tests for the narrow layouts.
 //!
-//! The claim that TimeSlay is usable at 200px is easy to break by accident,
+//! The claim that TimeParagon is usable at 200px is easy to break by accident,
 //! so these render the real interface headlessly at each breakpoint and check
 //! that the controls are still there and still reachable. No compositor and
 //! no golden images are involved, which is what makes them worth running on
@@ -11,12 +11,12 @@ use iced::{Element, Point, Size};
 use iced_test::core::Settings;
 use iced_test::{Error, Simulator as Sim};
 
-use timeslay::app::MonthPicker;
-use timeslay::app::{self, Message, Screen, State};
-use timeslay::app::{
+use timeparagon::app::MonthPicker;
+use timeparagon::app::{self, Message, Screen, State};
+use timeparagon::app::{
 	CalendarMessage, EventMessage, NavigationMessage, NotepadMessage, SettingsMessage, TaskMessage,
 };
-use timeslay::config::Config;
+use timeparagon::config::Config;
 
 /// The widths that matter: the enforced minimum, the width the layout was
 /// designed around, the compact/normal boundary, and the jump to two columns.
@@ -35,7 +35,7 @@ fn render(state: &State, size: Size) -> Simulator<'_> {
 	if state.floating_editors()
 		&& (state.calendar.open_event.is_some() || state.timeblocking.block.is_some())
 	{
-		at(size, timeslay::ui::editor_window(state))
+		at(size, timeparagon::ui::editor_window(state))
 	} else {
 		at(size, app::view(state, iced::window::Id::unique()))
 	}
@@ -60,7 +60,7 @@ fn set_alarm_is_clickable_at_the_minimum_width() -> Result<(), Error> {
 	assert!(
 		messages.iter().any(|message| matches!(
 			message,
-			Message::Alarms(timeslay::alarms::Action::ModeToggled)
+			Message::Alarms(timeparagon::alarms::Action::ModeToggled)
 		)),
 		"clicking Set Alarm produced {messages:?}"
 	);
@@ -116,15 +116,15 @@ fn alarm_mode_explains_itself() {
 #[test]
 fn the_alarm_popup_is_usable_at_every_width() -> Result<(), Error> {
 	// The label below is measured from the clock, which must not tick meanwhile.
-	let _clock = timeslay::clock::freeze(timeslay::clock::utc_now());
+	let _clock = timeparagon::clock::freeze(timeparagon::clock::utc_now());
 	for width in WIDTHS {
 		let mut state = state();
-		let at =
-			timeslay::alarms::minute_of(timeslay::clock::now()) + chrono::Duration::minutes(45);
+		let at = timeparagon::alarms::minute_of(timeparagon::clock::now())
+			+ chrono::Duration::minutes(45);
 		let id = state.alarms.add(at, state.config.alarm.clone());
 		let _ = app::update(
 			&mut state,
-			Message::Alarms(timeslay::alarms::Action::Open(id)),
+			Message::Alarms(timeparagon::alarms::Action::Open(id)),
 		);
 
 		let mut ui = render(&state, Size::new(width, 700.0));
@@ -151,7 +151,7 @@ fn the_alarm_popup_is_usable_at_every_width() -> Result<(), Error> {
 		assert!(
 			messages.iter().any(|message| matches!(
 				message,
-				Message::Alarms(timeslay::alarms::Action::Delete(deleted)) if *deleted == id
+				Message::Alarms(timeparagon::alarms::Action::Delete(deleted)) if *deleted == id
 			)),
 			"Delete produced {messages:?} at {width}px"
 		);
@@ -163,15 +163,16 @@ fn the_alarm_popup_is_usable_at_every_width() -> Result<(), Error> {
 /// The popup shows the alarm's own settings, not the timer's.
 #[test]
 fn the_alarm_popup_reflects_the_alarm_being_edited() {
-	let _clock = timeslay::clock::freeze(timeslay::clock::utc_now());
+	let _clock = timeparagon::clock::freeze(timeparagon::clock::utc_now());
 	let mut state = state();
-	let at = timeslay::alarms::minute_of(timeslay::clock::now()) + chrono::Duration::minutes(150);
+	let at =
+		timeparagon::alarms::minute_of(timeparagon::clock::now()) + chrono::Duration::minutes(150);
 	let mut profile = state.config.alarm.clone();
 	profile.sound.volume = 41;
 	let id = state.alarms.add(at, profile);
 	let _ = app::update(
 		&mut state,
-		Message::Alarms(timeslay::alarms::Action::Open(id)),
+		Message::Alarms(timeparagon::alarms::Action::Open(id)),
 	);
 
 	let mut ui = render(&state, Size::new(420.0, 900.0));
@@ -356,9 +357,9 @@ fn the_settings_tab_uses_the_whole_window() {
 fn the_calendar_keeps_the_day_while_it_reloads() {
 	let mut state = state();
 	state.screen = Screen::Calendar;
-	let snapshot = timeslay::calendar::sample_snapshot();
-	state.calendar = timeslay::calendar::Store::with_snapshot(snapshot);
-	state.calendar.sync = timeslay::calendar::SyncState::Syncing;
+	let snapshot = timeparagon::calendar::sample_snapshot();
+	state.calendar = timeparagon::calendar::Store::with_snapshot(snapshot);
+	state.calendar.sync = timeparagon::calendar::SyncState::Syncing;
 
 	for width in WIDTHS {
 		let mut ui = render(&state, Size::new(width, 720.0));
@@ -381,17 +382,23 @@ fn the_overlay_renders_with_and_without_an_active_flash() {
 	let mut state = state();
 
 	{
-		let mut ui = at(Size::new(800.0, 600.0), timeslay::ui::flash::view(&state));
+		let mut ui = at(
+			Size::new(800.0, 600.0),
+			timeparagon::ui::flash::view(&state),
+		);
 		let _: Result<_, _> = ui.find("nothing");
 	}
 
 	state.flash = Some(app::Flash {
 		window: iced::window::Id::unique(),
 		started: std::time::Instant::now(),
-		settings: timeslay::config::Flash::default(),
+		settings: timeparagon::config::Flash::default(),
 	});
 
-	let mut ui = at(Size::new(800.0, 600.0), timeslay::ui::flash::view(&state));
+	let mut ui = at(
+		Size::new(800.0, 600.0),
+		timeparagon::ui::flash::view(&state),
+	);
 	let _: Result<_, _> = ui.find("nothing");
 }
 
@@ -403,7 +410,7 @@ fn the_calendar_view_is_usable_at_two_hundred_pixels() {
 	let mut state = state();
 	state.screen = Screen::Calendar;
 	state.calendar =
-		timeslay::calendar::Store::with_snapshot(timeslay::calendar::sample_snapshot());
+		timeparagon::calendar::Store::with_snapshot(timeparagon::calendar::sample_snapshot());
 
 	let mut ui = render(&state, Size::new(200.0, 500.0));
 
@@ -419,7 +426,7 @@ fn the_calendar_offers_a_month_button_instead_of_day_arrows() -> Result<(), Erro
 	let mut state = state();
 	state.screen = Screen::Calendar;
 	state.calendar =
-		timeslay::calendar::Store::with_snapshot(timeslay::calendar::sample_snapshot());
+		timeparagon::calendar::Store::with_snapshot(timeparagon::calendar::sample_snapshot());
 
 	let mut ui = render(&state, Size::new(200.0, 500.0));
 
@@ -436,8 +443,8 @@ fn the_calendar_offers_a_month_button_instead_of_day_arrows() -> Result<(), Erro
 
 	// The month picker already shows the date, so no separate day heading takes
 	// a line above the controls.
-	let today = timeslay::calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
-	let heading = timeslay::calendar::day_heading(state.calendar.day, today);
+	let today = timeparagon::calendar::day_at(Local::now(), state.config.calendar.day_start_hour());
+	let heading = timeparagon::calendar::day_heading(state.calendar.day, today);
 	assert!(
 		ui.find(heading.as_str()).is_err(),
 		"the redundant day heading is still in the title bar"
@@ -465,7 +472,7 @@ fn the_month_picker_shows_the_month_and_picks_a_day() -> Result<(), Error> {
 	let mut state = state();
 	state.screen = Screen::Calendar;
 	state.calendar =
-		timeslay::calendar::Store::with_snapshot(timeslay::calendar::sample_snapshot());
+		timeparagon::calendar::Store::with_snapshot(timeparagon::calendar::sample_snapshot());
 	state.calendar.month_open = true;
 
 	let mut ui = render(&state, Size::new(200.0, 700.0));
@@ -501,8 +508,8 @@ fn the_panel_month_picker_fits_its_contents_beside_an_overview() -> Result<(), E
 	let mut state = state();
 	state.screen = Screen::Calendar;
 	state.calendar =
-		timeslay::calendar::Store::with_snapshot(timeslay::calendar::sample_snapshot());
-	state.view = timeslay::app::CalendarView::Week;
+		timeparagon::calendar::Store::with_snapshot(timeparagon::calendar::sample_snapshot());
+	state.view = timeparagon::app::CalendarView::Week;
 	state.calendar.month_open = true;
 
 	let mut ui = render(&state, Size::new(800.0, 700.0));
@@ -519,7 +526,7 @@ fn the_calendar_menu_lists_calendars_without_website_or_dock_buttons() {
 	let mut state = state();
 	state.screen = Screen::Calendar;
 	state.calendar =
-		timeslay::calendar::Store::with_snapshot(timeslay::calendar::sample_snapshot());
+		timeparagon::calendar::Store::with_snapshot(timeparagon::calendar::sample_snapshot());
 	state.calendar.menu_open = true;
 
 	let mut ui = render(&state, Size::new(200.0, 500.0));
@@ -540,7 +547,7 @@ fn the_calendar_menu_lists_calendars_without_website_or_dock_buttons() {
 /// The tab label at `index` (Do, Plan Day, Projects, Note, More, Settings) for a
 /// window of `width`.
 fn tab_label(width: f32, index: usize) -> &'static str {
-	timeslay::ui::tab_labels(width)[index]
+	timeparagon::ui::tab_labels(width)[index]
 }
 
 /// Navigation is one row in three groups at every width, never overflowing:
@@ -550,7 +557,7 @@ fn the_tabs_are_one_row_in_three_groups() {
 	let state = state();
 	for width in [180.0, 200.0, 260.0, 420.0, 640.0, 900.0] {
 		let mut ui = render(&state, Size::new(width, 500.0));
-		let labels = timeslay::ui::tab_labels(width);
+		let labels = timeparagon::ui::tab_labels(width);
 		let mut bounds = Vec::new();
 		for label in labels {
 			let found = ui.find(label).unwrap().bounds();
@@ -586,11 +593,11 @@ fn the_tabs_are_one_row_in_three_groups() {
 fn the_menu_keeps_its_width_when_editors_open() {
 	let mut state = state();
 	let base = state.calendar_width();
-	let labels = timeslay::ui::tab_labels(base);
+	let labels = timeparagon::ui::tab_labels(base);
 	state.calendar.open_event = Some("all-day".into());
 	for block in [false, true] {
 		state.timeblocking.block = block.then(|| "standup".into());
-		let mut ui = at(Size::new(base, 600.0), timeslay::ui::view(&state));
+		let mut ui = at(Size::new(base, 600.0), timeparagon::ui::view(&state));
 		let settings = ui.find(labels[5]).expect("Settings tab").bounds();
 		assert!(settings.x + settings.width <= base + 0.5);
 	}
@@ -612,7 +619,7 @@ fn plan_day_has_task_tabs_and_more_opens_a_menu() -> Result<(), Error> {
 
 	state.screen = Screen::Inbox;
 	let mut ui = render(&state, Size::new(420.0, 600.0));
-	for label in timeslay::ui::TASKS_LABELS {
+	for label in timeparagon::ui::TASKS_LABELS {
 		assert!(ui.find(label).is_ok(), "{label:?} is missing under Tasks");
 	}
 	drop(ui);
@@ -631,7 +638,7 @@ fn plan_day_has_task_tabs_and_more_opens_a_menu() -> Result<(), Error> {
 	);
 	assert!(state.more_menu_open);
 	let mut ui = render(&state, Size::new(420.0, 600.0));
-	for label in timeslay::ui::MORE_LABELS {
+	for label in timeparagon::ui::MORE_LABELS {
 		assert!(ui.find(label).is_ok(), "{label:?} is missing from More");
 	}
 	drop(ui);
@@ -675,8 +682,8 @@ fn life_lists_its_areas_and_opens_one_in_a_side_panel() -> Result<(), Error> {
 
 	let _ = app::update(
 		&mut state,
-		Message::Life(timeslay::life::Action::Open(
-			timeslay::config::PERSONAL_AREA,
+		Message::Life(timeparagon::life::Action::Open(
+			timeparagon::config::PERSONAL_AREA,
 		)),
 	);
 	let mut ui = render(&state, Size::new(200.0, 700.0));
@@ -690,8 +697,8 @@ fn life_lists_its_areas_and_opens_one_in_a_side_panel() -> Result<(), Error> {
 
 	let _ = app::update(
 		&mut state,
-		Message::Life(timeslay::life::Action::ShowTab(
-			timeslay::life::Tab::Implementation,
+		Message::Life(timeparagon::life::Action::ShowTab(
+			timeparagon::life::Tab::Implementation,
 		)),
 	);
 	let mut ui = render(&state, Size::new(200.0, 1400.0));
@@ -738,15 +745,18 @@ fn google_task_lists_can_be_given_individual_colors() -> Result<(), Error> {
 	let mut state = state();
 	state.screen = Screen::Calendar;
 	state.calendar =
-		timeslay::calendar::Store::with_snapshot(timeslay::calendar::sample_snapshot());
+		timeparagon::calendar::Store::with_snapshot(timeparagon::calendar::sample_snapshot());
 	state.calendar.menu_open = true;
-	state.calendar.calendars.push(timeslay::calendar::Calendar {
-		id: "tasks:errands".into(),
-		name: "Errands".into(),
-		color: timeslay::calendar::colors::TASK,
-		primary: false,
-		selected_by_google: true,
-	});
+	state
+		.calendar
+		.calendars
+		.push(timeparagon::calendar::Calendar {
+			id: "tasks:errands".into(),
+			name: "Errands".into(),
+			color: timeparagon::calendar::colors::TASK,
+			primary: false,
+			selected_by_google: true,
+		});
 	state.calendar.color_editor = Some("tasks:errands".into());
 	// The menu's height follows the window, as the app would report it.
 	state.main_size = Size::new(200.0, 700.0);
@@ -777,7 +787,7 @@ fn toggling_a_calendar_off_hides_its_events_in_the_day_view() {
 	let mut state = state();
 	state.screen = Screen::Calendar;
 	state.calendar =
-		timeslay::calendar::Store::with_snapshot(timeslay::calendar::sample_snapshot());
+		timeparagon::calendar::Store::with_snapshot(timeparagon::calendar::sample_snapshot());
 	state
 		.config
 		.calendar
@@ -796,7 +806,7 @@ fn a_task_details_card_has_no_google_tasks_link_or_status() {
 	let mut state = state();
 	state.screen = Screen::Calendar;
 	state.calendar =
-		timeslay::calendar::Store::with_snapshot(timeslay::calendar::sample_snapshot());
+		timeparagon::calendar::Store::with_snapshot(timeparagon::calendar::sample_snapshot());
 	let task = state
 		.calendar
 		.events
@@ -830,7 +840,7 @@ fn a_long_event_keeps_its_buttons_out_of_the_scroll() -> Result<(), Error> {
 	let mut state = state();
 	state.screen = Screen::Calendar;
 	state.calendar =
-		timeslay::calendar::Store::with_snapshot(timeslay::calendar::sample_snapshot());
+		timeparagon::calendar::Store::with_snapshot(timeparagon::calendar::sample_snapshot());
 
 	let standup = state
 		.calendar
@@ -878,7 +888,7 @@ fn clicking_a_top_event_asks_for_the_details_below() -> Result<(), Error> {
 	let mut state = state();
 	state.screen = Screen::Calendar;
 	state.calendar =
-		timeslay::calendar::Store::with_snapshot(timeslay::calendar::sample_snapshot());
+		timeparagon::calendar::Store::with_snapshot(timeparagon::calendar::sample_snapshot());
 
 	let mut ui = render(&state, Size::new(260.0, 600.0));
 	let _ = ui.click("Team offsite")?;
@@ -928,7 +938,7 @@ fn the_calendar_omits_task_counts_and_sync_status() -> Result<(), Error> {
 	task.end = task.start + chrono::Duration::minutes(30);
 	// A Calendar-backed time puts the task on the grid without a time-block
 	// assignment.
-	assert!(timeslay::timeblocking::in_backlog(&task));
+	assert!(timeparagon::timeblocking::in_backlog(&task));
 	state.calendar.add_event(task);
 	assert!(
 		state
@@ -952,7 +962,7 @@ fn the_calendar_omits_task_counts_and_sync_status() -> Result<(), Error> {
 			state
 				.calendar
 				.last_sync
-				.map(|at| format!("Synced {}", timeslay::calendar::clock_label(at)))
+				.map(|at| format!("Synced {}", timeparagon::calendar::clock_label(at)))
 				.unwrap_or_else(|| "Not synced yet".into())
 		)
 		.is_err()
@@ -980,17 +990,17 @@ fn clicking_another_event_switches_the_open_details() -> Result<(), Error> {
 	let mut state = state();
 	state.screen = Screen::Calendar;
 
-	let mut snapshot = timeslay::calendar::sample_snapshot();
+	let mut snapshot = timeparagon::calendar::sample_snapshot();
 	let mut second = snapshot.events[0].clone();
 	second.id = "second".into();
 	second.title = "Second thing".into();
 	snapshot.events.push(second);
 
-	state.calendar = timeslay::calendar::Store::with_snapshot(snapshot);
+	state.calendar = timeparagon::calendar::Store::with_snapshot(snapshot);
 	state.calendar.open_event = Some("all-day".into());
 	state.calendar.details_below = true;
 
-	let mut ui = at(Size::new(320.0, 700.0), timeslay::ui::view(&state));
+	let mut ui = at(Size::new(320.0, 700.0), timeparagon::ui::view(&state));
 	let _ = ui.click("Second thing")?;
 
 	let messages: Vec<Message> = ui.into_messages().collect();
@@ -1029,7 +1039,7 @@ fn the_settings_pane_includes_calendar_sync_controls() {
 fn resync_calendar_and_tasks_data_is_offered_once_signed_in() -> Result<(), Error> {
 	let mut state = state();
 	state.screen = Screen::Settings;
-	state.calendar.connection = timeslay::calendar::Connection::SignedIn;
+	state.calendar.connection = timeparagon::calendar::Connection::SignedIn;
 
 	let mut ui = render(&state, Size::new(420.0, 3200.0));
 
@@ -1073,7 +1083,7 @@ fn the_habits_item_opens_the_habits() -> Result<(), Error> {
 	state.more_menu_open = true;
 	let mut ui = render(&state, Size::new(420.0, 600.0));
 
-	for label in timeslay::ui::MORE_LABELS {
+	for label in timeparagon::ui::MORE_LABELS {
 		assert!(ui.find(label).is_ok(), "{label:?} is missing from More");
 	}
 	let _ = ui.click("Habits")?;
@@ -1196,9 +1206,9 @@ fn typing_in_the_notepad_is_kept() -> Result<(), Error> {
 }
 
 fn timeblocking_state() -> State {
-	use timeslay::timeblocking::{Metadata, UNDATED, block_key};
+	use timeparagon::timeblocking::{Metadata, UNDATED, block_key};
 	let mut state = state();
-	let mut snapshot = timeslay::calendar::sample_snapshot();
+	let mut snapshot = timeparagon::calendar::sample_snapshot();
 	snapshot.day = Local::now().date_naive();
 	state.config.calendar.app_calendar = Some("work".into());
 	// The backlog fixture uses this list as its parked list.
@@ -1250,7 +1260,7 @@ fn timeblocking_state() -> State {
 		&mut task,
 		"",
 		Metadata {
-			deadline: Some(timeslay_core::calendar::deadline::Deadline {
+			deadline: Some(timeparagon_core::calendar::deadline::Deadline {
 				date: (Local::now() - chrono::Duration::days(8)).date_naive(),
 				time: None,
 			}),
@@ -1260,14 +1270,14 @@ fn timeblocking_state() -> State {
 	task.start = Local::now() - chrono::Duration::days(8);
 	task.end = task.start + chrono::Duration::days(1);
 	snapshot.events.push(task);
-	snapshot.calendars.push(timeslay::calendar::Calendar {
+	snapshot.calendars.push(timeparagon::calendar::Calendar {
 		id: "tasks:list".into(),
 		name: "Inbox".into(),
 		color: iced::Color::from_rgb8(66, 133, 244),
 		primary: false,
 		selected_by_google: true,
 	});
-	state.calendar = timeslay::calendar::Store::with_snapshot(snapshot);
+	state.calendar = timeparagon::calendar::Store::with_snapshot(snapshot);
 	state
 }
 
@@ -1277,7 +1287,7 @@ fn planning_a_time_block_opens_a_panel_and_keeps_it_open_when_switching_blocks()
 	let mut state = timeblocking_state();
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(timeslay::timeblocking::Action::Plan("standup".into())),
+		Message::TimeBlocking(timeparagon::timeblocking::Action::Plan("standup".into())),
 	);
 	assert_eq!(state.timeblocking.block.as_deref(), Some("standup"));
 	assert!(state.floating_editors());
@@ -1315,13 +1325,13 @@ fn planning_a_time_block_opens_a_panel_and_keeps_it_open_when_switching_blocks()
 	let _ = ui.click("Add task")?;
 	assert!(ui.into_messages().any(|message| matches!(
 		message,
-		Message::TimeBlocking(timeslay::timeblocking::Action::AddTodo(id)) if id == "standup"
+		Message::TimeBlocking(timeparagon::timeblocking::Action::AddTodo(id)) if id == "standup"
 	)));
 	drop(state);
 	let mut state = timeblocking_state();
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(timeslay::timeblocking::Action::Plan("standup".into())),
+		Message::TimeBlocking(timeparagon::timeblocking::Action::Plan("standup".into())),
 	);
 	let _ = app::update(
 		&mut state,
@@ -1333,11 +1343,11 @@ fn planning_a_time_block_opens_a_panel_and_keeps_it_open_when_switching_blocks()
 
 #[test]
 fn time_block_actions_share_one_row_and_delete_requires_confirmation() -> Result<(), Error> {
-	use timeslay::timeblocking::Action;
+	use timeparagon::timeblocking::Action;
 	let mut state = timeblocking_state();
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(timeslay::timeblocking::Action::Plan("standup".into())),
+		Message::TimeBlocking(timeparagon::timeblocking::Action::Plan("standup".into())),
 	);
 
 	for width in [500.0, 660.0] {
@@ -1384,11 +1394,11 @@ fn time_block_actions_share_one_row_and_delete_requires_confirmation() -> Result
 
 #[test]
 fn event_details_sit_to_the_right_of_the_time_block_panel() -> Result<(), Error> {
-	use timeslay::timeblocking::Action;
+	use timeparagon::timeblocking::Action;
 	let mut state = timeblocking_state();
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(timeslay::timeblocking::Action::Plan("standup".into())),
+		Message::TimeBlocking(timeparagon::timeblocking::Action::Plan("standup".into())),
 	);
 	let _ = app::update(
 		&mut state,
@@ -1411,13 +1421,13 @@ fn event_details_sit_to_the_right_of_the_time_block_panel() -> Result<(), Error>
 
 #[test]
 fn planned_task_status_can_be_changed_and_undone_without_hiding_the_task() -> Result<(), Error> {
-	use timeslay::timeblocking::{self as tb, TaskStatus};
+	use timeparagon::timeblocking::{self as tb, TaskStatus};
 	let mut state = timeblocking_state();
 	let id = "task:planned";
-	let metrics = timeslay::ui::layout::Metrics::of(Size::new(400.0, 1200.0));
+	let metrics = timeparagon::ui::layout::Metrics::of(Size::new(400.0, 1200.0));
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(timeslay::timeblocking::Action::Plan("standup".into())),
+		Message::TimeBlocking(timeparagon::timeblocking::Action::Plan("standup".into())),
 	);
 	let original = state.calendar.event(id).unwrap().clone();
 	for (ignore, expected) in [
@@ -1453,7 +1463,7 @@ fn planned_task_status_can_be_changed_and_undone_without_hiding_the_task() -> Re
 		let task = state.calendar.event(id).unwrap();
 		let mut actions = at(
 			Size::new(260.0, 240.0),
-			timeslay::ui::timeblocking::task_actions(&state, task, &metrics),
+			timeparagon::ui::timeblocking::task_actions(&state, task, &metrics),
 		);
 		assert!(
 			actions
@@ -1478,7 +1488,7 @@ fn planned_task_status_can_be_changed_and_undone_without_hiding_the_task() -> Re
 		);
 		let mut ui = at(
 			metrics.size,
-			timeslay::ui::timeblocking::panel(&state, &metrics),
+			timeparagon::ui::timeblocking::panel(&state, &metrics),
 		);
 		assert!(ui.find("−").is_ok());
 		match expected {
@@ -1521,7 +1531,7 @@ fn planned_task_status_can_be_changed_and_undone_without_hiding_the_task() -> Re
 	assert_eq!(state.calendar.error.as_deref(), Some("Offline"));
 	let mut ui = at(
 		metrics.size,
-		timeslay::ui::timeblocking::panel(&state, &metrics),
+		timeparagon::ui::timeblocking::panel(&state, &metrics),
 	);
 	let _ = ui.click("−")?;
 	assert!(ui.into_messages().any(|m| matches!(m,
@@ -1533,8 +1543,8 @@ fn planned_task_status_can_be_changed_and_undone_without_hiding_the_task() -> Re
 /// saves it without closing the details.
 #[test]
 fn the_task_editor_sets_project_and_priority_and_offers_a_location() -> Result<(), Error> {
-	use timeslay::timeblocking::{Action, Priority};
-	use timeslay::travel::{Action as Travel, PickTarget};
+	use timeparagon::timeblocking::{Action, Priority};
+	use timeparagon::travel::{Action as Travel, PickTarget};
 
 	let mut state = timeblocking_state();
 	let _ = app::update(
@@ -1593,7 +1603,7 @@ fn the_task_editor_sets_project_and_priority_and_offers_a_location() -> Result<(
 		.details
 		.task_data
 		.take()
-		.unwrap_or(timeslay::task_db::TaskData {
+		.unwrap_or(timeparagon::task_db::TaskData {
 			id: 100,
 			metadata: Default::default(),
 		});
@@ -1607,7 +1617,7 @@ fn the_task_editor_sets_project_and_priority_and_offers_a_location() -> Result<(
 	assert_eq!(state.calendar.open_event.as_deref(), Some("task:backlog"));
 
 	let task = state.calendar.event("task:backlog").unwrap();
-	let metadata = timeslay::timeblocking::metadata(task);
+	let metadata = timeparagon::timeblocking::metadata(task);
 	assert_eq!(
 		(metadata.projects, metadata.priority),
 		(vec![2], Some(Priority::P2))
@@ -1618,7 +1628,7 @@ fn the_task_editor_sets_project_and_priority_and_offers_a_location() -> Result<(
 /// Labels are typed into the task editor and added to the task.
 #[test]
 fn the_task_editor_adds_custom_labels() -> Result<(), Error> {
-	use timeslay::timeblocking::Action;
+	use timeparagon::timeblocking::Action;
 
 	let mut state = timeblocking_state();
 	let _ = app::update(
@@ -1699,11 +1709,11 @@ fn task_actions_are_ordered_reachable_and_delete_requires_confirmation() -> Resu
 	}
 	let mut state = timeblocking_state();
 	let task = state.calendar.event("task:planned").unwrap();
-	let key = timeslay::timeblocking::task_key(task);
+	let key = timeparagon::timeblocking::task_key(task);
 	state.config.task_work.start(
 		key.clone(),
 		task.title.clone(),
-		timeslay::timeblocking::metadata(task).block,
+		timeparagon::timeblocking::metadata(task).block,
 		chrono::Utc::now(),
 	);
 	let _ = app::update(
@@ -1738,11 +1748,11 @@ fn task_actions_are_ordered_reachable_and_delete_requires_confirmation() -> Resu
 
 #[test]
 fn the_planned_tasks_box_opens_a_task_field_and_accepts_a_drop() -> Result<(), Error> {
-	use timeslay::timeblocking::Action;
+	use timeparagon::timeblocking::Action;
 	let mut state = timeblocking_state();
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(timeslay::timeblocking::Action::Plan("standup".into())),
+		Message::TimeBlocking(timeparagon::timeblocking::Action::Plan("standup".into())),
 	);
 	let _ = app::update(
 		&mut state,
@@ -1789,11 +1799,11 @@ fn the_planned_tasks_box_opens_a_task_field_and_accepts_a_drop() -> Result<(), E
 
 #[test]
 fn available_tasks_can_be_filtered_without_hiding_planned_tasks() -> Result<(), Error> {
-	use timeslay::timeblocking::Action;
+	use timeparagon::timeblocking::Action;
 	let mut state = timeblocking_state();
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(timeslay::timeblocking::Action::Plan("standup".into())),
+		Message::TimeBlocking(timeparagon::timeblocking::Action::Plan("standup".into())),
 	);
 	let _ = app::update(
 		&mut state,
@@ -1834,7 +1844,7 @@ fn available_tasks_can_be_filtered_without_hiding_planned_tasks() -> Result<(), 
 
 #[test]
 fn available_tasks_show_timed_tasks_with_all_tasks_or_show_planned() -> Result<(), Error> {
-	use timeslay::timeblocking::Action;
+	use timeparagon::timeblocking::Action;
 	let mut state = timeblocking_state();
 	let mut task = state.calendar.event("task:backlog").unwrap().clone();
 	task.id = "task:timed".into();
@@ -1856,7 +1866,7 @@ fn available_tasks_show_timed_tasks_with_all_tasks_or_show_planned() -> Result<(
 	task.id = "task:undated-timed".into();
 	task.title = "Undated call".into();
 	task.all_day = false;
-	task.start = timeslay::timeblocking::UNDATED
+	task.start = timeparagon::timeblocking::UNDATED
 		.and_hms_opt(10, 0, 0)
 		.unwrap()
 		.and_local_timezone(Local)
@@ -1865,7 +1875,7 @@ fn available_tasks_show_timed_tasks_with_all_tasks_or_show_planned() -> Result<(
 	state.calendar.add_event(task);
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(timeslay::timeblocking::Action::Plan("standup".into())),
+		Message::TimeBlocking(timeparagon::timeblocking::Action::Plan("standup".into())),
 	);
 	let _ = app::update(
 		&mut state,
@@ -1874,8 +1884,8 @@ fn available_tasks_show_timed_tasks_with_all_tasks_or_show_planned() -> Result<(
 
 	// Render just the panel so a task on the calendar cannot mask list filtering.
 	let size = Size::new(400.0, 1500.0);
-	let metrics = timeslay::ui::layout::Metrics::of(size);
-	let mut ui = at(size, timeslay::ui::timeblocking::panel(&state, &metrics));
+	let metrics = timeparagon::ui::layout::Metrics::of(size);
+	let mut ui = at(size, timeparagon::ui::timeblocking::panel(&state, &metrics));
 	// "All tasks" means every open task, planned ones included.
 	assert!(ui.find("Research outline").is_ok());
 	assert!(ui.find("Scheduled call").is_ok());
@@ -1897,7 +1907,7 @@ fn available_tasks_show_timed_tasks_with_all_tasks_or_show_planned() -> Result<(
 		&mut state,
 		Message::TimeBlocking(Action::AvailablePlanned(true)),
 	);
-	let mut ui = at(size, timeslay::ui::timeblocking::panel(&state, &metrics));
+	let mut ui = at(size, timeparagon::ui::timeblocking::panel(&state, &metrics));
 	assert!(ui.find("Scheduled call").is_ok());
 	assert!(ui.find("Undated call").is_ok());
 	assert!(ui.find("Research outline").is_ok());
@@ -1911,7 +1921,7 @@ fn available_tasks_show_timed_tasks_with_all_tasks_or_show_planned() -> Result<(
 		&mut state,
 		Message::TimeBlocking(Action::AvailableQuery("CALL".into())),
 	);
-	let mut ui = at(size, timeslay::ui::timeblocking::panel(&state, &metrics));
+	let mut ui = at(size, timeparagon::ui::timeblocking::panel(&state, &metrics));
 	assert!(ui.find("Scheduled call").is_ok());
 	assert!(ui.find("Undated call").is_err());
 	assert!(ui.find("Research outline").is_err());
@@ -1921,7 +1931,7 @@ fn available_tasks_show_timed_tasks_with_all_tasks_or_show_planned() -> Result<(
 		&mut state,
 		Message::TimeBlocking(Action::AvailablePlanned(false)),
 	);
-	let mut ui = at(size, timeslay::ui::timeblocking::panel(&state, &metrics));
+	let mut ui = at(size, timeparagon::ui::timeblocking::panel(&state, &metrics));
 	assert!(ui.find("Scheduled call").is_err());
 	assert!(ui.find("No matching tasks").is_ok());
 	drop(ui);
@@ -1933,7 +1943,7 @@ fn available_tasks_show_timed_tasks_with_all_tasks_or_show_planned() -> Result<(
 	let _ = app::update(&mut state, Message::TimeBlocking(Action::Close));
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(timeslay::timeblocking::Action::Plan("standup".into())),
+		Message::TimeBlocking(timeparagon::timeblocking::Action::Plan("standup".into())),
 	);
 	assert!(!state.timeblocking.available_planned);
 	assert!(!state.timeblocking.available_all);
@@ -1942,7 +1952,7 @@ fn available_tasks_show_timed_tasks_with_all_tasks_or_show_planned() -> Result<(
 
 #[test]
 fn available_tasks_default_to_today_and_can_show_all_dates() -> Result<(), Error> {
-	use timeslay::timeblocking::Action;
+	use timeparagon::timeblocking::Action;
 	let mut state = timeblocking_state();
 	let today = Local::now().date_naive();
 	let mut later = state.calendar.event("task:backlog").unwrap().clone();
@@ -1965,12 +1975,12 @@ fn available_tasks_default_to_today_and_can_show_all_dates() -> Result<(), Error
 	task.end = task.start + chrono::Duration::days(1);
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(timeslay::timeblocking::Action::Plan("standup".into())),
+		Message::TimeBlocking(timeparagon::timeblocking::Action::Plan("standup".into())),
 	);
 
 	let size = Size::new(400.0, 1000.0);
-	let metrics = timeslay::ui::layout::Metrics::of(size);
-	let mut ui = at(size, timeslay::ui::timeblocking::panel(&state, &metrics));
+	let metrics = timeparagon::ui::layout::Metrics::of(size);
+	let mut ui = at(size, timeparagon::ui::timeblocking::panel(&state, &metrics));
 	assert!(!state.timeblocking.available_all);
 	assert!(ui.find("Research outline").is_ok());
 	assert!(ui.find("Plan Friday").is_err());
@@ -1991,7 +2001,7 @@ fn available_tasks_default_to_today_and_can_show_all_dates() -> Result<(), Error
 		&mut state,
 		Message::TimeBlocking(Action::AvailableAll(true)),
 	);
-	let mut ui = at(size, timeslay::ui::timeblocking::panel(&state, &metrics));
+	let mut ui = at(size, timeparagon::ui::timeblocking::panel(&state, &metrics));
 	assert!(ui.find("Research outline").is_ok());
 	assert!(ui.find("Plan Friday").is_ok());
 	assert!(ui.find("Send invoice").is_ok());
@@ -2002,7 +2012,7 @@ fn available_tasks_default_to_today_and_can_show_all_dates() -> Result<(), Error
 		&mut state,
 		Message::TimeBlocking(Action::AvailableAll(false)),
 	);
-	let mut ui = at(size, timeslay::ui::timeblocking::panel(&state, &metrics));
+	let mut ui = at(size, timeparagon::ui::timeblocking::panel(&state, &metrics));
 	assert!(ui.find("Research outline").is_ok());
 	assert!(ui.find("Plan Friday").is_err());
 	assert!(ui.find("Send invoice").is_err());
@@ -2043,11 +2053,11 @@ fn backlog_shows_unscheduled_tasks_with_independent_deadline_and_time_editors() 
 	drop(ui);
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(timeslay::timeblocking::Action::EditTitle),
+		Message::TimeBlocking(timeparagon::timeblocking::Action::EditTitle),
 	);
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(timeslay::timeblocking::Action::Title(
+		Message::TimeBlocking(timeparagon::timeblocking::Action::Title(
 			"Revised outline".into(),
 		)),
 	);
@@ -2055,23 +2065,26 @@ fn backlog_shows_unscheduled_tasks_with_independent_deadline_and_time_editors() 
 	ui.click(iced::widget::Id::new("task-title"))?;
 	ui.tap_key(iced::keyboard::key::Named::Enter);
 	assert!(ui.into_messages().any(|message| matches!(message,
-		Message::TimeBlocking(timeslay::timeblocking::Action::SaveTitle(id)) if id == "task:backlog"
+		Message::TimeBlocking(timeparagon::timeblocking::Action::SaveTitle(id)) if id == "task:backlog"
 	)));
 	Ok(())
 }
 
 #[test]
 fn backlog_shows_only_the_parked_list_and_filters_by_search() -> Result<(), Error> {
-	use timeslay::timeblocking::{Action, Metadata};
+	use timeparagon::timeblocking::{Action, Metadata};
 	let mut state = timeblocking_state();
 	state.screen = Screen::Backlog;
-	state.calendar.calendars.push(timeslay::calendar::Calendar {
-		id: "tasks:errands".into(),
-		name: "Errands".into(),
-		color: iced::Color::from_rgb8(52, 168, 83),
-		primary: false,
-		selected_by_google: true,
-	});
+	state
+		.calendar
+		.calendars
+		.push(timeparagon::calendar::Calendar {
+			id: "tasks:errands".into(),
+			name: "Errands".into(),
+			color: iced::Color::from_rgb8(52, 168, 83),
+			primary: false,
+			selected_by_google: true,
+		});
 	let mut errand = state.calendar.event("task:backlog").unwrap().clone();
 	errand.id = "task:errand".into();
 	errand.calendar_id = "tasks:errands".into();
@@ -2183,7 +2196,7 @@ fn overdue_tasks_can_be_hidden_without_hiding_backlog_or_events() {
 	);
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(timeslay::timeblocking::Action::HideOverdue(true)),
+		Message::TimeBlocking(timeparagon::timeblocking::Action::HideOverdue(true)),
 	);
 	assert!(
 		!state
@@ -2215,7 +2228,7 @@ fn the_calendar_has_a_backlog_control_and_no_todos_menu() -> Result<(), Error> {
 	assert!(ui.into_messages().any(|m| matches!(
 		m,
 		Message::Navigation(NavigationMessage::PlanTabSelected(
-			timeslay::app::PlanTab::Backlog
+			timeparagon::app::PlanTab::Backlog
 		))
 	)));
 	Ok(())
@@ -2223,13 +2236,13 @@ fn the_calendar_has_a_backlog_control_and_no_todos_menu() -> Result<(), Error> {
 
 #[test]
 fn task_drag_handles_start_a_drag_and_task_rows_accept_a_drop() -> Result<(), Error> {
-	use timeslay::timeblocking::Action;
+	use timeparagon::timeblocking::Action;
 	let state = timeblocking_state();
 	let task = state.calendar.event("task:backlog").unwrap();
-	let metrics = timeslay::ui::layout::Metrics::of(Size::new(400.0, 70.0));
+	let metrics = timeparagon::ui::layout::Metrics::of(Size::new(400.0, 70.0));
 	let mut ui = at(
 		Size::new(400.0, 70.0),
-		timeslay::ui::timeblocking::task_row(&state, task, &metrics, false),
+		timeparagon::ui::timeblocking::task_row(&state, task, &metrics, false),
 	);
 	let origin = ui.find("⠿")?.bounds().center();
 	ui.point_at(origin);
@@ -2265,7 +2278,7 @@ fn invalid_rescheduling_keeps_the_task_and_reports_the_date_problem() {
 	let before = state.calendar.event("task:backlog").unwrap().clone();
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(timeslay::timeblocking::Action::Reschedule(
+		Message::TimeBlocking(timeparagon::timeblocking::Action::Reschedule(
 			"task:backlog".into(),
 		)),
 	);
@@ -2289,7 +2302,7 @@ fn a_sync_started_before_a_task_edit_cannot_replace_the_edited_tasks() {
 		&mut state,
 		Message::Calendar(CalendarMessage::CalendarSyncedAt(
 			1,
-			Ok(timeslay::calendar::sample_snapshot()),
+			Ok(timeparagon::calendar::sample_snapshot()),
 		)),
 	);
 	assert!(state.calendar.event("task:planned").is_some());
@@ -2297,7 +2310,7 @@ fn a_sync_started_before_a_task_edit_cannot_replace_the_edited_tasks() {
 }
 
 fn focus_state() -> State {
-	use timeslay::timeblocking::{self as tb, Action};
+	use timeparagon::timeblocking::{self as tb, Action};
 	let mut state = timeblocking_state();
 	let now = chrono::Utc::now();
 	let block = state.calendar.event_mut("standup").unwrap();
@@ -2360,7 +2373,7 @@ fn focused_view_uses_a_modal_without_opening_or_expanding_the_sidebar() {
 	drop(ui);
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(timeslay::timeblocking::Action::CloseView),
+		Message::TimeBlocking(timeparagon::timeblocking::Action::CloseView),
 	);
 	assert!(state.timeblocking.focus.is_none());
 	assert!(
@@ -2371,7 +2384,7 @@ fn focused_view_uses_a_modal_without_opening_or_expanding_the_sidebar() {
 
 #[test]
 fn work_sessions_stop_on_completion_and_remain_visible_and_saved() {
-	use timeslay::timeblocking::{self as tb, Action};
+	use timeparagon::timeblocking::{self as tb, Action};
 	let mut state = focus_state();
 	let key = tb::task_key(state.calendar.event("task:planned").unwrap());
 	let _ = app::update(
@@ -2410,7 +2423,7 @@ fn work_sessions_stop_on_completion_and_remain_visible_and_saved() {
 
 #[test]
 fn start_and_stop_are_local_and_do_not_change_google_task_status() {
-	use timeslay::timeblocking::{self as tb, Action};
+	use timeparagon::timeblocking::{self as tb, Action};
 	let mut state = focus_state();
 	let second = state.calendar.event("task:second").unwrap();
 	let key = tb::task_key(second);
@@ -2452,7 +2465,7 @@ fn the_focus_overlay_blocks_controls_in_the_underlying_calendar() -> Result<(), 
 
 #[test]
 fn focused_timer_controls_remain_reachable_at_narrow_widths() -> Result<(), Error> {
-	use timeslay::timeblocking::Action;
+	use timeparagon::timeblocking::Action;
 	for width in [200.0, 320.0, 900.0] {
 		let state = focus_state();
 		let mut ui = render(&state, Size::new(width, 720.0));
@@ -2471,7 +2484,7 @@ fn focused_timer_controls_remain_reachable_at_narrow_widths() -> Result<(), Erro
 /// to be on screen at once with no scrolling, however many tasks there are.
 #[test]
 fn focused_timeline_fits_the_window_without_scrolling() {
-	use timeslay::timeblocking as tb;
+	use timeparagon::timeblocking as tb;
 	for (width, height) in [
 		(480.0, 900.0),
 		(480.0, 600.0),
@@ -2531,7 +2544,7 @@ fn title_bounds(ui: &mut Simulator<'_>, title: &str) -> Vec<iced::Rectangle> {
 
 #[test]
 fn the_pomodoro_starts_and_stops_the_current_task() {
-	use timeslay::timeblocking::{self as tb, Action};
+	use timeparagon::timeblocking::{self as tb, Action};
 	let mut state = focus_state();
 	let planned = tb::task_key(state.calendar.event("task:planned").unwrap());
 	let second = tb::task_key(state.calendar.event("task:second").unwrap());
@@ -2619,7 +2632,7 @@ fn a_task_opened_from_the_focus_view_sits_beside_it_and_closes_first() {
 #[test]
 fn google_sync_keeps_completed_block_tasks_and_stops_their_running_session() {
 	let mut state = focus_state();
-	let mut snapshot = timeslay::calendar::sample_snapshot();
+	let mut snapshot = timeparagon::calendar::sample_snapshot();
 	snapshot.day = state.calendar.day;
 	snapshot.events = state.calendar.events.clone();
 	snapshot
@@ -2635,7 +2648,7 @@ fn google_sync_keeps_completed_block_tasks_and_stops_their_running_session() {
 	assert!(state.config.task_work.active().is_none());
 	let block = state.calendar.event("standup").unwrap();
 	assert!(
-		timeslay::timeblocking::assigned_all(&state, block)
+		timeparagon::timeblocking::assigned_all(&state, block)
 			.iter()
 			.any(|e| e.id == "task:planned" && e.completed)
 	);
@@ -2659,7 +2672,7 @@ fn notes_navigation_and_toolbar_fit_every_width() -> Result<(), Error> {
 		assert!(ui.into_messages().any(|m| matches!(
 			m,
 			Message::Navigation(NavigationMessage::PlanTabSelected(
-				timeslay::app::PlanTab::Backlog
+				timeparagon::app::PlanTab::Backlog
 			))
 		)));
 		state.screen = Screen::Notes;
@@ -2690,9 +2703,9 @@ fn switching_to_notes_closes_time_block_views() {
 }
 
 fn set_task_metadata(
-	event: &mut timeslay::calendar::Event,
+	event: &mut timeparagon::calendar::Event,
 	prose: &str,
-	metadata: timeslay::timeblocking::Metadata,
+	metadata: timeparagon::timeblocking::Metadata,
 ) {
 	let id = match event.id.as_str() {
 		"task:planned" => 100,
@@ -2704,7 +2717,7 @@ fn set_task_metadata(
 		other => panic!("Unknown fixture task: {other}"),
 	};
 	event.details.description = prose.into();
-	event.details.task_data = Some(timeslay::task_db::TaskData { id, metadata });
+	event.details.task_data = Some(timeparagon::task_db::TaskData { id, metadata });
 }
 
 #[test]
@@ -2715,7 +2728,7 @@ fn deadline_and_time_editors_stay_inside_narrow_backlog_windows() -> Result<(), 
 		let task = state.calendar.event_mut("task:backlog").unwrap();
 		task.details.description = "Notes".into();
 		task.details.task_data.as_mut().unwrap().metadata.deadline =
-			Some(timeslay_core::calendar::deadline::parse_input("2026-12-31").unwrap());
+			Some(timeparagon_core::calendar::deadline::parse_input("2026-12-31").unwrap());
 		let _ = app::update(
 			&mut state,
 			Message::Event(EventMessage::EventOpened("task:backlog".into())),
@@ -2740,7 +2753,7 @@ fn deadline_and_time_editors_stay_inside_narrow_backlog_windows() -> Result<(), 
 
 #[test]
 fn backlog_sections_are_ordered_and_accept_drops_on_headers_and_tasks() -> Result<(), Error> {
-	use timeslay::timeblocking::{Action, BacklogSection, Metadata};
+	use timeparagon::timeblocking::{Action, BacklogSection, Metadata};
 	let mut state = timeblocking_state();
 	state.screen = Screen::Backlog;
 	let mut other = state.calendar.event("task:backlog").unwrap().clone();
@@ -2808,7 +2821,7 @@ fn backlog_sections_are_ordered_and_accept_drops_on_headers_and_tasks() -> Resul
 
 #[test]
 fn dropping_in_the_current_backlog_section_is_a_noop() {
-	use timeslay::timeblocking::{Action, BacklogSection};
+	use timeparagon::timeblocking::{Action, BacklogSection};
 	let mut state = timeblocking_state();
 	state.screen = Screen::Backlog;
 	state.timeblocking.dragging = Some("task:backlog".into());
@@ -2824,8 +2837,8 @@ fn dropping_in_the_current_backlog_section_is_a_noop() {
 
 #[test]
 fn a_distraction_is_recorded_from_the_focus_view_at_every_width() -> Result<(), Error> {
-	use timeslay::task_work::DISTRACTION_MINUTES;
-	use timeslay::timeblocking::Action;
+	use timeparagon::task_work::DISTRACTION_MINUTES;
+	use timeparagon::timeblocking::Action;
 	for width in [200.0, 320.0, 480.0, 900.0] {
 		let size = Size::new(width, 900.0);
 		let mut state = focus_state();

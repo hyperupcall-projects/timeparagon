@@ -67,7 +67,7 @@ pub const TASK: Color = Color {
 	a: 1.0,
 };
 
-/// The default color of a time-block event on the app's TimeSlay calendar.
+/// The default color of a time-block event on the app's TimeParagon calendar.
 /// Banana, so blocks read apart from the blue of a scheduled task before the
 /// user picks colors of their own.
 pub const TIME_BLOCK: Color = Color {
@@ -87,7 +87,7 @@ pub fn event_id(color: Color) -> Option<&'static str> {
 		.map(|(id, _)| *id)
 }
 
-/// The default color of a habit event on the app's TimeSlay calendar. Grape,
+/// The default color of a habit event on the app's TimeParagon calendar. Grape,
 /// so recurring habits read apart from banana time blocks and blue tasks.
 pub const HABIT: Color = Color {
 	r: 0xDB as f32 / 255.0,

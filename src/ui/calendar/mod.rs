@@ -80,7 +80,7 @@ fn grid_scrollbar() -> scrollable::Scrollbar {
 		.spacing(GRID_SCROLLBAR_SPACING)
 }
 
-use timeslay_core::theme::{
+use timeparagon_core::theme::{
 	BLOCK_PADDING, BLOCK_PADDING_RIGHT, BLOCK_TOP, EVENT_GAP, EVENT_RADIUS, NEEDLE_RADIUS,
 };
 

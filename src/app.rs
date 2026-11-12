@@ -137,7 +137,7 @@ pub enum Screen {
 	Life,
 	/// The places events happen at, and the trips between them.
 	Travel,
-	/// Recurring events on the TimeSlay calendar: habits and their rules.
+	/// Recurring events on the TimeParagon calendar: habits and their rules.
 	Habits,
 	/// The notepad: a page of free text kept between sessions.
 	Notepad,
@@ -571,8 +571,8 @@ pub enum SettingsMessage {
 	TaskColorPicked(String, Option<iced::Color>),
 	/// Give a regular calendar a local color override, or reset to Google's color.
 	CalendarColorPicked(String, Option<iced::Color>),
-	/// Color one of the TimeSlay calendar's event kinds; `None` resets it.
-	TimeSlayColorPicked(String, Option<iced::Color>),
+	/// Color one of the TimeParagon calendar's event kinds; `None` resets it.
+	TimeParagonColorPicked(String, Option<iced::Color>),
 	GoogleClientIdChanged(String),
 	GoogleClientSecretChanged(String),
 	GoogleConnectRequested,
@@ -1069,7 +1069,7 @@ impl State {
 	pub fn current_activities(&self) -> Vec<crate::activity::Current> {
 		use crate::activity::{Current, Kind};
 		let mut current = Vec::new();
-		let sending = timeslay_core::calendar::operations::sending();
+		let sending = timeparagon_core::calendar::operations::sending();
 		if sending > 0 {
 			current.push(Current {
 				kind: Kind::SavingToCloud,
@@ -1083,7 +1083,7 @@ impl State {
 			});
 		}
 		if self.database_unsent > 0 {
-			let label = if timeslay_core::database_sync::waiting() {
+			let label = if timeparagon_core::database_sync::waiting() {
 				format!("Waiting for database sync ({})", self.database_unsent)
 			} else {
 				format!("Syncing database ({})", self.database_unsent)
@@ -1327,7 +1327,7 @@ fn boot_state() -> State {
 	state.calendar.apply_task_colors(&state.config.calendar);
 	let database = crate::task_db::path();
 	state.calendar.cache_days_in(database.clone());
-	state.notes.go_live(timeslay_core::notes::directory());
+	state.notes.go_live(timeparagon_core::notes::directory());
 	state.people.go_live(database.clone());
 	state.travel.cache_in(database.clone());
 
@@ -1337,13 +1337,13 @@ fn boot_state() -> State {
 	state
 }
 
-/// The desktop-file basename, `timeslay.desktop`.
+/// The desktop-file basename, `timeparagon.desktop`.
 ///
 /// On Wayland the title-bar icon is not the pixmap passed to `set_window_icon`
 /// (winit ignores that). KWin looks up this id, finds the desktop entry, and
-/// paints `Icon=timeslay`. An empty id leaves the generic Wayland logo, the
+/// paints `Icon=timeparagon`. An empty id leaves the generic Wayland logo, the
 /// yellow W, in the corner while the dock still shows the hourglass.
-const APPLICATION_ID: &str = "timeslay";
+const APPLICATION_ID: &str = "timeparagon";
 
 fn window_platform() -> window::settings::PlatformSpecific {
 	window::settings::PlatformSpecific {
@@ -1624,23 +1624,23 @@ pub fn active_theme(state: &State, window: window::Id) -> Option<Theme> {
 
 pub fn title(state: &State, window: window::Id) -> String {
 	if state.task_creation_window {
-		return "New task — TimeSlay".into();
+		return "New task — TimeParagon".into();
 	}
 	if state
 		.flash
 		.as_ref()
 		.is_some_and(|flash| flash.window == window)
 	{
-		return "TimeSlay".to_owned();
+		return "TimeParagon".to_owned();
 	}
 
 	// The panel carries a stable, distinctive title so a window rule can pick
 	// it out from the main window; see the packaging README.
 	if state.sidebar.is_some() {
-		return "TimeSlay Sidebar".to_owned();
+		return "TimeParagon Sidebar".to_owned();
 	}
 
-	"TimeSlay".to_owned()
+	"TimeParagon".to_owned()
 }
 
 pub fn subscription(state: &State) -> Subscription<Message> {
@@ -1750,7 +1750,7 @@ pub fn subscription(state: &State) -> Subscription<Message> {
 	}
 
 	// Alarms are checked once a second, and only while there is one waiting,
-	// so an idle TimeSlay with nothing set still costs nothing.
+	// so an idle TimeParagon with nothing set still costs nothing.
 	if alarms::needs_poll(&state.alarms) {
 		subscriptions.push(
 			iced::time::every(Duration::from_secs(1))
@@ -2420,7 +2420,7 @@ fn reconcile_completed_task(state: &mut State) -> Task<Message> {
 	}
 }
 
-/// Remembers the id of the app-owned TimeSlay calendar from a fresh calendar
+/// Remembers the id of the app-owned TimeParagon calendar from a fresh calendar
 /// list, so time blocks and scheduled tasks are recognized even after the id
 /// changes (a re-created calendar, or a different account). Returns whether the
 /// id changed and needs saving.

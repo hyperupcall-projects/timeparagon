@@ -1,6 +1,6 @@
 # Documentation
 
-There's currently two implementations of TimeSlay:
+There's currently two implementations of TimeParagon:
 
 - An [Iced](https://iced.rs) desktop application.
 - A [Dioxus](https://dioxuslabs.com) mobile application.
@@ -9,7 +9,7 @@ Grab a release binary from GitHub or build it yourself:
 
 ```sh
 # Iced desktop app.
-cargo run -p timeslay --release
+cargo run -p timeparagon --release
 
 # Install Iced desktop app.
 ./packaging/install.sh
@@ -18,7 +18,7 @@ cargo run -p timeslay --release
 ./scripts/build-android.sh
 
 # Dioxus desktop app.
-cargo run -p timeslay-dioxus
+cargo run -p timeparagon-dioxus
 ```
 
 It is recommended to use [Obtainium](https://github.com/ImranR98/Obtainium) to download the Android app.
@@ -73,7 +73,7 @@ To use all features, a bit of setup is required:
 
 The app is designed to minimize friction and maximize your time spent in flow state.
 
-In practice, this means that TimeSlay is a [super app](https://en.wikipedia.org/wiki/Super_app) for managing your life. The app:
+In practice, this means that TimeParagon is a [super app](https://en.wikipedia.org/wiki/Super_app) for managing your life. The app:
 - Encodes the [most popular](https://www.todoist.com/productivity-methods) [productivity methods](https://www.todoist.com/inspiration/personal-productivity-methods#biological-primetime) in its interface.
 - Minimizes context-switching between apps.
 - Helps you focus on the work and enter flow state.

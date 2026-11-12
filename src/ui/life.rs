@@ -4,7 +4,7 @@
 
 use iced::widget::{Space, button, column, container, row, text};
 use iced::{Alignment, Color, Element, Fill, Length, Padding, Theme};
-use timeslay_core::notes::Pastel;
+use timeparagon_core::notes::Pastel;
 
 use crate::app::{Message, State};
 use crate::calendar::colors;
@@ -905,7 +905,7 @@ fn habit_dot<'a>(index: u8) -> Element<'a, Message> {
 	container(Space::new().width(10.0).height(10.0))
 		.style(move |theme: &Theme| container::Style {
 			background: Some(
-				timeslay_core::habits::palette_color(index, theme.extended_palette().is_dark)
+				timeparagon_core::habits::palette_color(index, theme.extended_palette().is_dark)
 					.into(),
 			),
 			border: iced::Border {

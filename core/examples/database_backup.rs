@@ -1,6 +1,6 @@
 //! Database snapshot helper. Never launches application initialization.
 use std::path::Path;
-use timeslay_core::database_migration;
+use timeparagon_core::database_migration;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let args: Vec<_> = std::env::args().skip(1).collect();
 	let result = match args.as_slice() {

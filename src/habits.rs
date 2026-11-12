@@ -1,6 +1,6 @@
 //! Habits: goals tracked day by day, the way Loop Habit Tracker does.
 //!
-//! A habit ([`timeslay_core::habits::Habit`]) lives in a local file and needs
+//! A habit ([`timeparagon_core::habits::Habit`]) lives in a local file and needs
 //! nothing else. Separately, a habit event is an ordinary Google Calendar event
 //! tagged `ttKind=habit`, so Google expands it and every other client sees a
 //! normal recurring event. Any number of those can point at one habit through a
@@ -23,10 +23,10 @@ use crate::calendar::{self, api::HabitEvent, api::HabitListing, colors, deadline
 use crate::recurrence::Rule;
 
 pub use crate::recurrence::{EndKind, MonthlyMode, Recurrence, RepeatMode, WEEKDAYS};
-pub use timeslay_core::habit_edit::{
+pub use timeparagon_core::habit_edit::{
 	DayDialog, Form, FormAction, FrequencyKind, Log, LogRow, SectionEdit, new_id,
 };
-pub use timeslay_core::habits::{
+pub use timeparagon_core::habits::{
 	Bucket, Computed, DayEntry, Frequency, Habit, Icons, Kind, Library, LogEntry, Mark, Measure,
 	Outcome, Section, SortKey, Status, Streak,
 };
@@ -37,7 +37,7 @@ pub const KIND: &str = "habit";
 /// The week the charts group by, matching the rest of the app.
 pub const FIRST_WEEKDAY: Weekday = Weekday::Mon;
 
-/// A habit event, as the master event on the TimeSlay calendar.
+/// A habit event, as the master event on the TimeParagon calendar.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Series {
 	pub id: String,
@@ -1303,7 +1303,7 @@ fn export(state: &State, id: Option<String>) -> Task<Message> {
 	let today = state.habits.today();
 	let name = match &habits[..] {
 		[habit] if id.is_some() => format!("{} {today}.zip", habit.name.replace('/', "-")),
-		_ => format!("TimeSlay Habits {today}.zip"),
+		_ => format!("TimeParagon Habits {today}.zip"),
 	};
 	blocking::run(move || {
 		let Some(file) = rfd::FileDialog::new()
@@ -1315,7 +1315,7 @@ fn export(state: &State, id: Option<String>) -> Task<Message> {
 			return Ok(false);
 		};
 		let habits: Vec<&Habit> = habits.iter().collect();
-		let bytes = timeslay_core::habits::export_archive(&habits, &sections, today);
+		let bytes = timeparagon_core::habits::export_archive(&habits, &sections, today);
 		std::fs::write(file, bytes)
 			.map(|()| true)
 			.map_err(|error| error.to_string())
@@ -1490,7 +1490,7 @@ pub(crate) fn habit_for_title(state: &mut State, title: &str) -> (String, Task<M
 }
 
 /// Unsaved habit events never enter the calendar grid or its disk cache.
-pub const NEW_HABIT_ID: &str = "timeslay:new-habit";
+pub const NEW_HABIT_ID: &str = "timeparagon:new-habit";
 
 pub fn open_new(state: &mut State, draft: Draft) -> Task<Message> {
 	let day = draft
@@ -1586,7 +1586,7 @@ mod tests {
 		let mut task = calendar::sample_snapshot().events.remove(0);
 		task.id = "task:read".into();
 		task.calendar_id = "tasks:list".into();
-		task.details.task_data = Some(timeslay_core::task_db::TaskData {
+		task.details.task_data = Some(timeparagon_core::task_db::TaskData {
 			id: 1,
 			metadata: crate::timeblocking::Metadata {
 				habit_id: Some("read".into()),
@@ -1649,7 +1649,7 @@ mod tests {
 		] {
 			let habit = Series {
 				id: "1".into(),
-				calendar_id: "timeslay".into(),
+				calendar_id: "timeparagon".into(),
 				title: "Stretch".into(),
 				notes: String::new(),
 				start: calendar::at_clock(date("2026-10-28"), 9, 0),
@@ -1722,7 +1722,7 @@ mod tests {
 		]);
 		let habit = Series {
 			id: "1".into(),
-			calendar_id: "timeslay".into(),
+			calendar_id: "timeparagon".into(),
 			title: "Stretch".into(),
 			notes: String::new(),
 			start: calendar::at_clock(date("2026-10-28"), 9, 0),
@@ -1761,7 +1761,7 @@ mod tests {
 		let recurrence = Recurrence::from_lines(&lines);
 		let habit = Series {
 			id: "1".into(),
-			calendar_id: "timeslay".into(),
+			calendar_id: "timeparagon".into(),
 			title: "Stretch".into(),
 			notes: String::new(),
 			start: calendar::at_clock(date("2026-10-28"), 9, 0),
@@ -1817,7 +1817,7 @@ mod tests {
 	fn the_recurrence_label_is_readable_without_rfc_details() {
 		let habit = Series {
 			id: "1".into(),
-			calendar_id: "timeslay".into(),
+			calendar_id: "timeparagon".into(),
 			title: "Stretch".into(),
 			notes: String::new(),
 			start: calendar::at_clock(date("2026-10-28"), 9, 0),

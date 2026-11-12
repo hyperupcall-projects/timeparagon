@@ -1,32 +1,32 @@
-# Installing TimeSlay as a desktop application
+# Installing TimeParagon as a desktop application
 
-`install.sh` builds the debug binaries and registers TimeSlay with your
+`install.sh` builds the debug binaries and registers TimeParagon with your
 desktop session:
 
-- the binary goes to `~/.local/bin/timeslay` (override with `--prefix`);
-- a desktop entry goes to `~/.local/share/applications/timeslay.desktop`,
+- the binary goes to `~/.local/bin/timeparagon` (override with `--prefix`);
+- a desktop entry goes to `~/.local/share/applications/timeparagon.desktop`,
   so it appears in the application menu;
-- the icon goes to `~/.local/share/icons/hicolor/512x512/apps/timeslay.png`;
+- the icon goes to `~/.local/share/icons/hicolor/512x512/apps/timeparagon.png`;
 - a systemd **user** service goes to
-  `~/.config/systemd/user/timeslay.service` and is enabled so the timer
+  `~/.config/systemd/user/timeparagon.service` and is enabled so the timer
   daemon starts with your graphical session;
-- a second service, `timeslay-shortcuts.service`, runs
-  `timeslay daemon` so the global shortcuts (below) are ready and
+- a second service, `timeparagon-shortcuts.service`, runs
+  `timeparagon daemon` so the global shortcuts (below) are ready and
   listening;
-- `timeslay-slack.service` runs the Slack inbox bridge at login and restarts
+- `timeparagon-slack.service` runs the Slack inbox bridge at login and restarts
   it on failure. The installer requires Node **22.18+** and npm and installs
   the bridge's production dependencies automatically.
 
-There is a single `timeslay` binary. The side panel, the dock and the
-shortcut daemon are modes of it, chosen by a subcommand (`timeslay --help`
+There is a single `timeparagon` binary. The side panel, the dock and the
+shortcut daemon are modes of it, chosen by a subcommand (`timeparagon --help`
 lists them):
 
 | Command | What it runs |
 | --- | --- |
-| `timeslay` | Print the help and exit |
-| `timeslay sidebar` | The side panel: the full app in a wide strip down a screen edge |
-| `timeslay dock` | The dock: a very thin strip of today along a screen edge |
-| `timeslay daemon` | The background process that owns the global shortcuts |
+| `timeparagon` | Print the help and exit |
+| `timeparagon sidebar` | The side panel: the full app in a wide strip down a screen edge |
+| `timeparagon dock` | The dock: a very thin strip of today along a screen edge |
+| `timeparagon daemon` | The background process that owns the global shortcuts |
 
 Nothing needs root; everything lives under your home directory.
 
@@ -39,14 +39,14 @@ packaging/install.sh --no-enable  # install the units without enabling or starti
 packaging/install.sh --prefix /usr/local   # install the binary elsewhere
 ```
 
-The installer does not launch the TimeSlay application. Open it from the
+The installer does not launch the TimeParagon application. Open it from the
 application menu when ready; its service will start with your next graphical
 session. The installer restarts the background shortcut daemon,
-`timeslay-shortcuts.service`, and the Slack bridge, so both are ready immediately,
+`timeparagon-shortcuts.service`, and the Slack bridge, so both are ready immediately,
 unless `--no-enable` is passed.
 
 Google Tasks and Calendar sync use the public Google APIs and require no
-browser helper. Every event TimeSlay writes lives on a single **TimeSlay**
+browser helper. Every event TimeParagon writes lives on a single **TimeParagon**
 calendar, created automatically on the first sync that needs it; in Settings,
 scheduled tasks are native Calendar events with their task fields in private
 extended properties. Undated tasks live in Google Tasks, whose API has no
@@ -64,11 +64,11 @@ packaging/uninstall.sh --purge    # also delete config and cache
 
 ## The systemd unit
 
-`timeslay.service.in` is a template; `@EXEC@` is replaced with the absolute
+`timeparagon.service.in` is a template; `@EXEC@` is replaced with the absolute
 path of the installed binary. It is a user unit bound to
 `graphical-session.target`, so it starts and stops with the desktop session.
 
-TimeSlay is Wayland-only, so the daemon needs a Wayland display. Most
+TimeParagon is Wayland-only, so the daemon needs a Wayland display. Most
 Wayland sessions export `WAYLAND_DISPLAY` to the systemd user manager; if
 yours does not, uncomment the `Environment=` line in the unit (or run
 `systemctl --user import-environment WAYLAND_DISPLAY`).
@@ -76,21 +76,21 @@ yours does not, uncomment the `Environment=` line in the unit (or run
 Useful commands:
 
 ```sh
-systemctl --user status timeslay.service
-systemctl --user restart timeslay.service
-journalctl --user -u timeslay.service -f
+systemctl --user status timeparagon.service
+systemctl --user restart timeparagon.service
+journalctl --user -u timeparagon.service -f
 ```
 
 ### Slack service
 
 The installer copies the Slack runtime to
-`~/.local/share/timeslay/slack` (or `$XDG_DATA_HOME/timeslay/slack`).
-The service uses an absolute Node path and the installed `timeslay` binary;
+`~/.local/share/timeparagon/slack` (or `$XDG_DATA_HOME/timeparagon/slack`).
+The service uses an absolute Node path and the installed `timeparagon` binary;
 it does not need a shell, an open terminal, or this checkout after installation.
 It starts with the systemd user manager at login, independently of the GUI.
 
 Credentials and the rotating token cache live under
-`~/.config/timeslay/slack/` (or `$XDG_CONFIG_HOME/timeslay/slack/`):
+`~/.config/timeparagon/slack/` (or `$XDG_CONFIG_HOME/timeparagon/slack/`):
 
 - `.env`: Slack tokens, client ID, and client secret.
 - `.slack-app-tokens.json`: the current access/refresh pair; retain it across
@@ -102,12 +102,12 @@ preserve the installed credentials and cache. Stop any manually started
 checkout bridge before installing; use the service afterward so only one
 process owns the rotating tokens. For a fresh setup, fill in the installed
 `.env.example` and save it as `.env`; the service waits until `.env` exists.
-The service sets `TIMESLAY_BIN` and `SLACK_APP_TOKEN_FILE` itself.
+The service sets `TIMEPARAGON_BIN` and `SLACK_APP_TOKEN_FILE` itself.
 
 ```sh
-systemctl --user status timeslay-slack.service
-systemctl --user restart timeslay-slack.service
-journalctl --user -u timeslay-slack.service -f
+systemctl --user status timeparagon-slack.service
+systemctl --user restart timeparagon-slack.service
+journalctl --user -u timeparagon-slack.service -f
 ```
 
 `--no-enable` installs the service without enabling or starting it.
@@ -141,23 +141,23 @@ on the right rather than over the view: the window widens by `detail_width`
 beside the calendar or backlog. When the time block editor is open too, the
 details pane sits to the right of it. `detail_width` is the pane's default width.
 
-`timeslay sidebar` opens **TimeSlay itself** as a slim panel — 200px
+`timeparagon sidebar` opens **TimeParagon itself** as a slim panel — 200px
 wide by default — down the **left** edge of the screen. It is a separate
 instance of the real application, not a second, cut-down view: the same clock,
 calendar and settings, just in a narrow window.
 
 ### Shortcuts
 
-The shortcuts are owned by `timeslay daemon`, a small process that does
+The shortcuts are owned by `timeparagon daemon`, a small process that does
 nothing but register the keys through KDE's KGlobalAccel and show, hide or
 reshape the panel and the dock. There are two actions:
 
-- **Toggle Visibility** (`Meta+U` by default) hides TimeSlay completely, as
+- **Toggle Visibility** (`Meta+U` by default) hides TimeParagon completely, as
   the panel or as the dock. Pressed again, it brings back the same shape as it
   was: the panel keeps running while hidden, so its tab, open panes and width
   are all as you left them.
 - **Toggle Shape** (`Meta+Shift+U` by default) switches between the panel and
-  the dock. While TimeSlay is hidden it comes back in the other shape.
+  the dock. While TimeParagon is hidden it comes back in the other shape.
 
 Each action can have **several** shortcuts, and any of them triggers it. Open
 **Settings → Keyboard shortcuts**, type a combination such as `Meta+J` or
@@ -167,9 +167,9 @@ The actions also appear in KDE **System Settings → Shortcuts**. The daemon mus
 be running for the shortcuts to exist:
 
 ```sh
-systemctl --user status timeslay-shortcuts.service
-systemctl --user restart timeslay-shortcuts.service
-journalctl --user -u timeslay-shortcuts.service -f
+systemctl --user status timeparagon-shortcuts.service
+systemctl --user restart timeparagon-shortcuts.service
+journalctl --user -u timeparagon-shortcuts.service -f
 ```
 
 Its settings are this device's `panel.*` settings, kept in the database:
@@ -185,10 +185,10 @@ Its settings are this device's `panel.*` settings, kept in the database:
 The shortcuts are set in **Settings**, and are only defaults: once registered
 they also appear in System Settings → Shortcuts, where they can be rebound.
 The edge has no control in the app; set it with `sqlite3`, then restart
-TimeSlay (`--sidebar`) for the panel to move:
+TimeParagon (`--sidebar`) for the panel to move:
 
 ```sh
-sqlite3 ~/.local/share/timeslay/timeslay.sqlite3 \
+sqlite3 ~/.local/share/timeparagon/timeparagon.sqlite3 \
   "INSERT INTO device_settings VALUES('panel.side','\"right\"')
    ON CONFLICT(key) DO UPDATE SET value=excluded.value"
 ```
@@ -227,7 +227,7 @@ cargo run --release -- daemon
 
 ## Dock strip
 
-`timeslay dock` is a much thinner companion than the panel: a thin line
+`timeparagon dock` is a much thinner companion than the panel: a thin line
 (the **Dock width** setting, 10px by default) down the left edge of the screen
 showing today. It is a real `zwlr_layer_shell_v1` surface, so it needs no window rule. KDE Plasma, Sway,
 Hyprland, niri and COSMIC provide that protocol; GNOME does not.
@@ -258,14 +258,14 @@ Switching modes: in the side panel, open the calendar **Menu** and press
 square at the very top of the dock brings back the panel and closes the dock.
 
 ```sh
-timeslay dock
+timeparagon dock
 cargo run --release -- dock   # from a checkout
 ```
 
 The **Toggle Shape** shortcut switches between the panel and the dock without
 going through the menu.
 
-It reads `$XDG_CONFIG_HOME/timeslay/dock.toml` at start-up; every key is
+It reads `$XDG_CONFIG_HOME/timeparagon/dock.toml` at start-up; every key is
 optional:
 
 ```toml
@@ -286,7 +286,7 @@ The bridge supports one unlisted Slack app connected to multiple workspaces.
 Follow the [multi-workspace setup](../slack/README.md#connect-multiple-workspaces-with-one-app)
 to configure its HTTPS OAuth endpoint and authorize each workspace. The service
 keeps workspace bot tokens and permitted user IDs in
-`~/.config/timeslay/slack/.slack-installations.json`, separately from its
+`~/.config/timeparagon/slack/.slack-installations.json`, separately from its
 app-level token cache. Installation copies a development installation file only
 when the destination does not exist; upgrades preserve it. Ordinary uninstall
 preserves credentials; `--purge` removes them.
@@ -305,15 +305,15 @@ panning updates search proximity to the area being explored.
 
 Set a Mapbox public access token in Settings. Maps and search require internet
 access and a graphics driver supporting WebGL2. The first build downloads CEF;
-the installed runtime is considerably larger than the TimeSlay binary.
-`install.sh` copies the complete CEF runtime to `PREFIX/lib/timeslay/cef`.
+the installed runtime is considerably larger than the TimeParagon binary.
+`install.sh` copies the complete CEF runtime to `PREFIX/lib/timeparagon/cef`.
 For a custom build/runtime location, set `CEF_PATH` at build time and
-`TIMESLAY_CEF_DIR` at install/runtime. Mapbox attribution remains visible.
+`TIMEPARAGON_CEF_DIR` at install/runtime. Mapbox attribution remains visible.
 
 ## Database sync
 
 Normal installs also build `core/examples/sync_database`, install it as
-`timeslay-database-sync`, and enable `timeslay-database-sync.service`. It syncs
+`timeparagon-database-sync`, and enable `timeparagon-database-sync.service`. It syncs
 SQLite user documents and settings with the Turso server configured in
 **Settings → Database sync** while windows are closed. The URL is this device's
 `database_sync.url` setting; an empty URL disables sync. No server is configured by default. Its replica owner lock is shared with the panel and dock workers, so
@@ -321,7 +321,7 @@ only one process opens the native replica at a time. `--no-enable` installs the
 unit without starting it; uninstall removes the worker and unit but keeps data.
 
 The SQLite journal retains original and superseded versions. Export it with
-`cargo run -p timeslay-core --example database_history -- DATABASE OUTPUT.json`.
+`cargo run -p timeparagon-core --example database_history -- DATABASE OUTPUT.json`.
 For recovery, keep the journal and the original database. Rebuild a damaged
 native replica from the server and replay pending journal entries; never clone
 native replica metadata between devices. Retain server backups separately.

@@ -2128,7 +2128,7 @@ mod tests {
 	use super::*;
 	fn db() -> (tempfile::TempDir, std::path::PathBuf) {
 		let dir = tempfile::tempdir().unwrap();
-		let path = dir.path().join("timeslay.sqlite3");
+		let path = dir.path().join("timeparagon.sqlite3");
 		task_db::Database::open(&path).unwrap();
 		(dir, path)
 	}

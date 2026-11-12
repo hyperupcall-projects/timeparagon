@@ -5,7 +5,7 @@ use iced::{Center, Element, Fill};
 
 use crate::app::{Message, State};
 use crate::reminders::{Action, Category, Sound};
-use timeslay_core::reminders::{LEAD_CHOICES, lead_label};
+use timeparagon_core::reminders::{LEAD_CHOICES, lead_label};
 
 use super::layout::Metrics;
 use super::settings::{choice, indent, switch};
@@ -90,7 +90,7 @@ fn category_block<'a>(
 			},
 			..container::Style::default()
 		});
-	// Laid out like the calendar list's TimeSlay rows: swatch, name, switch.
+	// Laid out like the calendar list's TimeParagon rows: swatch, name, switch.
 	let header = row![
 		swatch,
 		text(category.label()).size(metrics.label()).width(Fill),

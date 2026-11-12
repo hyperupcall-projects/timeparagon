@@ -1,7 +1,7 @@
 use chrono::{Duration, Local, TimeZone};
 use iced::Size;
 use iced_test::{Simulator, core::Settings};
-use timeslay::{app::State, calendar, ui};
+use timeparagon::{app::State, calendar, ui};
 
 #[test]
 fn day_view_summarizes_untimed_tasks_and_keeps_all_day_events() {
@@ -29,7 +29,7 @@ fn day_view_summarizes_untimed_tasks_and_keeps_all_day_events() {
 			task.title = format!("Unslotted task {index}");
 			state.calendar.events.push(task);
 		}
-		let mut view: Simulator<'_, timeslay::app::Message> = Simulator::with_size(
+		let mut view: Simulator<'_, timeparagon::app::Message> = Simulator::with_size(
 			Settings::default(),
 			Size::new(720.0, 700.0),
 			ui::view(&state),
@@ -44,9 +44,9 @@ fn day_view_summarizes_untimed_tasks_and_keeps_all_day_events() {
 		}
 	}
 
-	state.view = timeslay::app::CalendarView::Week;
+	state.view = timeparagon::app::CalendarView::Week;
 	state.week_anchor = state.calendar.day;
-	let mut week: Simulator<'_, timeslay::app::Message> = Simulator::with_size(
+	let mut week: Simulator<'_, timeparagon::app::Message> = Simulator::with_size(
 		Settings::default(),
 		Size::new(1200.0, 700.0),
 		ui::editor_window(&state),
@@ -58,10 +58,10 @@ fn day_view_summarizes_untimed_tasks_and_keeps_all_day_events() {
 	);
 	drop(week);
 
-	state.view = timeslay::app::CalendarView::Day;
+	state.view = timeparagon::app::CalendarView::Day;
 	state.config.calendar.inbox_list = Some("tasks:inbox".into());
 	for (id, day) in [
-		("inbox", timeslay::timeblocking::UNDATED),
+		("inbox", timeparagon::timeblocking::UNDATED),
 		("overdue-1", state.calendar.day - Duration::days(1)),
 		("overdue-2", state.calendar.day - Duration::days(2)),
 	] {
@@ -77,12 +77,12 @@ fn day_view_summarizes_untimed_tasks_and_keeps_all_day_events() {
 			task.details.description = "".into();
 			task.details
 				.task_data
-				.get_or_insert_with(|| timeslay_core::task_db::TaskData {
+				.get_or_insert_with(|| timeparagon_core::task_db::TaskData {
 					id: 100,
 					metadata: Default::default(),
 				})
 				.metadata
-				.deadline = Some(timeslay_core::calendar::deadline::parse_input(&format!("{day}")).unwrap());
+				.deadline = Some(timeparagon_core::calendar::deadline::parse_input(&format!("{day}")).unwrap());
 		}
 		state.calendar.events.push(task);
 	}
@@ -105,9 +105,9 @@ fn range_views_keep_the_day_panel_visible_and_render_in_the_floating_host() {
 		state.calendar.events.clear();
 		state.week_anchor = state.calendar.day;
 		state.view = if monthly {
-			timeslay::app::CalendarView::Month
+			timeparagon::app::CalendarView::Month
 		} else {
-			timeslay::app::CalendarView::Week
+			timeparagon::app::CalendarView::Week
 		};
 		let mut day = Simulator::with_size(
 			Settings::default(),

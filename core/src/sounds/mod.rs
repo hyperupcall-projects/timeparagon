@@ -1,4 +1,4 @@
-//! The sounds TimeSlay generates itself, shared by the desktop alarms, the
+//! The sounds TimeParagon generates itself, shared by the desktop alarms, the
 //! desktop reminders and the Android notification channels.
 //!
 //! Everything is synthesized, so no audio files live in the repository. The
@@ -113,7 +113,7 @@ impl Tone {
 
 /// Prefixes the generated Android resources so they cannot collide with
 /// anything else in `res/raw`.
-pub const ANDROID_RAW_PREFIX: &str = "timeslay_tone_";
+pub const ANDROID_RAW_PREFIX: &str = "timeparagon_tone_";
 
 impl fmt::Display for Tone {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -2,12 +2,12 @@ use chrono::{Duration, Local, NaiveDate};
 use iced::futures::{StreamExt, executor::block_on};
 use iced::{Element, Size};
 use iced_test::{Error, Simulator, core::Settings};
-use timeslay::app::{
+use timeparagon::app::{
 	CalendarMessage, EventMessage, MonthPicker, NavigationMessage, PlanTab, SettingsMessage,
 	SystemMessage, TaskMessage,
 };
-use timeslay::config::WeekRange;
-use timeslay::{
+use timeparagon::config::WeekRange;
+use timeparagon::{
 	app::{self, Message, Screen, State},
 	calendar::{self, Store},
 };
@@ -63,7 +63,7 @@ fn state() -> State {
 		events: Vec::new(),
 		..snapshot.clone()
 	});
-	state.view = timeslay::app::CalendarView::Week;
+	state.view = timeparagon::app::CalendarView::Week;
 	state.week_anchor = date(15);
 	state
 		.calendar
@@ -73,7 +73,7 @@ fn state() -> State {
 
 fn render(state: &State, size: Size) -> Simulator<'_, Message> {
 	let view: Element<'_, Message> = if state.range_view_active() {
-		timeslay::ui::editor_window(state)
+		timeparagon::ui::editor_window(state)
 	} else {
 		app::view(state, iced::window::Id::unique())
 	};
@@ -167,21 +167,21 @@ fn the_week_steps_by_the_days_from_the_selected_day() {
 
 #[test]
 fn switching_the_week_range_round_trips() {
-	let mut settings = timeslay::config::CalendarSettings::default();
+	let mut settings = timeparagon::config::CalendarSettings::default();
 	assert_eq!(settings.week_range(), WeekRange::Eight);
 	for range in WeekRange::ALL {
 		settings.set_week_range(range);
 		assert_eq!(settings.week_range(), range);
 		assert_eq!(settings.weekly_days(), range.days());
 		let saved = toml::to_string(&settings).unwrap();
-		let loaded: timeslay::config::CalendarSettings = toml::from_str(&saved).unwrap();
+		let loaded: timeparagon::config::CalendarSettings = toml::from_str(&saved).unwrap();
 		assert_eq!(loaded.week_range(), range);
 	}
 	settings.set_week_range(WeekRange::EightAndYesterday);
 	assert_eq!(settings.week_dates(date(15)).len(), 9);
 	assert_eq!(settings.week_dates(date(15))[0], date(14));
 	// The old whole-week flag is ignored.
-	let old: timeslay::config::CalendarSettings =
+	let old: timeparagon::config::CalendarSettings =
 		toml::from_str("weekly_days = 7\nweekly_whole_week = true").unwrap();
 	assert_eq!(old.week_range(), WeekRange::Seven);
 }
@@ -189,7 +189,7 @@ fn switching_the_week_range_round_trips() {
 #[test]
 fn floating_window_fits_every_weekly_heading() {
 	use iced_test::runtime::{Action, task, window::Action as WindowAction};
-	use timeslay::{app::Sidebar, panel::Side};
+	use timeparagon::{app::Sidebar, panel::Side};
 
 	for (days, width, sidebar) in [(7, 100, false), (8, 200, false), (8, 150, true)] {
 		let mut state = State::blank();
@@ -239,14 +239,14 @@ fn floating_window_fits_every_weekly_heading() {
 
 #[test]
 fn weekly_settings_round_trip_and_clamp_old_or_invalid_values() {
-	let defaults: timeslay::config::CalendarSettings = toml::from_str("").unwrap();
+	let defaults: timeparagon::config::CalendarSettings = toml::from_str("").unwrap();
 	assert_eq!(defaults.weekly_days(), 8);
 	assert_eq!(defaults.weekly_day_width(), 150);
 	let mut settings = defaults;
 	settings.weekly_days = 7;
 	settings.weekly_day_width = 220;
 	let saved = toml::to_string(&settings).unwrap();
-	let loaded: timeslay::config::CalendarSettings = toml::from_str(&saved).unwrap();
+	let loaded: timeparagon::config::CalendarSettings = toml::from_str(&saved).unwrap();
 	assert_eq!((loaded.weekly_days(), loaded.weekly_day_width()), (7, 220));
 	settings.weekly_days = 99;
 	settings.weekly_day_width = 0;
@@ -282,9 +282,9 @@ fn weekly_navigation_uses_the_anchor_not_the_last_opened_day() {
 		&mut state,
 		Message::Calendar(CalendarMessage::WeekDayAction(
 			date(14),
-			Box::new(Message::TimeBlocking(timeslay::timeblocking::Action::Plan(
-				"standup".into(),
-			))),
+			Box::new(Message::TimeBlocking(
+				timeparagon::timeblocking::Action::Plan("standup".into()),
+			)),
 		)),
 	);
 	let _ = app::update(
@@ -302,7 +302,7 @@ fn weekly_task_writes_keep_other_days_visible_and_update_cached_copies() {
 	task.title = "Renamed task".into();
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(timeslay::timeblocking::Action::Saved(
+		Message::TimeBlocking(timeparagon::timeblocking::Action::Saved(
 			"task:thursday".into(),
 			Ok(task.clone()),
 		)),
@@ -334,7 +334,7 @@ fn weekly_task_writes_keep_other_days_visible_and_update_cached_copies() {
 		&mut state,
 		Message::Task(TaskMessage::TaskCompletionSaved(
 			"task:thursday".into(),
-			timeslay::timeblocking::TaskStatus::Active,
+			timeparagon::timeblocking::TaskStatus::Active,
 			Ok(task),
 		)),
 	);
@@ -396,7 +396,7 @@ fn weekly_canvas_click_reports_the_clicked_day() -> Result<(), Error> {
 						Message::Event(EventMessage::EventOpened(id)) if id == "standup"
 					) || *day == date(14) && matches!(
 						action.as_ref(),
-						Message::TimeBlocking(timeslay::timeblocking::Action::View(id)) if id == "standup"
+						Message::TimeBlocking(timeparagon::timeblocking::Action::View(id)) if id == "standup"
 					)
 		)),
 		"click produced {messages:?}"
@@ -424,16 +424,16 @@ fn narrow_weekly_block_panel_keeps_task_and_actions_clickable() -> Result<(), Er
 	let mut state = state();
 	state.calendar.set_day(date(14), date(15));
 	let task = state.calendar.event_mut("task:thursday").unwrap();
-	task.details.task_data = Some(timeslay::task_db::TaskData {
+	task.details.task_data = Some(timeparagon::task_db::TaskData {
 		id: 1,
-		metadata: timeslay::timeblocking::Metadata {
+		metadata: timeparagon::timeblocking::Metadata {
 			block: Some("work/standup".into()),
 			..Default::default()
 		},
 	});
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(timeslay::timeblocking::Action::Plan("standup".into())),
+		Message::TimeBlocking(timeparagon::timeblocking::Action::Plan("standup".into())),
 	);
 	let mut ui = render(&state, Size::new(328.0, 900.0));
 	let _ = ui.click("Thursday task")?;
@@ -444,7 +444,7 @@ fn narrow_weekly_block_panel_keeps_task_and_actions_clickable() -> Result<(), Er
 	let _ = ui.click("Close")?;
 	assert!(ui.into_messages().any(|message| matches!(
 		message,
-		Message::TimeBlocking(timeslay::timeblocking::Action::Close)
+		Message::TimeBlocking(timeparagon::timeblocking::Action::Close)
 	)));
 	Ok(())
 }
@@ -463,7 +463,7 @@ fn plan_day_shows_calendar_beside_each_task_list() -> Result<(), Error> {
 		let mut ui = Simulator::with_size(
 			Settings::default(),
 			Size::new(420.0, 900.0),
-			timeslay::ui::editor_window(&state),
+			timeparagon::ui::editor_window(&state),
 		);
 		ui.find("View")?;
 		ui.find("Actions")?;
@@ -477,7 +477,7 @@ fn plan_day_shows_calendar_beside_each_task_list() -> Result<(), Error> {
 
 #[test]
 fn plan_split_button_remembers_and_opens_the_selected_period() -> Result<(), Error> {
-	use timeslay::app::CalendarView;
+	use timeparagon::app::CalendarView;
 	for width in [180.0, 260.0, 420.0, 900.0] {
 		let mut state = state();
 		let size = Size::new(width, 900.0);
@@ -498,7 +498,7 @@ fn plan_split_button_remembers_and_opens_the_selected_period() -> Result<(), Err
 			assert_eq!(state.plan_view, view);
 			assert_eq!(state.view, view);
 			assert!(!state.view_menu_open);
-			assert_eq!(timeslay::ui::plan_view_label(&state), label);
+			assert_eq!(timeparagon::ui::plan_view_label(&state), label);
 
 			// Leaving planning must preserve the label and main-button action.
 			let _ = app::update(
@@ -531,7 +531,7 @@ fn plan_split_button_remembers_and_opens_the_selected_period() -> Result<(), Err
 
 #[test]
 fn plan_menu_selects_overviews_from_every_screen() -> Result<(), Error> {
-	use timeslay::app::CalendarView;
+	use timeparagon::app::CalendarView;
 	for width in [180.0, 260.0, 420.0, 900.0] {
 		for screen in [
 			Screen::Calendar,
@@ -592,7 +592,9 @@ fn plan_menu_selects_overviews_from_every_screen() -> Result<(), Error> {
 				assert_eq!(state.view, view);
 				assert!(!state.view_menu_open);
 				let mut panel = render_main(&state, size);
-				let selected = panel.find(timeslay::ui::plan_view_label(&state))?.bounds();
+				let selected = panel
+					.find(timeparagon::ui::plan_view_label(&state))?
+					.bounds();
 				assert!(selected.x + selected.width <= width);
 				assert!(panel.find("Plan").is_err());
 				assert_eq!(panel.find("Schedule").is_ok(), view != CalendarView::Day);
@@ -627,9 +629,9 @@ fn do_exits_planning_and_opens_the_day_panel() -> Result<(), Error> {
 	for monthly in [false, true] {
 		let mut state = state();
 		state.view = if monthly {
-			timeslay::app::CalendarView::Month
+			timeparagon::app::CalendarView::Month
 		} else {
-			timeslay::app::CalendarView::Week
+			timeparagon::app::CalendarView::Week
 		};
 		let mut ui = render_main(&state, Size::new(180.0, 700.0));
 		ui.click("Do")?;
@@ -667,7 +669,7 @@ fn first_overview_click_opens_schedule_through_window_startup() -> Result<(), Er
 			Screen::Triaged,
 		] {
 			let mut state = state();
-			state.view = timeslay::app::CalendarView::Day;
+			state.view = timeparagon::app::CalendarView::Day;
 			let main = iced::window::Id::unique();
 			state.main_window = Some(main);
 			let _ = app::update(
@@ -706,9 +708,9 @@ fn first_overview_click_opens_schedule_through_window_startup() -> Result<(), Er
 fn plan_subtabs_keep_the_overview_and_selected_day() -> Result<(), Error> {
 	for width in [180.0, 260.0, 420.0, 900.0] {
 		for view in [
-			timeslay::app::CalendarView::Week,
-			timeslay::app::CalendarView::TwoWeek,
-			timeslay::app::CalendarView::Month,
+			timeparagon::app::CalendarView::Week,
+			timeparagon::app::CalendarView::TwoWeek,
+			timeparagon::app::CalendarView::Month,
 		] {
 			let mut state = state();
 			state.main_window = Some(iced::window::Id::unique());
@@ -756,7 +758,7 @@ fn plan_subtabs_keep_the_overview_and_selected_day() -> Result<(), Error> {
 fn plan_day_subtabs_keep_the_day_and_have_no_schedule() -> Result<(), Error> {
 	for width in [180.0, 260.0, 420.0, 900.0] {
 		let mut state = state();
-		state.view = timeslay::app::CalendarView::Week;
+		state.view = timeparagon::app::CalendarView::Week;
 		let day = state.calendar.day;
 		let _ = app::update(
 			&mut state,
@@ -777,7 +779,7 @@ fn plan_day_subtabs_keep_the_day_and_have_no_schedule() -> Result<(), Error> {
 				let _ = app::update(&mut state, message);
 			}
 			assert_eq!(state.screen, screen);
-			assert_eq!(state.view, timeslay::app::CalendarView::Day);
+			assert_eq!(state.view, timeparagon::app::CalendarView::Day);
 			assert_eq!(state.calendar.day, day);
 		}
 	}
@@ -846,7 +848,7 @@ fn weekly_picker_emits_hover_and_selection_and_tabs_remain_reachable() -> Result
 	state.overview_month_open = false;
 	for width in [180.0, 260.0, 900.0] {
 		let mut ui = render_main(&state, Size::new(width, 700.0));
-		let switcher = timeslay::ui::calendar_view_label(&state);
+		let switcher = timeparagon::ui::calendar_view_label(&state);
 		let weekly = ui.find(switcher)?.bounds();
 		assert!(weekly.x >= 0.0 && weekly.x + weekly.width <= width);
 		drop(ui);
@@ -885,8 +887,8 @@ fn task_list_mixes_tasks_and_events_in_start_order_and_keeps_each_day_separate()
 	early.start = at(14, 8);
 	early.end = at(14, 9);
 	// A task linked to a block must still appear as its own list entry.
-	let mut data = timeslay::timeblocking::metadata(&early);
-	data.block = Some(timeslay::timeblocking::block_key(
+	let mut data = timeparagon::timeblocking::metadata(&early);
+	data.block = Some(timeparagon::timeblocking::block_key(
 		state
 			.calendar
 			.events_on(date(14))
@@ -894,7 +896,7 @@ fn task_list_mixes_tasks_and_events_in_start_order_and_keeps_each_day_separate()
 			.find(|e| e.id == "standup")
 			.unwrap(),
 	));
-	early.details.task_data = Some(timeslay::task_db::TaskData {
+	early.details.task_data = Some(timeparagon::task_db::TaskData {
 		id: 999,
 		metadata: data,
 	});
@@ -942,7 +944,7 @@ fn weekly_task_view_omits_all_day_tasks_without_hiding_scheduled_cards() -> Resu
 		("second", date(15), false),
 		("third", date(15), false),
 		("completed", date(15), true),
-		("undated", timeslay::timeblocking::UNDATED, false),
+		("undated", timeparagon::timeblocking::UNDATED, false),
 		("overdue", date(13), false),
 		("linked", date(14), false),
 	] {
@@ -962,17 +964,17 @@ fn weekly_task_view_omits_all_day_tasks_without_hiding_scheduled_cards() -> Resu
 			task.details.description = "".into();
 			task.details
 				.task_data
-				.get_or_insert_with(|| timeslay_core::task_db::TaskData {
+				.get_or_insert_with(|| timeparagon_core::task_db::TaskData {
 					id: 100,
 					metadata: Default::default(),
 				})
 				.metadata
-				.deadline = Some(timeslay_core::calendar::deadline::parse_input("2020-01-01").unwrap());
+				.deadline = Some(timeparagon_core::calendar::deadline::parse_input("2020-01-01").unwrap());
 		}
 		if id == "linked" {
-			let mut metadata = timeslay::timeblocking::metadata(&task);
+			let mut metadata = timeparagon::timeblocking::metadata(&task);
 			metadata.block = Some("work/standup".into());
-			task.details.task_data = Some(timeslay::task_db::TaskData { id: 999, metadata });
+			task.details.task_data = Some(timeparagon::task_db::TaskData { id: 999, metadata });
 		}
 		let task_id = task.id.clone();
 		state.calendar.replace_cached_task(&task_id, &task);
@@ -1006,7 +1008,7 @@ fn task_list_switch_preserves_week_and_cards_show_start_times_and_open_details()
 {
 	let mut state = state();
 	state.config.appearance.time_format =
-		timeslay::calendar::time_format::TimeFormat::TwentyFourHour;
+		timeparagon::calendar::time_format::TimeFormat::TwentyFourHour;
 	let _ = app::update(
 		&mut state,
 		Message::Calendar(CalendarMessage::CalendarTaskListToggled(true)),
@@ -1014,7 +1016,7 @@ fn task_list_switch_preserves_week_and_cards_show_start_times_and_open_details()
 	assert!(state.config.calendar.weekly_task_list);
 	assert_eq!(state.week_anchor, date(15));
 	let saved = toml::to_string(&state.config.calendar).unwrap();
-	let loaded: timeslay::config::CalendarSettings = toml::from_str(&saved).unwrap();
+	let loaded: timeparagon::config::CalendarSettings = toml::from_str(&saved).unwrap();
 	assert!(loaded.weekly_task_list);
 	let mut ui = render(&state, Size::new(1500.0, 900.0));
 	assert!(ui.find("▦ Board").is_ok());
@@ -1061,7 +1063,7 @@ fn board_state() -> State {
 fn board_cards_drag_from_title_badges_and_footer_without_opening_or_completing() -> Result<(), Error>
 {
 	use iced::{Event, Point, Vector, mouse};
-	use timeslay::timeblocking::Action;
+	use timeparagon::timeblocking::Action;
 	// A title, its time badges and its footer all lift the same card.
 	for offset in [
 		Vector::new(0.0, 0.0),
@@ -1095,7 +1097,7 @@ fn board_cards_drag_from_title_badges_and_footer_without_opening_or_completing()
 #[test]
 fn board_drop_targets_cover_before_after_events_and_empty_days() -> Result<(), Error> {
 	use iced::{Event, Point, mouse};
-	use timeslay::timeblocking::Action;
+	use timeparagon::timeblocking::Action;
 	let mut state = board_state();
 	state.timeblocking.dragging = Some("task:first".into());
 	for (title, expected_day, target) in [
@@ -1140,7 +1142,7 @@ fn board_drop_targets_cover_before_after_events_and_empty_days() -> Result<(), E
 
 #[test]
 fn board_reordering_is_persistent_and_keeps_schedule_and_block_membership() {
-	use timeslay::timeblocking::{self as tb, Action};
+	use timeparagon::timeblocking::{self as tb, Action};
 	let mut state = board_state();
 	// The board works regardless of the sidebar tab.
 	state.screen = Screen::Backlog;
@@ -1181,7 +1183,7 @@ fn board_reordering_is_persistent_and_keeps_schedule_and_block_membership() {
 		assert!(state.timeblocking.busy.is_empty());
 	}
 	let serialized = toml::to_string(&state.config.calendar).unwrap();
-	let loaded = toml::from_str::<timeslay::config::CalendarSettings>(&serialized).unwrap();
+	let loaded = toml::from_str::<timeparagon::config::CalendarSettings>(&serialized).unwrap();
 	assert_eq!(
 		loaded.weekly_task_order,
 		state.config.calendar.weekly_task_order
@@ -1192,7 +1194,7 @@ fn board_reordering_is_persistent_and_keeps_schedule_and_block_membership() {
 
 #[test]
 fn add_task_on_a_board_day_opens_a_timed_task_for_that_day() {
-	use timeslay::timeblocking::Action;
+	use timeparagon::timeblocking::Action;
 	let mut state = board_state();
 	let _ = app::update(
 		&mut state,
@@ -1213,7 +1215,7 @@ fn board_layout_renders_at_reference_size_and_in_dark_mode() -> Result<(), Error
 	let mut state = state();
 	state.config.calendar.weekly_task_list = true;
 	state.config.appearance.time_format =
-		timeslay::calendar::time_format::TimeFormat::TwentyFourHour;
+		timeparagon::calendar::time_format::TimeFormat::TwentyFourHour;
 	let template = state.calendar.event("task:thursday").unwrap().clone();
 	let mut events = Vec::new();
 	for (index, title, day, hour, minutes, notes, project) in [
@@ -1256,9 +1258,9 @@ fn board_layout_renders_at_reference_size_and_in_dark_mode() -> Result<(), Error
 		task.start = at(day, hour);
 		task.end = task.start + Duration::minutes(minutes);
 		task.details.description = notes.into();
-		task.details.task_data = Some(timeslay::task_db::TaskData {
+		task.details.task_data = Some(timeparagon::task_db::TaskData {
 			id: index + 1,
-			metadata: timeslay::timeblocking::Metadata {
+			metadata: timeparagon::timeblocking::Metadata {
 				projects: vec![project],
 				..Default::default()
 			},
@@ -1271,10 +1273,10 @@ fn board_layout_renders_at_reference_size_and_in_dark_mode() -> Result<(), Error
 		(3, "growth", "#ffb34e"),
 	]
 	.into_iter()
-	.map(|(id, name, color)| timeslay::config::Project {
+	.map(|(id, name, color)| timeparagon::config::Project {
 		id,
 		name: name.into(),
-		color: Some(timeslay::hex::parse(color).unwrap().into()),
+		color: Some(timeparagon::hex::parse(color).unwrap().into()),
 		directory: None,
 		area: None,
 	})
@@ -1298,7 +1300,7 @@ fn board_layout_renders_at_reference_size_and_in_dark_mode() -> Result<(), Error
 		assert!(ui.find("Mockups").is_ok());
 		assert!(ui.find("4:00").is_ok());
 		assert!(ui.find("All day").is_err());
-		if let Ok(directory) = std::env::var("TIMESLAY_BOARD_PREVIEW") {
+		if let Ok(directory) = std::env::var("TIMEPARAGON_BOARD_PREVIEW") {
 			ui.snapshot(&theme)?.matches_image(
 				std::path::Path::new(&directory).join(format!("week-board-{name}")),
 			)?;
@@ -1313,10 +1315,13 @@ fn picker_dot_picks_today_and_title_names_the_month() -> Result<(), Error> {
 	state.overview_month_open = true;
 	state.overview_month = date(1);
 	let mut ui = render(&state, Size::new(900.0, 700.0));
-	assert!(ui.find(timeslay::calendar::month_heading(date(1))).is_ok());
+	assert!(
+		ui.find(timeparagon::calendar::month_heading(date(1)))
+			.is_ok()
+	);
 	let _ = ui.click("●")?;
-	let today = timeslay::calendar::day_at(
-		timeslay::clock::now(),
+	let today = timeparagon::calendar::day_at(
+		timeparagon::clock::now(),
 		state.config.calendar.day_start_hour(),
 	);
 	assert!(ui.into_messages().any(|m| matches!(

@@ -1,4 +1,4 @@
-# TimeSlay
+# TimeParagon
 
 The mobile application is built around the day view, with the Habits tab as its
 own screen and the rest of the app in sheets over it:
@@ -48,14 +48,14 @@ when offline and retry automatically. Local data stays in the data directory,
 because Android may empty an app's cache.
 
 On upgrade, existing records are enrolled transactionally in place. No phone
-backup is created. `timeslay.sqlite3` remains the app/widget database, and a
+backup is created. `timeparagon.sqlite3` remains the app/widget database, and a
 private `turso/replica.db` stores the native sync replica and its sidecars. Never
 copy a replica or its sync metadata to another device; enroll that device's own
 SQLite database instead. Edits and superseded versions remain in the SQLite
 journal and on the server. Export them with:
 
 ```sh
-cargo run -p timeslay-core --example database_history -- /path/to/timeslay.sqlite3 /new/path/history.json
+cargo run -p timeparagon-core --example database_history -- /path/to/timeparagon.sqlite3 /new/path/history.json
 ```
 
 Only one process per device opens the Turso replica. The desktop dock, panel
@@ -71,13 +71,13 @@ Pomodoro timer, voice input, the
 extra Google accounts, and the Slack and browser integrations, which reach the phone as
 ordinary tasks.
 
-Both apps share data and code via the `timeslay-core` crate:
+Both apps share data and code via the `timeparagon-core` crate:
 
-- the local database at `~/.local/share/timeslay/timeslay.sqlite3`, which holds
+- the local database at `~/.local/share/timeparagon/timeparagon.sqlite3`, which holds
   the settings, tasks and time-block metadata, cached events, habits and the
   scratch data,
 - notes as Markdown files in each device's notes directory,
-- on the desktop, the OAuth token in `~/.local/state/timeslay/secrets.json`,
+- on the desktop, the OAuth token in `~/.local/state/timeparagon/secrets.json`,
   kept out of the database,
 - the calendar sync and Google Tasks code in `core/`.
 - the palettes, radii and shadows in `core/src/theme/`, which reach this app as
@@ -96,7 +96,7 @@ sudo apt-get -y install webkit2gtk-4.1 gtk+-3.0 libxdo-dev
 To test the desktop builds of Dioxus:
 
 ```sh
-cargo run -p timeslay-dioxus
+cargo run -p timeparagon-dioxus
 ```
 
 ### Android
@@ -112,26 +112,26 @@ Useful options:
 ./scripts/build-android.sh --abi x86_64
 
 # Release profile, signed with your own keystore (see below)
-TIMESLAY_KEYSTORE_BASE64=$(base64 -w0 ~/keys/timeslay.jks) \
-TIMESLAY_KEYSTORE_PASSWORD=... \
-TIMESLAY_KEYSTORE_KEYALIAS=timeslay \
+TIMEPARAGON_KEYSTORE_BASE64=$(base64 -w0 ~/keys/timeparagon.jks) \
+TIMEPARAGON_KEYSTORE_PASSWORD=... \
+TIMEPARAGON_KEYSTORE_KEYALIAS=timeparagon \
 ./scripts/build-android.sh --release
 
 # Build, install and launch on a connected device
 ./scripts/build-android.sh --install
 ```
 
-The APK is copied to `dist/timeslay-<abi>-<profile>.apk`. Its `versionName` is the
+The APK is copied to `dist/timeparagon-<abi>-<profile>.apk`. Its `versionName` is the
 version in the root `Cargo.toml`, and its `versionCode` is
 `major * 1000000 + minor * 1000 + patch`.
 
 The default (debug) APK is debuggable and debug-signed: use it for development
 only. `--release` builds Gradle's release variant, signs it with the keystore
-given by `TIMESLAY_KEYSTORE_BASE64` (base64-encoded), `TIMESLAY_KEYSTORE_PASSWORD`
-and `TIMESLAY_KEYSTORE_KEYALIAS` (the key uses the keystore password), and fails
+given by `TIMEPARAGON_KEYSTORE_BASE64` (base64-encoded), `TIMEPARAGON_KEYSTORE_PASSWORD`
+and `TIMEPARAGON_KEYSTORE_KEYALIAS` (the key uses the keystore password), and fails
 unless the result is non-debuggable and not signed with the Android debug key.
 Create a keystore once with `keytool -genkeypair -v -keystore
-~/keys/timeslay.jks -alias timeslay -keyalg RSA -keysize 4096 -validity
+~/keys/timeparagon.jks -alias timeparagon -keyalg RSA -keysize 4096 -validity
 10000` and keep it outside the repository. Passwords must avoid the characters
 `" ' \` $ \ & < > =`. The signing block is added to `dioxus/Dioxus.toml` only
 while the build runs.
@@ -167,7 +167,7 @@ concurrent builds are rejected while signing settings are in use.
   ```
 
 The Android build does **not** compile iced or any desktop-only crates; it uses
-`timeslay-core` only.
+`timeparagon-core` only.
 
 ### Config on the device
 
@@ -176,13 +176,13 @@ launch the app asks for the Google OAuth client ID and secret and saves them to
 the settings in its database, in private storage readable only by the app:
 
 ```text
-/data/user/0/dev.timeslay.day/files/data/timeslay/timeslay.sqlite3
+/data/user/0/dev.kofler.timeparagon/files/data/timeparagon/timeparagon.sqlite3
 ```
 
 After **Save and connect**, sign in with Google in the browser. Once database
 sync is set up, the settings made on the desktop (the OAuth client, calendars,
 task lists, places, reminders, …) arrive on their own. A `config.toml` an
-older version left in `files/config/timeslay/` is imported once and renamed
+older version left in `files/config/timeparagon/` is imported once and renamed
 `config.toml.imported`.
 
 The app sets `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_CACHE_HOME` to
@@ -237,7 +237,7 @@ saved). Life stays on the desktop.
 ## Editing
 
 Tapping anything else on the day opens a sheet with the same fields as the iced
-details pane. It writes through the same code in `timeslay-core`, so both apps
+details pane. It writes through the same code in `timeparagon-core`, so both apps
 behave alike.
 
 - **Tasks** save each field as it changes: title, description, projects, estimate,
@@ -258,13 +258,13 @@ The **↻** button lists every habit, whichever day it next falls on, and opens
 each in the same sheet. Creating items, and managing the project list, stay in
 the iced app.
 
-Time blocks are read from the app's single TimeSlay calendar
+Time blocks are read from the app's single TimeParagon calendar
 (`calendar.app_calendar`, discovered from the calendar list). A block referenced
 by a task's metadata is still recognized even if the id changes.
 
 ## Home-screen widget (Android)
 
-Add **TimeSlay → Day** from the launcher's widget picker. It shows today's
+Add **TimeParagon → Day** from the launcher's widget picker. It shows today's
 timeline, scrolled to the current time, with a live now line. Overlapping items
 share columns, and when too many overlap for the widget's width the rest collapse
 into a **+N** box. A time block lists its tasks beside its title, or under it on a
@@ -289,7 +289,7 @@ clean tree, because the manifest names the widget's resources.
 - Only the Dioxus crate enables the desktop/mobile renderers; the root
   workspace defaults to the iced package (`default-members = ["."]`).
 - **View → Calendars** which switches Google calendars,
-  task lists and TimeSlay event kinds on or off. It saves to the shared
+  task lists and TimeParagon event kinds on or off. It saves to the shared
   `calendar_sources` settings. Tasks inside a time block's popup stay visible.
 - **Settings** edits the theme, first day of the week, database sync,
   reminders and the Google client ID and secret. Other settings are edited

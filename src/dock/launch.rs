@@ -45,7 +45,7 @@ pub fn close_dock() -> Result<()> {
 	Ok(())
 }
 
-/// The `timeslay` binary: this very program when that is what is running,
+/// The `timeparagon` binary: this very program when that is what is running,
 /// and otherwise the one installed beside it.
 /// Starts a fresh copy of this process, same mode and arguments, from
 /// whatever binary is on disk now, a moment after this one has quit. The
@@ -66,7 +66,7 @@ pub fn relaunch() -> Result<()> {
 	Command::new("sh")
 		.arg("-c")
 		.arg(
-			"sleep 0.7; systemctl --user try-restart timeslay-shortcuts.service \
+			"sleep 0.7; systemctl --user try-restart timeparagon-shortcuts.service \
              >/dev/null 2>&1; exec \"$0\" \"$@\"",
 		)
 		.arg(&exe)
@@ -79,11 +79,11 @@ pub fn relaunch() -> Result<()> {
 
 pub(crate) fn main_binary() -> Result<PathBuf> {
 	if let Ok(exe) = std::env::current_exe()
-		&& exe.file_stem().is_some_and(|stem| stem == "timeslay")
+		&& exe.file_stem().is_some_and(|stem| stem == "timeparagon")
 	{
 		return Ok(exe);
 	}
-	find_binary("timeslay")
+	find_binary("timeparagon")
 }
 
 /// A binary installed beside this one, or else on `PATH`, so a manual

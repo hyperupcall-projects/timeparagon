@@ -17,7 +17,7 @@ jobs:
         with:
           components: rustfmt
       # Explicit packages avoid traversing excluded vendored dependencies.
-      - run: cargo fmt -p timeslay -p timeslay-core -p timeslay-dioxus -- --check
+      - run: cargo fmt -p timeparagon -p timeparagon-core -p timeparagon-dioxus -- --check
 
   rust-tests:
     name: Rust tests

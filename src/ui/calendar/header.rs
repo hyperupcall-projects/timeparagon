@@ -389,7 +389,7 @@ pub(super) fn event_chip_style(color: Color, ink: Color, status: button::Status)
 			color: if hovered {
 				Color::BLACK.scale_alpha(0.55)
 			} else {
-				timeslay_core::theme::EVENT_EDGE
+				timeparagon_core::theme::EVENT_EDGE
 			},
 			width: if hovered { 2.0 } else { 1.0 },
 			radius: EVENT_RADIUS.into(),

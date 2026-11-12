@@ -1,5 +1,5 @@
 //! Settings for the side-panel companion: the `panel.*` settings, which stay
-//! on this device (see `timeslay_core::settings`).
+//! on this device (see `timeparagon_core::settings`).
 //!
 //! Every field is optional; a missing table or field falls back to the
 //! defaults below, so the panel runs out of the box.
@@ -18,7 +18,7 @@ pub enum Side {
 /// What a global shortcut does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Action {
-	/// Hides TimeSlay in whatever shape it is in, or brings it back in the
+	/// Hides TimeParagon in whatever shape it is in, or brings it back in the
 	/// same shape.
 	ToggleVisibility,
 	/// Switches between the side panel and the dock.
@@ -66,7 +66,7 @@ impl Action {
 	pub fn description(self) -> &'static str {
 		match self {
 			Self::ToggleVisibility => {
-				"Hides TimeSlay, as the side panel or the dock, or shows it again exactly as it was."
+				"Hides TimeParagon, as the side panel or the dock, or shows it again exactly as it was."
 			}
 			Self::ToggleShape => "Switches between the side panel and the dock.",
 			Self::ToggleReservation => {

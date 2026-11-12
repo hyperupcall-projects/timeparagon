@@ -225,7 +225,7 @@ fn table_field(rows: &mut Rows, section: &str, name: &str, value: &Value) -> boo
 	true
 }
 
-/// One row per calendar, task list or TimeSlay source that the user hid,
+/// One row per calendar, task list or TimeParagon source that the user hid,
 /// ordered or colored.
 fn calendar_sources(rows: &mut Rows, calendar: &Map<String, Value>) {
 	#[derive(Default)]

@@ -1,4 +1,4 @@
-package dev.timeslay.day.reminders
+package dev.kofler.timeparagon.reminders
 
 import android.app.Activity
 import android.content.Intent

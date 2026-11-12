@@ -61,8 +61,8 @@ pub(super) struct TravelBox {
 	pub(super) time_block: bool,
 }
 
-pub(super) use timeslay_core::theme::TRAVEL_MIN_HEIGHT;
-use timeslay_core::theme::{
+pub(super) use timeparagon_core::theme::TRAVEL_MIN_HEIGHT;
+use timeparagon_core::theme::{
 	BLOCK_ACTION, BLOCK_FILLED, BLOCK_ROW_OVER, BLOCK_ROW_OVER_TEXT, BLOCK_ROW_TEXT, EVENT_DROPS,
 	EVENT_EDGE, HOUR_LINE, TIME_BLOCK_INSET, TIME_BLOCK_LABEL_SHARE, TIME_BLOCK_ROW,
 	TIME_BLOCK_ROW_GAP, TIME_BLOCK_SHARE, TRAVEL_EDGE,

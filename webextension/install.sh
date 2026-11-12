@@ -1,29 +1,29 @@
 #!/usr/bin/env bash
-# Registers the TimeSlay native-messaging host for the browsers installed for
-# this user. Run it after building timeslay and loading the extension.
+# Registers the TimeParagon native-messaging host for the browsers installed for
+# this user. Run it after building timeparagon and loading the extension.
 set -euo pipefail
 
-HOST="com.timeslay.webextension"
+HOST="com.timeparagon.webextension"
 # Chrome derives this ID from the "key" in manifest.json. Override it if you
 # load a build with a different key.
 CHROME_ID="${CHROME_EXTENSION_ID:-ebhljjjdkfmgagkochllhjanjncnedlo}"
-FIREFOX_ID="${FIREFOX_EXTENSION_ID:-timeslay@example.org}"
+FIREFOX_ID="${FIREFOX_EXTENSION_ID:-timeparagon@example.org}"
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "$script_dir/.." && pwd)"
 
 find_binary() {
-  if [[ -n "${TIMESLAY_BIN:-}" ]]; then
-    printf '%s\n' "$TIMESLAY_BIN"
+  if [[ -n "${TIMEPARAGON_BIN:-}" ]]; then
+    printf '%s\n' "$TIMEPARAGON_BIN"
     return
   fi
-  if command -v timeslay >/dev/null 2>&1; then
-    command -v timeslay
+  if command -v timeparagon >/dev/null 2>&1; then
+    command -v timeparagon
     return
   fi
   for candidate in \
-    "$repo_root/target/release/timeslay" \
-    "$repo_root/target/debug/timeslay"; do
+    "$repo_root/target/release/timeparagon" \
+    "$repo_root/target/debug/timeparagon"; do
     if [[ -x "$candidate" ]]; then
       printf '%s\n' "$candidate"
       return
@@ -34,8 +34,8 @@ find_binary() {
 
 if ! BIN="$(find_binary)"; then
   cat >&2 <<'EOF'
-Could not find the timeslay binary.
-Build it first (cargo build --release) or set TIMESLAY_BIN=/path/to/timeslay.
+Could not find the timeparagon binary.
+Build it first (cargo build --release) or set TIMEPARAGON_BIN=/path/to/timeparagon.
 EOF
   exit 1
 fi
@@ -49,9 +49,9 @@ fi
 # at this tiny wrapper. It is the only thing that adds the webextension command.
 # Chrome and Firefox append the caller's origin to the command line; the host
 # does not need it, so it is dropped rather than forwarded.
-DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/timeslay"
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/timeparagon"
 mkdir -p -- "$DATA_DIR"
-WRAPPER="$DATA_DIR/timeslay-webextension"
+WRAPPER="$DATA_DIR/timeparagon-webextension"
 cat > "$WRAPPER" <<EOF
 #!/bin/sh
 exec "$BIN" webextension
@@ -64,7 +64,7 @@ write_chrome_manifest() {
   cat > "$directory/$HOST.json" <<EOF
 {
   "name": "$HOST",
-  "description": "TimeSlay inbox native host",
+  "description": "TimeParagon inbox native host",
   "path": "$WRAPPER",
   "type": "stdio",
   "allowed_origins": ["chrome-extension://$CHROME_ID/"]
@@ -79,7 +79,7 @@ write_firefox_manifest() {
   cat > "$directory/$HOST.json" <<EOF
 {
   "name": "$HOST",
-  "description": "TimeSlay inbox native host",
+  "description": "TimeParagon inbox native host",
   "path": "$WRAPPER",
   "type": "stdio",
   "allowed_extensions": ["$FIREFOX_ID"]

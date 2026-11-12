@@ -1,4 +1,4 @@
-//! The renderer-agnostic half of TimeSlay.
+//! The renderer-agnostic half of TimeParagon.
 //!
 //! Both the iced application and the Dioxus day view need calendars, OAuth,
 //! Google Tasks and time-block metadata. Those modules live here without any
@@ -19,6 +19,7 @@ pub mod fsutil;
 pub mod habit_edit;
 pub mod habits;
 pub mod hex;
+mod legacy_name;
 pub mod local_changes;
 pub mod notes;
 pub mod people;

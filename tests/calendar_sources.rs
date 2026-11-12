@@ -1,7 +1,7 @@
 use iced::{Size, window};
 use iced_test::{Simulator, core::Settings};
-use timeslay::app::{CalendarMessage, SettingsMessage};
-use timeslay::{
+use timeparagon::app::{CalendarMessage, SettingsMessage};
+use timeparagon::{
 	app::{self, Message, Screen, State},
 	calendar::{self, Calendar, Event, deadline},
 	config::CalendarSettings,
@@ -116,7 +116,7 @@ fn regular_calendar_menu_shows_a_picker_at_narrow_widths() {
 			Size::new(width, 4000.0),
 			app::view(&state, window::Id::unique()),
 		);
-		assert!(ui.find("Calendar color in TimeSlay").is_ok());
+		assert!(ui.find("Calendar color in TimeParagon").is_ok());
 		ui.click("Reset to default").unwrap();
 		assert!(ui.into_messages().any(
             |message| matches!(message, Message::Settings(SettingsMessage::CalendarColorPicked(id, None)) if id == "work")
@@ -156,7 +156,7 @@ fn ordering_individual_lists_retains_hidden_sources_and_survives_restart_and_syn
 			"tasks:one",
 			"tasks",
 			"tasks:two",
-			"timeslay:sleep"
+			"timeparagon:sleep"
 		]
 	);
 	let saved = toml::to_string(&state.config).unwrap();
@@ -170,7 +170,7 @@ fn ordering_individual_lists_retains_hidden_sources_and_survives_restart_and_syn
 			"tasks:one",
 			"tasks",
 			"tasks:two",
-			"timeslay:sleep"
+			"timeparagon:sleep"
 		]
 	);
 	let order = state.config.calendar.source_order.clone();
@@ -181,7 +181,7 @@ fn ordering_individual_lists_retains_hidden_sources_and_survives_restart_and_syn
 	let _ = app::update(
 		&mut state,
 		Message::Calendar(CalendarMessage::CalendarSourceMoved(
-			"timeslay:sleep".into(),
+			"timeparagon:sleep".into(),
 			false,
 		)),
 	);
@@ -255,9 +255,9 @@ fn aggregate_toggle_controls_dated_and_timed_tasks_across_lists_without_changing
 			..base.clone()
 		};
 		task.details.description = "Notes".into();
-		task.details.task_data = Some(timeslay_core::task_db::TaskData {
+		task.details.task_data = Some(timeparagon_core::task_db::TaskData {
 			id: 100,
-			metadata: timeslay_core::timeblocking::Metadata {
+			metadata: timeparagon_core::timeblocking::Metadata {
 				deadline: Some(deadline::parse_input(notes).unwrap()),
 				..Default::default()
 			},
@@ -523,13 +523,13 @@ fn legacy_shared_source_order_expands_in_place() {
 			"personal",
 			"work",
 			"tasks",
-			"timeslay:sleep"
+			"timeparagon:sleep"
 		]
 	);
 }
 
 #[test]
-fn menu_groups_google_sources_before_all_timeslay_types() {
+fn menu_groups_google_sources_before_all_timeparagon_types() {
 	let mut state = state();
 	state
 		.calendar
@@ -540,7 +540,10 @@ fn menu_groups_google_sources_before_all_timeslay_types() {
 		.name = "Legacy tasks calendar".into();
 	state.config.calendar.app_calendar = Some("app".into());
 	// Exclude by remembered ID even if renamed, and by the canonical name.
-	for (id, name) in [("app", "Renamed app calendar"), ("duplicate", "TimeSlay")] {
+	for (id, name) in [
+		("app", "Renamed app calendar"),
+		("duplicate", "TimeParagon"),
+	] {
 		state.calendar.calendars.push(Calendar {
 			id: id.into(),
 			name: name.into(),
@@ -555,28 +558,28 @@ fn menu_groups_google_sources_before_all_timeslay_types() {
 		let mut ui = Simulator::with_size(
 			Settings::default(),
 			state.main_size,
-			timeslay::ui::calendar::view(
+			timeparagon::ui::calendar::view(
 				&state,
-				&timeslay::ui::layout::Metrics::of(state.main_size),
+				&timeparagon::ui::layout::Metrics::of(state.main_size),
 			),
 		);
 		let calendars_y = ui.find("Google Calendars").unwrap().bounds().y;
 		let tasks_y = ui.find("Google Task Lists").unwrap().bounds().y;
-		let timeslay_y = ui.find("TimeSlay").unwrap().bounds().y;
-		assert!(calendars_y < tasks_y && tasks_y < timeslay_y);
+		let timeparagon_y = ui.find("TimeParagon").unwrap().bounds().y;
+		assert!(calendars_y < tasks_y && tasks_y < timeparagon_y);
 		for label in ["Personal", "Work"] {
 			let y = ui.find(label).unwrap().bounds().y;
 			assert!(y > calendars_y && y < tasks_y);
 		}
 		for label in ["First task list", "Second task list"] {
 			let y = ui.find(label).unwrap().bounds().y;
-			assert!(y > tasks_y && y < timeslay_y);
+			assert!(y > tasks_y && y < timeparagon_y);
 		}
-		for source in calendar::sources::TimeSlaySource::ALL {
+		for source in calendar::sources::TimeParagonSource::ALL {
 			let bounds = ui.find(source.label()).unwrap().bounds();
 			assert!(
-				bounds.y > timeslay_y,
-				"{} is above TimeSlay at {width}px",
+				bounds.y > timeparagon_y,
+				"{} is above TimeParagon at {width}px",
 				source.label()
 			);
 			assert!(bounds.x >= 0.0 && bounds.x + bounds.width <= width);
@@ -590,7 +593,7 @@ fn menu_groups_google_sources_before_all_timeslay_types() {
 		assert!(ui.find("Renamed app calendar").is_err());
 		assert!(ui.find("Events").is_err());
 		let messages: Vec<_> = ui.into_messages().collect();
-		for source in calendar::sources::TimeSlaySource::ALL {
+		for source in calendar::sources::TimeParagonSource::ALL {
 			assert!(
 				messages.iter().any(|message| matches!(message,
 					Message::Calendar(CalendarMessage::CalendarToggled(id, false)) if id == source.id()
@@ -603,14 +606,14 @@ fn menu_groups_google_sources_before_all_timeslay_types() {
 }
 
 #[test]
-fn timeslay_colors_are_chosen_from_the_menu_and_not_from_settings() {
-	use calendar::sources::TimeSlaySource;
+fn timeparagon_colors_are_chosen_from_the_menu_and_not_from_settings() {
+	use calendar::sources::TimeParagonSource;
 
 	let mut state = state();
 	state.config.calendar.app_calendar = Some("app".into());
 	let base = state.calendar.event("standup").unwrap().clone();
 	state.calendar.events.clear();
-	for source in TimeSlaySource::ALL {
+	for source in TimeParagonSource::ALL {
 		let mut event = Event {
 			id: source.id().into(),
 			calendar_id: "app".into(),
@@ -619,14 +622,14 @@ fn timeslay_colors_are_chosen_from_the_menu_and_not_from_settings() {
 			..base.clone()
 		};
 		match source {
-			TimeSlaySource::Habits => event.details.habit = true,
-			TimeSlaySource::Sleep => {
+			TimeParagonSource::Habits => event.details.habit = true,
+			TimeParagonSource::Sleep => {
 				event.details.sleep = Some(calendar::sleep::Record::planned(state.calendar.day));
 			}
-			TimeSlaySource::Tasks => {
+			TimeParagonSource::Tasks => {
 				event.id = "scheduled-task".into();
 				event.calendar_id = "app".into();
-				event.details.task_data = Some(timeslay::task_db::TaskData {
+				event.details.task_data = Some(timeparagon::task_db::TaskData {
 					id: 999,
 					metadata: Default::default(),
 				});
@@ -637,11 +640,11 @@ fn timeslay_colors_are_chosen_from_the_menu_and_not_from_settings() {
 	}
 
 	let palette = calendar::colors::palette();
-	for (index, source) in TimeSlaySource::ALL.into_iter().enumerate() {
+	for (index, source) in TimeParagonSource::ALL.into_iter().enumerate() {
 		let color = palette[index];
 		let _ = app::update(
 			&mut state,
-			Message::Settings(SettingsMessage::TimeSlayColorPicked(
+			Message::Settings(SettingsMessage::TimeParagonColorPicked(
 				source.id().into(),
 				Some(color),
 			)),
@@ -652,7 +655,7 @@ fn timeslay_colors_are_chosen_from_the_menu_and_not_from_settings() {
 			.calendar
 			.events
 			.iter()
-			.find(|event| TimeSlaySource::of(event, "app") == Some(source))
+			.find(|event| TimeParagonSource::of(event, "app") == Some(source))
 			.unwrap();
 		assert_eq!(
 			event.display_color(&state.config.calendar, &state.calendar.calendars),
@@ -665,26 +668,26 @@ fn timeslay_colors_are_chosen_from_the_menu_and_not_from_settings() {
 	// The menu swatch opens the same picker as a Google source, and resetting
 	// it clears the custom color.
 	state.calendar.menu_open = true;
-	for source in TimeSlaySource::ALL {
+	for source in TimeParagonSource::ALL {
 		state.calendar.color_editor = Some(source.id().into());
 		state.main_size = Size::new(420.0, 4000.0);
 		let mut ui = Simulator::with_size(
 			Settings::default(),
 			state.main_size,
-			timeslay::ui::calendar::view(
+			timeparagon::ui::calendar::view(
 				&state,
-				&timeslay::ui::layout::Metrics::of(state.main_size),
+				&timeparagon::ui::layout::Metrics::of(state.main_size),
 			),
 		);
 		let title = format!("Color for {}", source.label());
 		assert!(ui.find(title.as_str()).is_ok(), "no picker for {title}");
 		ui.click("Reset to default").unwrap();
 		assert!(ui.into_messages().any(|message| matches!(message,
-			Message::Settings(SettingsMessage::TimeSlayColorPicked(id, None)) if id == source.id()
+			Message::Settings(SettingsMessage::TimeParagonColorPicked(id, None)) if id == source.id()
 		)));
 		let _ = app::update(
 			&mut state,
-			Message::Settings(SettingsMessage::TimeSlayColorPicked(
+			Message::Settings(SettingsMessage::TimeParagonColorPicked(
 				source.id().into(),
 				None,
 			)),
@@ -700,17 +703,17 @@ fn timeslay_colors_are_chosen_from_the_menu_and_not_from_settings() {
 		Size::new(420.0, 4000.0),
 		app::view(&state, window::Id::unique()),
 	);
-	assert!(ui.find("TimeSlay colors").is_err());
+	assert!(ui.find("TimeParagon colors").is_err());
 }
 
 #[test]
-fn timeslay_type_toggles_filter_independently_and_persist_across_sync() {
-	use calendar::sources::TimeSlaySource;
+fn timeparagon_type_toggles_filter_independently_and_persist_across_sync() {
+	use calendar::sources::TimeParagonSource;
 	let mut state = state();
 	state.config.calendar.app_calendar = Some("app".into());
 	let base = state.calendar.event("standup").unwrap().clone();
 	state.calendar.events.clear();
-	for source in TimeSlaySource::ALL {
+	for source in TimeParagonSource::ALL {
 		let mut event = Event {
 			id: source.id().into(),
 			calendar_id: "app".into(),
@@ -719,14 +722,14 @@ fn timeslay_type_toggles_filter_independently_and_persist_across_sync() {
 			..base.clone()
 		};
 		match source {
-			TimeSlaySource::Habits => event.details.habit = true,
-			TimeSlaySource::Sleep => {
+			TimeParagonSource::Habits => event.details.habit = true,
+			TimeParagonSource::Sleep => {
 				event.details.sleep = Some(calendar::sleep::Record::planned(state.calendar.day));
 			}
-			TimeSlaySource::Tasks => {
+			TimeParagonSource::Tasks => {
 				event.id = "scheduled-task".into();
 				event.calendar_id = "app".into();
-				event.details.task_data = Some(timeslay::task_db::TaskData {
+				event.details.task_data = Some(timeparagon::task_db::TaskData {
 					id: 999,
 					metadata: Default::default(),
 				});
@@ -743,7 +746,7 @@ fn timeslay_type_toggles_filter_independently_and_persist_across_sync() {
 		..base
 	});
 	let original = state.calendar.events.clone();
-	for source in TimeSlaySource::ALL {
+	for source in TimeParagonSource::ALL {
 		let _ = app::update(
 			&mut state,
 			Message::Calendar(CalendarMessage::CalendarToggled(source.id().into(), false)),
@@ -760,7 +763,7 @@ fn timeslay_type_toggles_filter_independently_and_persist_across_sync() {
 		assert!(
 			!visible
 				.iter()
-				.any(|event| TimeSlaySource::of(event, "app") == Some(source))
+				.any(|event| TimeParagonSource::of(event, "app") == Some(source))
 		);
 		// Check the grid and agenda filtering as well as the shared iterator.
 		for event in state
@@ -777,7 +780,7 @@ fn timeslay_type_toggles_filter_independently_and_persist_across_sync() {
 					.calendar
 					.all_day_events_on(state.calendar.day, &state.config.calendar),
 			) {
-			assert_ne!(TimeSlaySource::of(event, "app"), Some(source));
+			assert_ne!(TimeParagonSource::of(event, "app"), Some(source));
 		}
 		let _ = app::update(
 			&mut state,
@@ -794,8 +797,8 @@ fn timeslay_type_toggles_filter_independently_and_persist_across_sync() {
 }
 
 #[test]
-fn opening_the_grouped_menu_preserves_the_old_timeslay_calendar_hide() {
-	use calendar::sources::TimeSlaySource;
+fn opening_the_grouped_menu_preserves_the_old_timeparagon_calendar_hide() {
+	use calendar::sources::TimeParagonSource;
 	let mut state = state();
 	state.config.calendar.app_calendar = Some("app".into());
 	state.config.calendar.disabled = vec!["app".into()];
@@ -804,18 +807,18 @@ fn opening_the_grouped_menu_preserves_the_old_timeslay_calendar_hide() {
 		Message::Calendar(CalendarMessage::CalendarMenuToggled),
 	);
 	assert!(!state.config.calendar.disabled.iter().any(|id| id == "app"));
-	for source in TimeSlaySource::ALL {
+	for source in TimeParagonSource::ALL {
 		assert_eq!(
 			state
 				.calendar
 				.calendar_enabled(source.id(), &state.config.calendar),
-			source == TimeSlaySource::Sleep,
+			source == TimeParagonSource::Sleep,
 		);
 	}
 	let _ = app::update(
 		&mut state,
 		Message::Calendar(CalendarMessage::CalendarToggled(
-			TimeSlaySource::Habits.id().into(),
+			TimeParagonSource::Habits.id().into(),
 			true,
 		)),
 	);
@@ -830,12 +833,12 @@ fn opening_the_grouped_menu_preserves_the_old_timeslay_calendar_hide() {
 	assert!(
 		state
 			.calendar
-			.calendar_enabled(TimeSlaySource::Habits.id(), &state.config.calendar)
+			.calendar_enabled(TimeParagonSource::Habits.id(), &state.config.calendar)
 	);
 	assert!(
 		!state
 			.calendar
-			.calendar_enabled(TimeSlaySource::TimeBlocks.id(), &state.config.calendar)
+			.calendar_enabled(TimeParagonSource::TimeBlocks.id(), &state.config.calendar)
 	);
 }
 
@@ -877,12 +880,15 @@ fn legacy_all_day_events_are_preserved_without_the_removed_source() {
 		.config
 		.calendar
 		.disabled
-		.push("timeslay:events".into());
+		.push("timeparagon:events".into());
 	let mut event = state.calendar.events[0].clone();
 	event.calendar_id = "tasks".into();
 	event.all_day = true;
 	event.details = Default::default();
-	assert_eq!(calendar::sources::TimeSlaySource::of(&event, "tasks"), None);
+	assert_eq!(
+		calendar::sources::TimeParagonSource::of(&event, "tasks"),
+		None
+	);
 	assert!(calendar::event_enabled(
 		&state.calendar.calendars,
 		&event,

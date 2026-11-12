@@ -1,15 +1,15 @@
-//! Renders TimeSlay's built-in tones as WAV files.
+//! Renders TimeParagon's built-in tones as WAV files.
 //!
 //! `scripts/build-android.sh` runs this into the generated project's
 //! `res/raw`, where notification channels can play them:
 //!
 //! ```sh
-//! cargo run -p timeslay-core --example render_sounds -- path/to/res/raw
+//! cargo run -p timeparagon-core --example render_sounds -- path/to/res/raw
 //! ```
 
 use std::path::PathBuf;
 
-use timeslay_core::sounds::{Tone, wav};
+use timeparagon_core::sounds::{Tone, wav};
 
 fn main() -> std::io::Result<()> {
 	let directory = std::env::args_os()

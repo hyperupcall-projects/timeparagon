@@ -35,10 +35,10 @@ pub struct TaskData {
 /// The schema this build sets up, kept in SQLite's `user_version`.
 ///
 /// Schema changes are applied transactionally by [`Database::set_up`].
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 /// Older schemas [`Database::set_up`] can bring up to date.
-const UPGRADABLE: std::ops::RangeInclusive<i64> = 2..=4;
+const UPGRADABLE: std::ops::RangeInclusive<i64> = 2..=5;
 
 fn schema_version(db: &Connection) -> Result<i64, String> {
 	db.query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -100,6 +100,8 @@ impl Database {
 		// already done, instead of racing it.
 		let tx = rusqlite::Transaction::new_unchecked(db, TransactionBehavior::Immediate)
 			.map_err(|e| e.to_string())?;
+		// Schema 6: the app's own tables lose the old project name, TimeSlay.
+		crate::legacy_name::rename_schema(&tx).map_err(|e| e.to_string())?;
 		tx.execute_batch("
             CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, metadata TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS task_aliases (source TEXT PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id));
@@ -131,6 +133,8 @@ impl Database {
 			{
 				log::error!("could not import {}: {error}", file.display());
 			}
+			// After the import, which may bring in sources under their old IDs.
+			crate::legacy_name::rename_source_ids(db).map_err(|e| e.to_string())?;
 			// Readers no longer wait on a writer, so a poll on the UI thread
 			// cannot stall behind the sync worker's transaction. The mode is
 			// kept by the file. It cannot change while another connection is
@@ -213,12 +217,12 @@ impl Database {
 			tx.execute_batch(
                 "DELETE FROM google_entities WHERE id IN (SELECT entity FROM google_operations);
                  DELETE FROM google_entities WHERE acknowledged_at IS NULL AND sending_since IS NULL;
-                 DROP TRIGGER IF EXISTS timeslay_change_google_operations_insert;
-                 DROP TRIGGER IF EXISTS timeslay_change_google_operations_update;
-                 DROP TRIGGER IF EXISTS timeslay_change_google_operations_delete;
+                 DROP TRIGGER IF EXISTS timeparagon_change_google_operations_insert;
+                 DROP TRIGGER IF EXISTS timeparagon_change_google_operations_update;
+                 DROP TRIGGER IF EXISTS timeparagon_change_google_operations_delete;
                  DROP TABLE IF EXISTS google_operation_progress;
                  DROP TABLE IF EXISTS google_operations;
-                 DELETE FROM timeslay_change_counters WHERE name='google.queue';",
+                 DELETE FROM timeparagon_change_counters WHERE name='google.queue';",
             )?;
 		}
 		Ok(())
@@ -363,7 +367,7 @@ pub fn path() -> Option<PathBuf> {
 	Some(
 		crate::config::project_dirs()?
 			.data_local_dir()
-			.join("timeslay.sqlite3"),
+			.join("timeparagon.sqlite3"),
 	)
 }
 
@@ -442,7 +446,7 @@ mod tests {
 					.unwrap()
 					.as_nanos()
 			))
-			.join("timeslay.sqlite3")
+			.join("timeparagon.sqlite3")
 	}
 	fn event(id: &str) -> Event {
 		let mut event = crate::calendar::sample_snapshot().events.remove(0);
@@ -530,7 +534,7 @@ mod tests {
 			db.execute_batch(
                 "CREATE TABLE google_operations (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, payload TEXT NOT NULL, entity TEXT NOT NULL, created_at TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, error TEXT, lease_until INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1, dead_at TEXT);
                  CREATE TABLE google_operation_progress (operation_id INTEGER PRIMARY KEY REFERENCES google_operations(id) ON DELETE CASCADE, data TEXT NOT NULL);
-                 CREATE TRIGGER timeslay_change_google_operations_insert AFTER INSERT ON google_operations BEGIN SELECT 1; END;
+                 CREATE TRIGGER timeparagon_change_google_operations_insert AFTER INSERT ON google_operations BEGIN SELECT 1; END;
                  INSERT INTO google_operations(kind,payload,entity,created_at) VALUES('Edit event','{}','cal
 unsent','now');
                  INSERT INTO google_entities(id,event,acknowledged_at) VALUES('cal

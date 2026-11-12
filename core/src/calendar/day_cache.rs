@@ -473,7 +473,7 @@ impl Scratch {
 			.unwrap_or_default();
 
 		let path = std::env::temp_dir().join(format!(
-			"timeslay-month-cache-{}-{unique}-{name}",
+			"timeparagon-month-cache-{}-{unique}-{name}",
 			std::process::id()
 		));
 		let _ = std::fs::remove_dir_all(&path);

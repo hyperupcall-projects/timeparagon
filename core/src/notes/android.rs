@@ -24,7 +24,7 @@ pub fn request(request: Value) -> io::Result<Value> {
 				&[],
 			)?
 			.l()?;
-		let name = env.new_string("dev.timeslay.day.notes.NotesStorage")?;
+		let name = env.new_string("dev.kofler.timeparagon.notes.NotesStorage")?;
 		let class = env
 			.call_method(
 				loader,

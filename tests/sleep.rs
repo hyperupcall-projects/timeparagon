@@ -1,10 +1,10 @@
 use chrono::{Duration, Local, NaiveDate, TimeZone};
 use iced::Size;
 use iced_test::{Simulator, core::Settings};
-use timeslay::app::{
+use timeparagon::app::{
 	CalendarMessage, EventDraftMessage, EventEditMessage, EventMessage, SettingsMessage,
 };
-use timeslay::{
+use timeparagon::{
 	app::{self, Message, State},
 	calendar::{self, sleep},
 	config::Config,
@@ -124,7 +124,7 @@ fn sleep_has_a_fixed_gray_source_and_an_independent_persisted_toggle() {
 		sleep.display_color(&state.config.calendar, &state.calendar.calendars),
 		sleep::COLOR
 	);
-	assert!(!timeslay::timeblocking::is_block(
+	assert!(!timeparagon::timeblocking::is_block(
 		sleep,
 		&state.config.calendar
 	));
@@ -417,8 +417,9 @@ fn actual_sleep_is_timed_shown_and_editable_beside_the_plan() {
 	let mut state = state();
 	let night = state.calendar.event("sleep").unwrap().clone();
 	// Half an hour before the planned 01:00 bedtime.
-	let _clock =
-		timeslay::clock::freeze((night.start - Duration::minutes(30)).with_timezone(&chrono::Utc));
+	let _clock = timeparagon::clock::freeze(
+		(night.start - Duration::minutes(30)).with_timezone(&chrono::Utc),
+	);
 	let _ = app::update(
 		&mut state,
 		Message::Event(EventMessage::EventOpened("sleep".into())),
@@ -455,7 +456,7 @@ fn actual_sleep_is_timed_shown_and_editable_beside_the_plan() {
 
 	// What the write hands back: the night with its timer running.
 	let mut started = night.clone();
-	sleep::apply_timer(&mut started, sleep::Timer::Start, timeslay::clock::now()).unwrap();
+	sleep::apply_timer(&mut started, sleep::Timer::Start, timeparagon::clock::now()).unwrap();
 	let _ = app::update(
 		&mut state,
 		Message::Settings(SettingsMessage::SleepTimerSaved(
@@ -465,7 +466,7 @@ fn actual_sleep_is_timed_shown_and_editable_beside_the_plan() {
 	);
 	let active = state.calendar.active_sleep().expect("timer running");
 	assert_eq!(
-		sleep::timer(active, timeslay::clock::now()),
+		sleep::timer(active, timeparagon::clock::now()),
 		Some(sleep::Timer::Finish)
 	);
 	let draft = state.calendar.edit_draft.as_ref().unwrap();

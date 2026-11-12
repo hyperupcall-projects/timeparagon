@@ -14,7 +14,7 @@ use crate::habits::{
 	Action, Bucket, FIRST_WEEKDAY, Form, FormAction, FrequencyKind, Habit, Icons, Kind, Log, Menu,
 	Outcome, Section, SectionEdit, Series, SortKey, Status,
 };
-use timeslay_core::habits::{self as model, PALETTE_SIZE, palette_color};
+use timeparagon_core::habits::{self as model, PALETTE_SIZE, palette_color};
 
 use super::habits_charts::{self as charts, CalendarChart, DayMark, FrequencyChart};
 use super::layout::Metrics;
@@ -1539,7 +1539,7 @@ pub fn day_dialog<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messag
 			column![
 				text(format!(
 					"Total: {} {}",
-					timeslay_core::habits::format_amount(total),
+					timeparagon_core::habits::format_amount(total),
 					measure.unit
 				))
 				.size(metrics.label() - 1.0)
@@ -2966,7 +2966,7 @@ mod tests {
 		let day = NaiveDate::from_ymd_opt(2026, 10, 28).unwrap();
 		crate::calendar::api::HabitEvent {
 			id: id.into(),
-			calendar_id: "timeslay".into(),
+			calendar_id: "timeparagon".into(),
 			title: title.into(),
 			notes: String::new(),
 			start: crate::calendar::at_clock(day, 9, 0),

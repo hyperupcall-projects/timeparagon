@@ -613,7 +613,7 @@ pub(crate) fn kind_chip<'a>(kind: String, color: Color, metrics: &Metrics) -> El
 	.style(move |_| container::Style {
 		background: Some(color.into()),
 		border: iced::Border {
-			color: timeslay_core::theme::EVENT_EDGE,
+			color: timeparagon_core::theme::EVENT_EDGE,
 			width: 1.0,
 			radius: 999.0.into(),
 		},

@@ -1,6 +1,6 @@
 //! Notes: Markdown files in the notes directory, a setting of each device.
 //!
-//! The files are handled in `timeslay_core::notes`, the same as on the
+//! The files are handled in `timeparagon_core::notes`, the same as on the
 //! desktop. This is the phone's screen for them, and the section that
 //! shows a note's connections in the editors.
 
@@ -9,11 +9,11 @@ use std::time::Duration;
 use chrono::NaiveDate;
 use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
-use timeslay_core::calendar::{self, Event};
-use timeslay_core::config::CalendarSettings;
-use timeslay_core::notes::markdown::{self, Block, Inline, Marker};
-use timeslay_core::notes::{self, Library, Link, LinkKind, Pastel};
-use timeslay_core::timeblocking as tb;
+use timeparagon_core::calendar::{self, Event};
+use timeparagon_core::config::CalendarSettings;
+use timeparagon_core::notes::markdown::{self, Block, Inline, Marker};
+use timeparagon_core::notes::{self, Library, Link, LinkKind, Pastel};
+use timeparagon_core::timeblocking as tb;
 
 /// How long typing must pause before the local copy is written.
 const SAVE_AFTER: Duration = Duration::from_millis(400);
@@ -110,7 +110,7 @@ impl NotesStore {
 		if !value.trim().is_empty() && !value.trim().starts_with("content://") {
 			return Err("Use Choose folder to grant access to your notes folder".into());
 		}
-		let settings = timeslay_core::config::NotesSettings {
+		let settings = timeparagon_core::config::NotesSettings {
 			directory: value.trim().into(),
 		};
 		let path = settings.path();
@@ -135,7 +135,7 @@ impl NotesStore {
 				next.saved(&saved);
 			}
 		}
-		timeslay_core::config::save_notes_directory(&settings.directory)
+		timeparagon_core::config::save_notes_directory(&settings.directory)
 			.map_err(|e| e.to_string())?;
 		self.library.set(next);
 		self.directory.set(path.clone());
@@ -202,9 +202,9 @@ impl NotesStore {
 
 /// Folder setup is device-local; sync the chosen folders to share Markdown.
 #[component]
-pub fn NotesSettings(config: Signal<timeslay_core::config::Config>) -> Element {
+pub fn NotesSettings(config: Signal<timeparagon_core::config::Config>) -> Element {
 	let store = use_context::<NotesStore>();
-	let mut input = use_signal(|| timeslay_core::config::NotesSettings::load().directory);
+	let mut input = use_signal(|| timeparagon_core::config::NotesSettings::load().directory);
 	let mut problem = use_signal(|| None::<String>);
 	#[cfg(target_os = "android")]
 	use_future(move || async move {

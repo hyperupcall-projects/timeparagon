@@ -10,8 +10,8 @@ There is one database per device:
 
 | Platform | Path |
 | --- | --- |
-| Linux | `$XDG_DATA_HOME/timeslay/timeslay.sqlite3` (normally `~/.local/share/timeslay/timeslay.sqlite3`) |
-| Android | `<app files dir>/data/timeslay/timeslay.sqlite3` |
+| Linux | `$XDG_DATA_HOME/timeparagon/timeparagon.sqlite3` (normally `~/.local/share/timeparagon/timeparagon.sqlite3`) |
+| Android | `<app files dir>/data/timeparagon/timeparagon.sqlite3` |
 | Tests | A scratch directory per run (see `config::isolated`) |
 
 The path comes from `task_db::path()` (`core/src/task_db.rs`). Next to it,
@@ -38,11 +38,11 @@ The schema version is stored in `PRAGMA user_version`.
 | `user_version` | Meaning |
 | --- | --- |
 | `0` | New file. `Database::open` creates the schema. |
-| `2`, `3`, `4` | Upgraded to 5 on open: see below. |
-| `5` | Current (`task_db::SCHEMA_VERSION`). |
-| anything else | Refused: `Unsupported database schema N; expected 5`. |
+| `2`, `3`, `4`, `5` | Upgraded to 6 on open: see below. |
+| `6` | Current (`task_db::SCHEMA_VERSION`). Like 5, with the app's tables, indexes and triggers prefixed `timeparagon_` instead of `timeslay_`, and the built-in calendar sources' IDs prefixed `timeparagon:` instead of `timeslay:`. |
+| anything else | Refused: `Unsupported database schema N; expected 6`. |
 
-Builds from before version 5 refuse a version 5 file, so every TimeSlay
+Builds from before version 5 refuse a version 5 file, so every TimeParagon
 process on a device (panel, dock, shortcut daemon, browser host) has to be
 upgraded together, and a device still on an older build stops syncing (it
 refuses the settings rows it receives) until it is upgraded.
@@ -54,7 +54,7 @@ file is stamped with the current version, setup is skipped, because the apps
 open the database many times a minute.
 
 **4 → 5** creates the [settings tables](#settings), their journal triggers and
-change counters, and an index on `timeslay_sync_edits(clock)`. Then, for the
+change counters, and an index on `timeparagon_sync_edits(clock)`. Then, for the
 device's own database only, it imports `config.toml` once (see
 [Upgrading from `config.toml`](./data-model.md#upgrading-from-configtoml)).
 
@@ -80,10 +80,10 @@ manifest and runs an integrity check before publishing the backup.
 erDiagram
     tasks ||--o{ task_aliases : "task_id"
     tasks ||--o| google_task_backend_state : "task_id (logical)"
-    documents ||--o{ timeslay_sync_edits : "journaled by trigger"
-    timeslay_sync_snapshots ||--o{ timeslay_sync_edits : "folds (JSON list)"
-    timeslay_sync_folded }o--|| timeslay_sync_edits : "tombstone of"
-    settings_tables ||--o{ timeslay_sync_edits : "journaled by trigger"
+    documents ||--o{ timeparagon_sync_edits : "journaled by trigger"
+    timeparagon_sync_snapshots ||--o{ timeparagon_sync_edits : "folds (JSON list)"
+    timeparagon_sync_folded }o--|| timeparagon_sync_edits : "tombstone of"
+    settings_tables ||--o{ timeparagon_sync_edits : "journaled by trigger"
 
     tasks {
         INTEGER id PK
@@ -121,16 +121,16 @@ erDiagram
         INTEGER task_id PK
         TEXT data
     }
-    timeslay_change_counters {
+    timeparagon_change_counters {
         TEXT name PK
         INTEGER value
     }
-    timeslay_sync_control {
+    timeparagon_sync_control {
         INTEGER singleton PK
         INTEGER projecting
         INTEGER generation
     }
-    timeslay_sync_edits {
+    timeparagon_sync_edits {
         TEXT id PK
         TEXT document
         TEXT before_json
@@ -138,7 +138,7 @@ erDiagram
         INTEGER clock
         INTEGER uploaded
     }
-    timeslay_sync_snapshots {
+    timeparagon_sync_snapshots {
         TEXT id PK
         TEXT document
         TEXT after_json
@@ -147,7 +147,7 @@ erDiagram
         INTEGER uploaded
         INTEGER seen_at
     }
-    timeslay_sync_folded {
+    timeparagon_sync_folded {
         TEXT id PK
         INTEGER remote_deleted
         INTEGER folded_at
@@ -170,8 +170,8 @@ The tables fall into six groups:
 | [Google cache](#google-cache) | `calendar_months`, `google_task_records` | `task_db::Database::set_up` |
 | [Google writes](#google-writes) | `google_entities`, `google_id_map`, `google_task_backend_state` | `task_db::Database::set_up` |
 | [Settings](#settings) | `settings`, `device_settings`, `calendar_sources`, `sleep_schedule`, `sleep_schedule_changes`, `weekly_task_order`, `places`, `event_places`, `travel_modes`, `travel_routes`, `reminders` | `settings::schema::CREATE`, from `task_db::Database::set_up` |
-| [Change detection](#change-detection) | `timeslay_change_counters` + triggers | `local_changes::install` |
-| [Device sync](#device-sync-turso) | `timeslay_sync_control`, `timeslay_sync_edits`, `timeslay_sync_snapshots`, `timeslay_sync_folded` + triggers | `database_sync::enroll`, `database_sync::install_snapshots` |
+| [Change detection](#change-detection) | `timeparagon_change_counters` + triggers | `local_changes::install` |
+| [Device sync](#device-sync-turso) | `timeparagon_sync_control`, `timeparagon_sync_edits`, `timeparagon_sync_snapshots`, `timeparagon_sync_folded` + triggers | `database_sync::enroll`, `database_sync::install_snapshots` |
 
 None of the Google tables are replicated between devices. Six `documents`
 rows and the rows of every settings table but `device_settings` are. See
@@ -181,9 +181,9 @@ rows and the rows of every settings table but `device_settings` are. See
 
 ## Tasks
 
-TimeSlay gives every task a stable integer ID of its own, separate from
+TimeParagon gives every task a stable integer ID of its own, separate from
 Google's IDs. A task's Google ID changes when it moves between Google Tasks and
-Google Calendar or between task lists, but its TimeSlay ID stays the same.
+Google Calendar or between task lists, but its TimeParagon ID stays the same.
 This ID is what time blocks, work sessions and recurring copies refer to.
 
 New IDs are random 62-bit integers ≥ 100, so two devices cannot pick the same
@@ -195,12 +195,12 @@ when IDs were sequential; nothing reads or writes it any more.
 
 ```sql
 CREATE TABLE tasks (
-  id       INTEGER PRIMARY KEY,   -- TimeSlay task ID, >= 100
+  id       INTEGER PRIMARY KEY,   -- TimeParagon task ID, >= 100
   metadata TEXT NOT NULL          -- JSON: timeblocking::Metadata
 );
 ```
 
-A local **cache** of each task's TimeSlay metadata. The authoritative copy is
+A local **cache** of each task's TimeParagon metadata. The authoritative copy is
 kept in Google, alongside the task: in the notes footer for an undated
 Google Task, or in `ttData*` extended properties for a dated Calendar task. See
 [Task metadata](./data-model.md#task-metadata) for the JSON fields.
@@ -214,7 +214,7 @@ CREATE TABLE task_aliases (
 );
 ```
 
-Maps each Google identity a task has had to its TimeSlay ID. `source` is
+Maps each Google identity a task has had to its TimeParagon ID. `source` is
 `timeblocking::block_key(event)`, which is `calendar_id + "/" + id`. For a
 Google Task, that is `tasks:<listId>/task:<taskId>`.
 
@@ -481,7 +481,7 @@ CREATE TABLE settings (
 CREATE TABLE device_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 CREATE TABLE calendar_sources (
-  id       TEXT PRIMARY KEY,           -- Google calendar ID, "tasks:<list>", "tasks:", "timeslay:habits", …
+  id       TEXT PRIMARY KEY,           -- Google calendar ID, "tasks:<list>", "tasks:", "timeparagon:habits", …
   hidden   INTEGER NOT NULL DEFAULT 0, -- switched off in the calendar menu
   position INTEGER,                    -- left-to-right order of overlapping events; NULL = unordered
   color    TEXT                        -- "#RRGGBB" instead of the source's own; NULL = its own
@@ -552,10 +552,10 @@ processes. Parsing every document on every poll was too expensive, so triggers
 increment counters, and a poll only re-reads what has changed
 (`local_changes::read`).
 
-### `timeslay_change_counters`
+### `timeparagon_change_counters`
 
 ```sql
-CREATE TABLE timeslay_change_counters (
+CREATE TABLE timeparagon_change_counters (
   name  TEXT PRIMARY KEY,
   value INTEGER NOT NULL
 );
@@ -578,10 +578,10 @@ A counter that has never been incremented reads as `0`.
 Triggers (`AFTER` each of `INSERT`, `UPDATE`, `DELETE`):
 
 ```
-timeslay_change_documents_{insert,update,delete}
-timeslay_change_google_entities_{insert,update,delete}
-timeslay_change_google_id_map_{insert,update,delete}
-timeslay_change_<settings table>_{insert,update,delete}
+timeparagon_change_documents_{insert,update,delete}
+timeparagon_change_google_entities_{insert,update,delete}
+timeparagon_change_google_id_map_{insert,update,delete}
+timeparagon_change_<settings table>_{insert,update,delete}
 ```
 
 A trigger body cannot rely on UPSERT or `OR IGNORE`, because the outer
@@ -605,21 +605,21 @@ widget and older builds can still read.
 
 ```mermaid
 flowchart LR
-    A[App writes documents] -- trigger --> E[timeslay_sync_edits<br/>uploaded=0]
-    E -- worker push --> R[(Turso table<br/>timeslay_revisions_v1)]
-    R -- worker pull --> E2[timeslay_sync_edits / snapshots<br/>uploaded=1]
+    A[App writes documents] -- trigger --> E[timeparagon_sync_edits<br/>uploaded=0]
+    E -- worker push --> R[(Turso table<br/>timeparagon_revisions_v1)]
+    R -- worker pull --> E2[timeparagon_sync_edits / snapshots<br/>uploaded=1]
     E2 -- model::project --> P[documents<br/>projecting=1, generation+1]
-    E2 -- compact --> S[timeslay_sync_snapshots]
-    S -- after GRACE --> F[timeslay_sync_folded<br/>tombstones]
+    E2 -- compact --> S[timeparagon_sync_snapshots]
+    S -- after GRACE --> F[timeparagon_sync_folded<br/>tombstones]
 ```
 
 Only the sync worker, which holds an OS lock, opens the Turso replica.
 Credentials, Google caches and device preferences are never replicated.
 
-### `timeslay_sync_control`
+### `timeparagon_sync_control`
 
 ```sql
-CREATE TABLE timeslay_sync_control (
+CREATE TABLE timeparagon_sync_control (
   singleton  INTEGER PRIMARY KEY CHECK(singleton = 1),
   projecting INTEGER NOT NULL DEFAULT 0,  -- 1 while sync writes documents
   generation INTEGER NOT NULL DEFAULT 0   -- bumped whenever sync changed a document
@@ -636,10 +636,10 @@ The row exists exactly when the file is **enrolled**. Enrollment is atomic and
 happens during schema setup. It also journals the current value of every
 shared document present at that moment as the device's first edit.
 
-### `timeslay_sync_edits`
+### `timeparagon_sync_edits`
 
 ```sql
-CREATE TABLE timeslay_sync_edits (
+CREATE TABLE timeparagon_sync_edits (
   id          TEXT PRIMARY KEY,          -- 32 hex chars, random
   document    TEXT NOT NULL,             -- documents.key
   before_json TEXT,                      -- whole document before; NULL = absent
@@ -650,22 +650,22 @@ CREATE TABLE timeslay_sync_edits (
 ```
 
 There is one row per save of a shared document, written by trigger. `clock`
-is indexed (`timeslay_sync_edits_clock`), since every trigger reads its maximum:
+is indexed (`timeparagon_sync_edits_clock`), since every trigger reads its maximum:
 
 ```sql
-CREATE TRIGGER timeslay_sync_update AFTER UPDATE ON documents
+CREATE TRIGGER timeparagon_sync_update AFTER UPDATE ON documents
   WHEN NEW.key IN ('habits','alarms','shared.notepad','shared.brain_dump',
                    'shared.projects','shared.task_work')
    AND (OLD.value IS NOT NEW.value)
-   AND (SELECT projecting FROM timeslay_sync_control WHERE singleton=1) = 0
+   AND (SELECT projecting FROM timeparagon_sync_control WHERE singleton=1) = 0
 BEGIN
-  INSERT INTO timeslay_sync_edits VALUES(
+  INSERT INTO timeparagon_sync_edits VALUES(
     lower(hex(randomblob(16))), NEW.key, OLD.value, NEW.value,
-    (SELECT coalesce(max(clock),0)+1 FROM timeslay_sync_edits), 0);
+    (SELECT coalesce(max(clock),0)+1 FROM timeparagon_sync_edits), 0);
 END;
 ```
 
-`timeslay_sync_insert` (with `before = NULL`) and `timeslay_sync_delete`
+`timeparagon_sync_insert` (with `before = NULL`) and `timeparagon_sync_delete`
 (with `after = NULL`) follow the same pattern. Enrollment drops and recreates
 any old trigger that still mentions `shared.todos`.
 
@@ -693,7 +693,7 @@ was edited in it meanwhile, and each row is snapshotted and compacted on its
 own.
 
 Four triggers per table journal what the apps do (`database_sync::rows`):
-`timeslay_sync_<table>_insert`, `_update` (when the row changed),
+`timeparagon_sync_<table>_insert`, `_update` (when the row changed),
 `_rekey` (a changed primary key journals a deletion and an insertion) and
 `_delete`. Like the document triggers they skip writes made while
 `projecting = 1`. Enrollment creates them, replacing any that differ from
@@ -705,10 +705,10 @@ journal holds differs from the table (columns the journal lacks, from an
 older build, are not compared), so a settled row is not rewritten every
 cycle.
 
-### `timeslay_sync_snapshots`
+### `timeparagon_sync_snapshots`
 
 ```sql
-CREATE TABLE timeslay_sync_snapshots (
+CREATE TABLE timeparagon_sync_snapshots (
   id         TEXT PRIMARY KEY,          -- "snapshot-<32 hex>"
   document   TEXT NOT NULL,
   after_json TEXT,                      -- whole document as of everything folded
@@ -730,10 +730,10 @@ If two devices fold at the same moment, there are two heads. The later one by
 they replay on top of the winner, so nothing is lost. An unsent local snapshot
 that loses a race is withdrawn before it is ever uploaded.
 
-### `timeslay_sync_folded`
+### `timeparagon_sync_folded`
 
 ```sql
-CREATE TABLE timeslay_sync_folded (
+CREATE TABLE timeparagon_sync_folded (
   id             TEXT PRIMARY KEY,         -- ID of a deleted edit or snapshot
   remote_deleted INTEGER NOT NULL DEFAULT 0,
   folded_at      INTEGER NOT NULL          -- unix seconds
@@ -751,7 +751,7 @@ with `remote_deleted = 1` are removed after 30 days.
 
 ```sql
 -- in turso/replica.db, replicated to the server
-CREATE TABLE timeslay_revisions_v1 (
+CREATE TABLE timeparagon_revisions_v1 (
   id      TEXT PRIMARY KEY,
   payload TEXT NOT NULL      -- JSON: database_sync::model::Edit
 );
@@ -817,7 +817,7 @@ SELECT replace(id, char(10), ' / ') AS item, sending_since,
 FROM google_entities WHERE sending_since IS NOT NULL;
 
 -- Local edits not yet sent to the sync server
-SELECT document, count(*) FROM timeslay_sync_edits
+SELECT document, count(*) FROM timeparagon_sync_edits
 WHERE uploaded = 0 GROUP BY document;
 
 -- A task's metadata by any Google identity
@@ -833,7 +833,7 @@ UNION ALL SELECT 'device', key, value FROM device_settings ORDER BY 2;
 
 -- Settings rows not yet sent to the sync server, by table
 SELECT substr(document, 1, instr(document, ':') - 1) AS tbl, count(*)
-FROM timeslay_sync_edits WHERE uploaded = 0 AND document GLOB '*:*' GROUP BY tbl;
+FROM timeparagon_sync_edits WHERE uploaded = 0 AND document GLOB '*:*' GROUP BY tbl;
 
 -- Habits by name
 SELECT json_extract(h.value,'$.id'), json_extract(h.value,'$.name')

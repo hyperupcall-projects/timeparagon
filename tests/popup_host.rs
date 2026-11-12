@@ -1,7 +1,7 @@
 //! Shared dialogs use the floating editor; task creation stays in the sidebar.
 use iced::{Size, window};
 use iced_test::{Simulator, core::Settings};
-use timeslay::{
+use timeparagon::{
 	app::{self, Message, State},
 	calendar, inbox,
 	ui::controls::Picker,

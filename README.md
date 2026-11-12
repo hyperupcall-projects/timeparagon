@@ -1,26 +1,26 @@
-# TimeSlay
+# TimeParagon
 
 Easily manage your life using a single app. It is designed to minimize friction and maximize your time spent in flow state.
 
-I would strongly recommend this app to anybody; it's personally an absolute game changer. But keep in mind that it requires a bit of setup to use and it's only meant to be used with [KDE Plasma Linux](https://kde.org/plasma-desktop) and Android. Also, it's completely vibe-coded and the source code sort of takes up about 150,000 SLOC.
+I would strongly recommend this app to anybody; it's personally an absolute game changer. But keep in mind that it requires a bit of setup to use and it's only meant to be used with [KDE Plasma Linux](https://kde.org/plasma-desktop) and Android. Also, it's a 150,000 SLOC vibe-coded monstrosity.
 
 ## Tour
 
 Docked mode is the feature that I love the most. Your day is always at a glance. You can still hover over and view information about events and tasks:
 
-![Dock view](./assets/timeslay-dock.png)
+![Dock view](./assets/timeparagon-dock.png)
 
 But you'll typically plan the day within the larger panel:
 
-![Day view](./assets/timeslay-schedule.png)
+![Day view](./assets/timeparagon-schedule.png)
 
 Editing details for events, tasks, time blocks, and more is done within a popup overlay:
 
-![Day view](./assets/timeslay-overlay.png)
+![Day view](./assets/timeparagon-overlay.png)
 
 Of course, there's also week, 2-week, and month views:
 
-![Week view](./assets/timeslay-week.png)
+![Week view](./assets/timeparagon-week.png)
 
 ## Features
 
@@ -34,12 +34,12 @@ Of course, there's also week, 2-week, and month views:
 - **View your time:**
 	- By day, week, 2 weeks, or month.
 	- Allow zoom in and zoom out on day/week views.
-	- Toggle visibility of Google Calendars, Google Task Lists, and TimeSlay-specific events.
+	- Toggle visibility of Google Calendars, Google Task Lists, and TimeParagon-specific event categories.
 	- Apply custom search or filter:
 		- Show only events that satisfy a filter, like string search, time of day, project, availability, public visibility, location, and more.
 - **Manage your calendar:**
 	- **Events:**
-		- Manage the same event metadata as Google Calendar, plus projects, and tags.
+		- Manage the same event metadata as Google Calendar, plus projects, tags, and notes.
 		- Create Google Meet and Zoom meetings; manage guest lists.
 		- Show join buttons for Google Meet and Zoom meetings.
 		- Send replies to [event invitations](https://support.google.com/calendar/answer/37135?hl=en&co=GENIE.Platform%3DDesktop).
@@ -61,7 +61,7 @@ Of course, there's also week, 2-week, and month views:
 			- Automatic shutdown (TODO).
 			- Automatically change phone mode like Sleep/DnD etc. (TODO).
 - **Capture and manage tasks**:
-	- Manage the same task metadata as Google Tasks, plus projects, tags, priorities, projects, and estimated duration.
+	- Manage the same task metadata as Google Tasks, plus projects, tags, priorities, projects, notes, and estimated duration.
 	- Create tasks:
 		- By text input
 			- Supports [Todoist keywords](https://www.todoist.com/help/todoist/features/use-task-quick-add-in-todoist-va4Lhpzz).
@@ -94,10 +94,9 @@ Of course, there's also week, 2-week, and month views:
 - **Track and direct your life:**
 	- Organize goals, objectives, and projects under a life area.
 	- **Set goals:**
-		- These are aspirational/abstract/high-level, there are multiple ways to achieve this, often having longer time horizons.
-	- **Set objectives:** (TODO)
-		- Connect objectives to goals.
-		- Otherwise called a SMART goal, or similar to OKRs.
+		- Aspirational or high-level goals, not bound to a particular way of achieving them.
+	- **Set objectives:**
+		- Connected to a goal, specifying specifically how it will be achieved, usually like SMART goals, or OKRs.
 		- Tasks, certain amount of time per project. (TODO)
 		- Day, week, month, quarter, year. (TODO)
 	- Connect habits to objectives.
@@ -107,8 +106,8 @@ Of course, there's also week, 2-week, and month views:
 		- During events and tasks associated with a project, easily launch and position the apps/windows necesssary to do the work. (TODO)
 		- Allow voice recording ideas related to project, and AI process into summary that might be general idea, or actual task (TODO).
 - **Notes:**
-	- Associate notes and files with events, tasks, goals, objectives, projects, and people.
-	- Local/url (TODO).
+	- Associate notes with any entity.
+	- Stored locally for syncing with [Syncthing](https://syncthing.net).
 - **Project sessions:** (TODO)
 	- _Configure presets of applications and their positions for easy launching per project (TODO)._
 - **Remember people:**

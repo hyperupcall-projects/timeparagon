@@ -15,8 +15,8 @@ export type Config = {
     clientSecret: string;
     tokenFile: string;
   };
-  timeslayBin: string;
-  timeslayTimeoutMs: number;
+  timeparagonBin: string;
+  timeparagonTimeoutMs: number;
 };
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
@@ -30,7 +30,7 @@ function required(env: NodeJS.ProcessEnv, name: string): string {
 }
 
 function timeout(env: NodeJS.ProcessEnv): number {
-  const raw = env.TIMESLAY_TIMEOUT_MS?.trim();
+  const raw = env.TIMEPARAGON_TIMEOUT_MS?.trim();
   if (!raw) return 30_000;
   const value = Number(raw);
   return Number.isFinite(value) && value > 0 ? value : 30_000;
@@ -77,7 +77,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         tokenFile: env.SLACK_APP_TOKEN_FILE?.trim() ||
           fileURLToPath(new URL("../.slack-app-tokens.json", import.meta.url)),
     },
-    timeslayBin: env.TIMESLAY_BIN?.trim() || "timeslay",
-    timeslayTimeoutMs: timeout(env),
+    timeparagonBin: env.TIMEPARAGON_BIN?.trim() || "timeparagon",
+    timeparagonTimeoutMs: timeout(env),
   };
 }

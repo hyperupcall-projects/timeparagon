@@ -46,7 +46,7 @@ pub(super) fn source_color_picker<'a>(
 		text(if is_tasks {
 			"Task color"
 		} else {
-			"Calendar color in TimeSlay"
+			"Calendar color in TimeParagon"
 		})
 		.size(metrics.label() - 1.0)
 		.style(text::secondary),
@@ -58,9 +58,9 @@ pub(super) fn source_color_picker<'a>(
 	.into()
 }
 
-/// The palette shown under a TimeSlay event kind whose color is being changed.
-pub(super) fn time_slay_color_picker<'a>(
-	source: calendar::sources::TimeSlaySource,
+/// The palette shown under a TimeParagon event kind whose color is being changed.
+pub(super) fn time_paragon_color_picker<'a>(
+	source: calendar::sources::TimeParagonSource,
 	current: Option<Color>,
 	metrics: &Metrics,
 ) -> Element<'a, Message> {
@@ -72,7 +72,7 @@ pub(super) fn time_slay_color_picker<'a>(
 				swatch_button(
 					color,
 					current == Some(color),
-					Message::Settings(SettingsMessage::TimeSlayColorPicked(
+					Message::Settings(SettingsMessage::TimeParagonColorPicked(
 						source.id().to_owned(),
 						Some(color),
 					)),
@@ -89,7 +89,7 @@ pub(super) fn time_slay_color_picker<'a>(
 			.width(Fill),
 	)
 	.width(Fill)
-	.on_press(Message::Settings(SettingsMessage::TimeSlayColorPicked(
+	.on_press(Message::Settings(SettingsMessage::TimeParagonColorPicked(
 		source.id().to_owned(),
 		None,
 	)))
@@ -244,13 +244,13 @@ pub(super) fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'
 	}
 
 	let mut section = column![
-		text("TimeSlay")
+		text("TimeParagon")
 			.size(metrics.label())
 			.style(text::secondary)
 	]
 	.spacing(metrics.spacing)
 	.width(Fill);
-	for source in calendar::sources::TimeSlaySource::ALL {
+	for source in calendar::sources::TimeParagonSource::ALL {
 		let id = source.id().to_owned();
 		let editing = state.calendar.color_editor.as_deref() == Some(id.as_str());
 		section =
@@ -275,7 +275,7 @@ pub(super) fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'
 				.align_y(Alignment::Center),
 			);
 		if editing {
-			section = section.push(time_slay_color_picker(
+			section = section.push(time_paragon_color_picker(
 				source,
 				source.custom_color(&state.config.calendar),
 				metrics,
@@ -284,7 +284,7 @@ pub(super) fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'
 	}
 	// Travel is not an event kind, so its row has no color picker: the swatch
 	// only shows the gray its trips are drawn in. It is toggled here with the
-	// other TimeSlay sources, and off means no route is ever worked out.
+	// other TimeParagon sources, and off means no route is ever worked out.
 	section = section.push(
 		row![
 			travel_swatch(),

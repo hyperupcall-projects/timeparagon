@@ -1,25 +1,25 @@
-//! Independent visibility controls for the kinds of events on TimeSlay.
+//! Independent visibility controls for the kinds of events on TimeParagon.
 
 use super::{Event, sleep};
 use crate::config::CalendarSettings;
 use iced_core::Color;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TimeSlaySource {
+pub enum TimeParagonSource {
 	Tasks,
 	TimeBlocks,
 	Habits,
 	Sleep,
 }
 
-impl TimeSlaySource {
+impl TimeParagonSource {
 	pub const ALL: [Self; 4] = [Self::Tasks, Self::TimeBlocks, Self::Habits, Self::Sleep];
 
-	pub fn id(self) -> &'static str {
+	pub const fn id(self) -> &'static str {
 		match self {
-			Self::Tasks => "timeslay:tasks",
-			Self::TimeBlocks => "timeslay:time-blocks",
-			Self::Habits => "timeslay:habits",
+			Self::Tasks => "timeparagon:tasks",
+			Self::TimeBlocks => "timeparagon:time-blocks",
+			Self::Habits => "timeparagon:habits",
 			Self::Sleep => sleep::SOURCE_ID,
 		}
 	}

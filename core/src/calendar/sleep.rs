@@ -10,7 +10,7 @@ use crate::config::CalendarSettings;
 
 pub(super) mod store;
 
-pub const SOURCE_ID: &str = "timeslay:sleep";
+pub const SOURCE_ID: &str = "timeparagon:sleep";
 pub const NEW_ID: &str = "new-sleep";
 pub const COLOR: Color = Color::from_rgb(0.48, 0.50, 0.53);
 
@@ -740,7 +740,7 @@ pub fn save(settings: &CalendarSettings, mut event: Event, new: bool) -> Result<
 		event.calendar_id = settings
 			.app_calendar
 			.clone()
-			.ok_or("Sync Google once to discover the TimeSlay calendar")?;
+			.ok_or("Sync Google once to discover the TimeParagon calendar")?;
 		event.id = event_id(
 			event
 				.details

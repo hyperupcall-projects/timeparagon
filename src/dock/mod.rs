@@ -82,7 +82,7 @@ const TICK: Duration = Duration::from_secs(30);
 /// Runs the dock until its surface is closed or it is told to hide.
 pub fn run() -> Result<()> {
 	crate::database_sync::start();
-	env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("timeslay=info"))
+	env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("timeparagon=info"))
 		.init();
 
 	anyhow::ensure!(!ipc::is_visible(ipc::DOCK), "the dock is already running");
@@ -109,7 +109,7 @@ pub fn run() -> Result<()> {
 		&qh,
 		surface,
 		Layer::Top,
-		Some(dock_config.animation.namespace("timeslay-dock")),
+		Some(dock_config.animation.namespace("timeparagon-dock")),
 		None,
 	);
 	layer.set_keyboard_interactivity(KeyboardInteractivity::None);

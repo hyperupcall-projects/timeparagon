@@ -384,7 +384,7 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
 			if zoom {
 				on_event_edit::open_zoom_setup(state, &event.details.link);
 			}
-			// A block that had to create the TimeSlay calendar makes that
+			// A block that had to create the TimeParagon calendar makes that
 			// calendar the remembered app calendar.
 			let remember = was_block && state.config.calendar.app_calendar.is_none();
 			if remember {

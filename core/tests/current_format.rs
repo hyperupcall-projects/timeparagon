@@ -1,5 +1,5 @@
 use rusqlite::Connection;
-use timeslay_core::{
+use timeparagon_core::{
 	calendar::task_metadata,
 	habits::Habit,
 	task_db::{Database, SCHEMA_VERSION, TaskData},

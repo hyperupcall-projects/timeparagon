@@ -517,7 +517,7 @@ pub fn report(settings: &CalendarSettings) -> Result<String, String> {
 	let calendar = settings
 		.app_calendar
 		.clone()
-		.ok_or("TimeSlay has no calendar of its own yet")?;
+		.ok_or("TimeParagon has no calendar of its own yet")?;
 	let token = super::super::GoogleClient::from_settings(settings)
 		.access_token()
 		.map_err(String::from)?;

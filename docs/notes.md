@@ -18,7 +18,7 @@ It is the `notes.directory` row of `device_settings` in the database (see
 [Settings](./data-model.md#settings)), which never leaves the device:
 
 ```sh
-sqlite3 ~/.local/share/timeslay/timeslay.sqlite3 \
+sqlite3 ~/.local/share/timeparagon/timeparagon.sqlite3 \
   "SELECT value FROM device_settings WHERE key = 'notes.directory'"
 ```
 
@@ -81,5 +81,5 @@ a note is always dark, on every theme.
   depend on Google sign-in.
 - **Open in default app** saves the latest edits and opens the actual Markdown
   file with the system's associated application. On Android, the app receives
-  access to that document. Changes made there appear after returning to TimeSlay.
+  access to that document. Changes made there appear after returning to TimeParagon.
   An installed app that handles Markdown or plain text is needed.

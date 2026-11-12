@@ -4,12 +4,12 @@
 
 use chrono::{DateTime, Local, NaiveDate, NaiveTime};
 use dioxus::prelude::*;
-use timeslay_core::calendar::task_sort::InboxSort;
-use timeslay_core::calendar::time_format::{self, TimeFormat};
-use timeslay_core::calendar::{self, Calendar, Event, deadline, ids};
-use timeslay_core::config::{CalendarSettings, Config};
-use timeslay_core::task_edit::Change;
-use timeslay_core::timeblocking as tb;
+use timeparagon_core::calendar::task_sort::InboxSort;
+use timeparagon_core::calendar::time_format::{self, TimeFormat};
+use timeparagon_core::calendar::{self, Calendar, Event, deadline, ids};
+use timeparagon_core::config::{CalendarSettings, Config};
+use timeparagon_core::task_edit::Change;
+use timeparagon_core::timeblocking as tb;
 
 use crate::css_color;
 use crate::day::{self, EditContext};
@@ -281,7 +281,7 @@ pub fn TaskList(
 ) -> Element {
 	let mut sort_error = use_signal(|| None::<String>);
 	let settings = config.read().calendar.clone();
-	let now = timeslay_core::clock::now();
+	let now = timeparagon_core::clock::now();
 	let (heading, subtitle, tasks): (String, &str, Vec<&Event>) = match tab {
 		TaskTab::Overdue => (
 			"Overdue".to_owned(),
@@ -368,7 +368,7 @@ pub fn TaskList(
 									(picked, calendar.overdue_sort)
 								}
 							};
-							match timeslay_core::config::save_task_sorts(inbox, overdue) {
+							match timeparagon_core::config::save_task_sorts(inbox, overdue) {
 								Ok(()) => {
 									sort_error.set(None);
 									config.set(day::load_config());
@@ -808,7 +808,7 @@ fn backlog_row(
 mod tests {
 	use super::*;
 	use chrono::{Duration, TimeZone};
-	use timeslay_core::calendar::Details;
+	use timeparagon_core::calendar::Details;
 
 	fn at(day: NaiveDate) -> DateTime<Local> {
 		Local
@@ -845,14 +845,14 @@ mod tests {
 
 	#[test]
 	fn each_list_takes_the_same_tasks_as_the_desktop() {
-		let now = timeslay_core::clock::now();
+		let now = timeparagon_core::clock::now();
 		let today = now.date_naive();
 		let events = vec![
 			task("waiting", "tasks:inbox", "Waiting", tb::UNDATED),
 			task("planned", "tasks:inbox", "Planned", today),
 			Event {
 				details: calendar::Details {
-					task_data: Some(timeslay_core::task_db::TaskData {
+					task_data: Some(timeparagon_core::task_db::TaskData {
 						id: 100,
 						metadata: tb::Metadata {
 							deadline: Some(deadline::Deadline {
@@ -896,7 +896,7 @@ mod tests {
 
 	#[test]
 	fn the_backlog_puts_the_soonest_due_first() {
-		let today = timeslay_core::clock::now().date_naive();
+		let today = timeparagon_core::clock::now().date_naive();
 		let events = vec![
 			task("someday", "tasks:backlog", "Someday", tb::UNDATED),
 			task("later", "tasks:backlog", "Later", today + Duration::days(9)),

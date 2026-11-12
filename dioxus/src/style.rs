@@ -1,14 +1,14 @@
 //! The stylesheet: `assets/day.css`, under the variables it is written in.
 //!
-//! The values come from `timeslay_core::theme`, the same place the iced app's
+//! The values come from `timeparagon_core::theme`, the same place the iced app's
 //! widget styles get them, so the two apps cannot drift apart.
 
 use std::fmt::Write;
 use std::sync::LazyLock;
 
-use timeslay_core::Color;
-use timeslay_core::calendar::colors;
-use timeslay_core::theme::{self as look, Elevation, Scheme};
+use timeparagon_core::Color;
+use timeparagon_core::calendar::colors;
+use timeparagon_core::theme::{self as look, Elevation, Scheme};
 
 use crate::css_color;
 
@@ -114,8 +114,8 @@ fn scheme_variables(scheme: Scheme) -> String {
 /// with, as the iced app's charts pick them by whether the theme is dark.
 fn habit_variables(dark: bool) -> String {
 	let mut css = String::new();
-	for index in 0..timeslay_core::habits::PALETTE_SIZE {
-		let color = timeslay_core::habits::palette_color(index, dark);
+	for index in 0..timeparagon_core::habits::PALETTE_SIZE {
+		let color = timeparagon_core::habits::palette_color(index, dark);
 		let _ = write!(
 			css,
 			"--habit-{index}:{};--habit-ink-{index}:{};",

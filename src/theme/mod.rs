@@ -6,7 +6,7 @@ use std::sync::LazyLock;
 
 use iced::theme::Palette;
 use iced::{Color, Theme};
-use timeslay_core::theme::Scheme;
+use timeparagon_core::theme::Scheme;
 
 /// The colors a six-slot [`Palette`] has no room for.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -142,7 +142,7 @@ impl Catalog {
 /// background color verbatim, alpha included, which is what lets this work.
 pub static FLASH: LazyLock<Theme> = LazyLock::new(|| {
 	Theme::custom(
-		"TimeSlay Flash",
+		"TimeParagon Flash",
 		Palette {
 			background: Color::TRANSPARENT,
 			text: Color::WHITE,

@@ -410,19 +410,19 @@ fn update(panel: &mut Panel, message: Message) -> Task<Message> {
 				let (anchor, size, zone, namespace) = if editor_window {
 					let side = panel.app.sidebar.as_ref().map_or(Side::Left, |s| s.side);
 					margin = editor_window_margin(panel);
-					(anchor(side), (width, 0), 0, "timeslay-editor".to_owned())
+					(anchor(side), (width, 0), 0, "timeparagon-editor".to_owned())
 				} else if popover {
 					panel.id = Some(id);
 					let (anchor, size, margins) = task_popover(&panel.app.config.views);
 					margin = margins;
 					panel.width = size.0;
-					(anchor, size, 0, "timeslay-task-popover".to_owned())
+					(anchor, size, 0, "timeparagon-task-popover".to_owned())
 				} else if flash {
 					(
 						Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right,
 						(0, 0),
 						-1,
-						"timeslay-flash".to_owned(),
+						"timeparagon-flash".to_owned(),
 					)
 				} else {
 					panel.id = Some(id);
@@ -436,7 +436,7 @@ fn update(panel: &mut Panel, message: Message) -> Task<Message> {
 						anchor(side),
 						(width, 0),
 						exclusive_zone(&panel.app.config.views, width),
-						"timeslay-panel".to_owned(),
+						"timeparagon-panel".to_owned(),
 					)
 				};
 				panel.opening.insert(id, sender);
@@ -619,9 +619,9 @@ fn run_surface(popover: bool, channels: Option<PopoverChannels>) -> iced_layersh
 			(panel, task)
 		},
 		if popover {
-			"timeslay-task-popover"
+			"timeparagon-task-popover"
 		} else {
-			"timeslay-panel"
+			"timeparagon-panel"
 		},
 		update,
 		view,
@@ -809,7 +809,7 @@ mod tests {
                 if *target == id && settings.anchor == expected.0
                     && settings.size == Some(expected.1) && settings.margin == Some(expected.2)
                     && settings.exclusive_zone == Some(0) && settings.layer == Layer::Overlay
-                    && settings.namespace.as_deref() == Some("timeslay-task-popover")));
+                    && settings.namespace.as_deref() == Some("timeparagon-task-popover")));
 			assert!(
 				outputs(update(
 					&mut panel,
@@ -876,7 +876,7 @@ mod tests {
 					assert!(matches!(messages.as_slice(),
 						[Message::Layer(LayerShellCustomActionWithId(None, LayerAction::NewLayerShell { id: target, settings }))]
 						if *target == id && settings.layer == Layer::Top
-							&& settings.namespace.as_deref() == Some("timeslay-editor")
+							&& settings.namespace.as_deref() == Some("timeparagon-editor")
 							&& settings.exclusive_zone == Some(0)
 							&& settings.anchor == anchor(side)
 							&& settings.size == Some((360, 0))

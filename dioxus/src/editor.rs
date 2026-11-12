@@ -10,21 +10,21 @@
 
 use chrono::NaiveDate;
 use dioxus::prelude::*;
-use timeslay_core::calendar::event_options::{
+use timeparagon_core::calendar::event_options::{
 	Action as OptionAction, Availability, EventOptions, Method, Unit, Visibility,
 };
-use timeslay_core::calendar::first_day::FirstDayOfWeek;
-use timeslay_core::calendar::meeting;
-use timeslay_core::calendar::{self, EditDraft, Event, SaveScope};
-use timeslay_core::config::{CalendarSettings, Config, ProjectsSettings};
-use timeslay_core::places::{self, Found, Place, PlaceSettings};
-use timeslay_core::recurrence::{self, EndKind, MonthlyMode, RepeatMode, Rule};
-use timeslay_core::task_edit::{self, Change};
-use timeslay_core::timeblocking as tb;
+use timeparagon_core::calendar::first_day::FirstDayOfWeek;
+use timeparagon_core::calendar::meeting;
+use timeparagon_core::calendar::{self, EditDraft, Event, SaveScope};
+use timeparagon_core::config::{CalendarSettings, Config, ProjectsSettings};
+use timeparagon_core::places::{self, Found, Place, PlaceSettings};
+use timeparagon_core::recurrence::{self, EndKind, MonthlyMode, RepeatMode, Rule};
+use timeparagon_core::task_edit::{self, Change};
+use timeparagon_core::timeblocking as tb;
 
 use crate::css_color;
 use crate::day::{self, AssignedTask, EditContext, TaskFields, TimeBlock};
-use timeslay_core::calendar::colors::on_color;
+use timeparagon_core::calendar::colors::on_color;
 
 const NTH_LABELS: [(i8, &str); 6] = [
 	(1, "First"),
@@ -927,7 +927,7 @@ fn EventEditor(
 		}
 		let mut updated = original();
 		updated.completed = !updated.completed;
-		updated.details.habit_completed_at = updated.completed.then(timeslay_core::clock::now);
+		updated.details.habit_completed_at = updated.completed.then(timeparagon_core::clock::now);
 		completing.set(true);
 		error.set(None);
 		spawn(async move {
@@ -1541,7 +1541,7 @@ fn SleepEditor(
 			return;
 		}
 		let night = saved_night();
-		if calendar::sleep::timer(&night, timeslay_core::clock::now())
+		if calendar::sleep::timer(&night, timeparagon_core::clock::now())
 			== Some(calendar::sleep::Timer::Start)
 			&& crate::reminders::notifications_blocked()
 		{
@@ -1591,7 +1591,7 @@ fn SleepEditor(
 		calendar::sleep::duration(&preview),
 		calendar::event_time_label(&preview)
 	);
-	let now = timeslay_core::clock::now();
+	let now = timeparagon_core::clock::now();
 	let actual_summary = match (record.actual_start, record.actual_end) {
 		(Some(start), Some(end)) => format!(
 			"Slept {} (planned {})",
@@ -2100,7 +2100,7 @@ fn ProjectsField(
 	let mut open = use_signal(|| false);
 	let mut query = use_signal(String::new);
 
-	let color = |project: Option<&timeslay_core::config::Project>| {
+	let color = |project: Option<&timeparagon_core::config::Project>| {
 		project
 			.and_then(|project| project.color())
 			.map_or_else(|| NO_PROJECT_COLOR.to_owned(), css_color)
@@ -2786,10 +2786,10 @@ fn PresenceEditor(
 mod tests {
 	use super::*;
 	use chrono::{Duration, Local, TimeZone};
-	use timeslay_core::calendar::{Calendar, Details, colors, sleep};
-	use timeslay_core::config::CalendarSettings;
-	use timeslay_core::task_db::TaskData;
-	use timeslay_core::timeblocking::Metadata;
+	use timeparagon_core::calendar::{Calendar, Details, colors, sleep};
+	use timeparagon_core::config::CalendarSettings;
+	use timeparagon_core::task_db::TaskData;
+	use timeparagon_core::timeblocking::Metadata;
 
 	fn at(hour: u32) -> chrono::DateTime<Local> {
 		Local.with_ymd_and_hms(2026, 10, 26, hour, 0, 0).unwrap()
@@ -3107,7 +3107,7 @@ mod tests {
 		night.end = at(9);
 		night.details.sleep = Some(sleep::Record::planned(at(9).date_naive()));
 		// Half an hour before the planned bedtime.
-		let _clock = timeslay_core::clock::freeze(
+		let _clock = timeparagon_core::clock::freeze(
 			(at(1) - chrono::Duration::minutes(30)).with_timezone(&chrono::Utc),
 		);
 		let html = render(night.clone());
@@ -3146,7 +3146,7 @@ mod tests {
 		night.start = at(1);
 		night.end = at(9);
 		night.details.sleep = Some(sleep::Record::planned(at(9).date_naive()));
-		let _clock = timeslay_core::clock::freeze(
+		let _clock = timeparagon_core::clock::freeze(
 			(at(1) - chrono::Duration::days(2)).with_timezone(&chrono::Utc),
 		);
 		let html = render(night);

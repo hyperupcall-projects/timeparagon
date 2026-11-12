@@ -42,7 +42,7 @@ export type BuiltTask = {
 
 /**
  * Everything a person can read in the message, including attachments and
- * files. The text is deliberately not shortened: TimeSlay puts this in the
+ * files. The text is deliberately not shortened: TimeParagon puts this in the
  * task's description.
  */
 export function messageBody(message: SlackMessage): string {
@@ -147,7 +147,7 @@ export function parseSlackLink(value: string): SlackLink | null {
   return null;
 }
 
-/** The description TimeSlay stores: who, where, when, the link, then the text. */
+/** The description TimeParagon stores: who, where, when, the link, then the text. */
 export function buildTaskDescription(body: string, context: TaskContext): string {
   const lines: string[] = [];
   if (context.author) lines.push(`From: ${context.author}`);

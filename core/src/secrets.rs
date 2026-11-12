@@ -1,6 +1,6 @@
 //! Credentials: Google sign-in, Gmail accounts, and the OpenRouter API token.
 //!
-//! They are kept out of the database, in `$XDG_STATE_HOME/timeslay/secrets.json`,
+//! They are kept out of the database, in `$XDG_STATE_HOME/timeparagon/secrets.json`,
 //! readable by this user only. Each kind is one key of a JSON object. Android
 //! keeps its Google tokens encrypted elsewhere: see `oauth::android_tokens`.
 

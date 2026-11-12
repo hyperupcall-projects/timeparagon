@@ -1,6 +1,6 @@
-//! The palettes live in `timeslay_core` so the Dioxus app draws from them too.
+//! The palettes live in `timeparagon_core` so the Dioxus app draws from them too.
 
-pub use timeslay_core::theme::palettes::*;
+pub use timeparagon_core::theme::palettes::*;
 
 #[cfg(test)]
 mod tests {

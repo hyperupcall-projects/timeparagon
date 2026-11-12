@@ -46,11 +46,11 @@ const AUTH_TIMEOUT: Duration = Duration::from_secs(180);
 // (the app's package is `bundle.identifier` in dioxus/Dioxus.toml).
 #[cfg(target_os = "android")]
 const DONE_RESPONSE: &str = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n\
-    <!doctype html><meta name=viewport content='width=device-width,initial-scale=1'><title>TimeSlay</title>\
-    <p style='font:20px sans-serif'>Signed in. <a href='intent://#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=dev.timeslay.day;end'>Return to TimeSlay</a></p>";
+    <!doctype html><meta name=viewport content='width=device-width,initial-scale=1'><title>TimeParagon</title>\
+    <p style='font:20px sans-serif'>Signed in. <a href='intent://#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=dev.kofler.timeparagon;end'>Return to TimeParagon</a></p>";
 #[cfg(not(target_os = "android"))]
 const DONE_RESPONSE: &str = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n\
-    <!doctype html><title>TimeSlay</title><p>You can close this tab and return to TimeSlay.</p>";
+    <!doctype html><title>TimeParagon</title><p>You can close this tab and return to TimeParagon.</p>";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Tokens {

@@ -76,7 +76,7 @@ where
 	// (a timer firing, a button press), so the spawn cost is irrelevant and
 	// there is no pool to keep alive while the app sits idle.
 	let spawned = std::thread::Builder::new()
-		.name("timeslay-blocking".to_owned())
+		.name("timeparagon-blocking".to_owned())
 		.spawn(move || {
 			// Under `panic = "abort"` a panic ends the process here instead.
 			let result = catch_unwind(AssertUnwindSafe(work)).unwrap_or_else(|_| {

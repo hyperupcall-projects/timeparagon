@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build the TimeSlay Dioxus day view as an Android APK.
+# Build the TimeParagon Dioxus day view as an Android APK.
 #
 # The debug APK is debug-signed and debuggable. A --release APK is signed with
 # your own keystore and is checked to be non-debuggable.
@@ -32,9 +32,9 @@
 #   ANDROID_NDK_HOME / NDK_HOME       NDK location
 #   JAVA_HOME                         JDK location
 #   For --release (keep the keystore outside the repository):
-#   TIMESLAY_KEYSTORE_BASE64       Base64-encoded .jks/.keystore file
-#   TIMESLAY_KEYSTORE_PASSWORD     Keystore (and key) password
-#   TIMESLAY_KEYSTORE_KEYALIAS     Key alias
+#   TIMEPARAGON_KEYSTORE_BASE64       Base64-encoded .jks/.keystore file
+#   TIMEPARAGON_KEYSTORE_PASSWORD     Keystore (and key) password
+#   TIMEPARAGON_KEYSTORE_KEYALIAS     Key alias
 #   Passwords must not contain the characters " ' ` $ \ & < > =
 
 set -eu
@@ -256,17 +256,17 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 if [ "$profile" = release ]; then
-    keystore_base64=${TIMESLAY_KEYSTORE_BASE64:-}
-    keystore_password=${TIMESLAY_KEYSTORE_PASSWORD:-}
-    key_alias=${TIMESLAY_KEYSTORE_KEYALIAS:-}
+    keystore_base64=${TIMEPARAGON_KEYSTORE_BASE64:-}
+    keystore_password=${TIMEPARAGON_KEYSTORE_PASSWORD:-}
+    key_alias=${TIMEPARAGON_KEYSTORE_KEYALIAS:-}
     key_password=$keystore_password
 
     [ -n "$keystore_base64" ] && [ -n "$keystore_password" ] && [ -n "$key_alias" ] || fail \
-        "--release needs TIMESLAY_KEYSTORE_BASE64, TIMESLAY_KEYSTORE_PASSWORD and TIMESLAY_KEYSTORE_KEYALIAS (see --help)"
+        "--release needs TIMEPARAGON_KEYSTORE_BASE64, TIMEPARAGON_KEYSTORE_PASSWORD and TIMEPARAGON_KEYSTORE_KEYALIAS (see --help)"
     keystore_tmp=$(mktemp)
     chmod 600 "$keystore_tmp"
     printf '%s' "$keystore_base64" | base64 -d >"$keystore_tmp" 2>/dev/null && [ -s "$keystore_tmp" ] || \
-        fail "TIMESLAY_KEYSTORE_BASE64 is not valid base64"
+        fail "TIMEPARAGON_KEYSTORE_BASE64 is not valid base64"
     keystore=$(realpath -- "$keystore_tmp")
     for value in "$keystore_password" "$key_alias" "$key_password" "$keystore"; do
         case $value in
@@ -299,9 +299,9 @@ fi
 # The manifest names the widget's classes and resources, and `dx` has no option
 # for extra Android sources, so they must be in its project before it runs
 # Gradle. It writes its own files into this directory without clearing it.
-android_main=$repo_root/target/dx/TimeSlay/$profile/android/app/app/src/main
+android_main=$repo_root/target/dx/TimeParagon/$profile/android/app/app/src/main
 mkdir -p "$android_main/kotlin" "$android_main/res"
-rm -rf "$android_main/kotlin/dev/timeslay"
+rm -rf "$android_main/kotlin/dev/timeparagon"
 cp -R "$repo_root/dioxus/android/kotlin/." "$android_main/kotlin/"
 cp -R "$repo_root/dioxus/android/res/." "$android_main/res/"
 # `dx` puts its default icons back, which would clash with the PNGs the launcher
@@ -315,8 +315,8 @@ rm -rf "$android_main/jniLibs"
 # Notification channels play sounds by URI, so the tones the app synthesizes are
 # rendered to res/raw here instead of being kept in the repository. This runs
 # on the build machine, not for the Android target.
-rm -f "$android_main"/res/raw/timeslay_tone_*.wav
-(cd "$repo_root" && cargo run --quiet --package timeslay-core --example render_sounds -- \
+rm -f "$android_main"/res/raw/timeparagon_tone_*.wav
+(cd "$repo_root" && cargo run --quiet --package timeparagon-core --example render_sounds -- \
     "$android_main/res/raw" >/dev/null) || fail "could not render the reminder sounds"
 
 # --- Build -----------------------------------------------------------------
@@ -326,14 +326,14 @@ if [ "$profile" = release ]; then
     # the home directory (cargo registry, rustup) and the repo so the APK does
     # not leak the build machine's username. The later flag wins on overlap.
     export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$HOME=/build/home --remap-path-prefix=$repo_root=/build/src"
-    dx build --android --package timeslay-dioxus --target "$triple" --release
+    dx build --android --package timeparagon-dioxus --target "$triple" --release
 else
-    dx build --android --package timeslay-dioxus --target "$triple"
+    dx build --android --package timeparagon-dioxus --target "$triple"
 fi
 
 # --- Launcher icon ---------------------------------------------------------
 # `dx` always generates its default launcher icon and ignores bundle.icon on
-# Android, so swap in the TimeSlay logo and reassemble with Gradle.
+# Android, so swap in the TimeParagon logo and reassemble with Gradle.
 icon_source=$repo_root/assets/noto-hourglass-done.png
 for app_dir in "$repo_root"/target/dx/*/"$profile"/android/app; do
     [ -f "$app_dir/gradlew" ] || continue
@@ -361,7 +361,7 @@ for app_dir in "$repo_root"/target/dx/*/"$profile"/android/app; do
 done
 
 # --- Locate and copy the APK ----------------------------------------------
-# `dx` names its output directory after the binary target (TimeSlay), not
+# `dx` names its output directory after the binary target (TimeParagon), not
 # after the package, so search every app directory for this profile. Gradle
 # keeps each variant in its own folder, so a --release run cannot pick up a
 # debug APK left over from an earlier build.
@@ -394,7 +394,7 @@ if [ "$profile" = release ]; then
     # Verify the actual signer, rather than accepting any non-debug signature.
     release_cert=$(mktemp)
     "$JAVA_HOME/bin/keytool" -exportcert -keystore "$keystore" -alias "$key_alias" \
-        -storepass:env TIMESLAY_KEYSTORE_PASSWORD -file "$release_cert" >/dev/null 2>&1 || \
+        -storepass:env TIMEPARAGON_KEYSTORE_PASSWORD -file "$release_cert" >/dev/null 2>&1 || \
         fail "could not read the configured signing certificate"
     expected_digest=$(sha256sum "$release_cert" | cut -d' ' -f1)
     # The label differs between build-tools versions: 34.0.0 prints
@@ -410,7 +410,7 @@ if [ "$profile" = release ]; then
     echo "Verified: release APK is not debuggable and matches the configured signing key"
 fi
 mkdir -p "$output_dir"
-destination=$output_dir/timeslay-$abi_name-$profile.apk
+destination=$output_dir/timeparagon-$abi_name-$profile.apk
 cp "$apk" "$destination"
 
 echo
@@ -421,5 +421,5 @@ sha256sum "$destination" 2>/dev/null || true
 if [ "$install" -eq 1 ]; then
     adb=$sdk/platform-tools/adb
     "$adb" install -r "$destination"
-    "$adb" shell am start -n dev.timeslay.day/dev.dioxus.main.MainActivity
+    "$adb" shell am start -n dev.kofler.timeparagon/dev.dioxus.main.MainActivity
 fi

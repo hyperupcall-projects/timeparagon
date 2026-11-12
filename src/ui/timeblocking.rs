@@ -1200,7 +1200,7 @@ fn available_habits<'a>(
 		let swatch = container(iced::widget::Space::new().width(8).height(8)).style(
 			move |theme: &iced::Theme| container::Style {
 				background: Some(
-					timeslay_core::habits::palette_color(
+					timeparagon_core::habits::palette_color(
 						habit.color,
 						theme.extended_palette().is_dark,
 					)
@@ -2035,7 +2035,7 @@ mod tests {
 		let task = state.calendar.event_mut("deep").unwrap();
 		task.id = "task:read".into();
 		task.calendar_id = "tasks:list".into();
-		task.details.task_data = Some(timeslay_core::task_db::TaskData {
+		task.details.task_data = Some(timeparagon_core::task_db::TaskData {
 			id: 1,
 			metadata: tb::Metadata {
 				habit_id: Some("read".into()),
@@ -2074,7 +2074,7 @@ mod tests {
 			let mut planned = task.clone();
 			let mut meta = tb::metadata(&planned);
 			meta.block = Some(block.into());
-			planned.details.task_data = Some(timeslay_core::task_db::TaskData {
+			planned.details.task_data = Some(timeparagon_core::task_db::TaskData {
 				id: 1,
 				metadata: meta,
 			});
@@ -2091,7 +2091,7 @@ mod tests {
 		let mut ignored = task.clone();
 		let mut meta = tb::metadata(&ignored);
 		meta.ignored = true;
-		ignored.details.task_data = Some(timeslay_core::task_db::TaskData {
+		ignored.details.task_data = Some(timeparagon_core::task_db::TaskData {
 			id: 1,
 			metadata: meta,
 		});

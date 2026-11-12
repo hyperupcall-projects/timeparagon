@@ -2,7 +2,7 @@
 //! version does with the device's own. Meant for trying it on copies first:
 //!
 //! ```sh
-//! cargo run -p timeslay-core --example import_settings -- copy.sqlite3 copy-config.toml
+//! cargo run -p timeparagon-core --example import_settings -- copy.sqlite3 copy-config.toml
 //! ```
 //!
 //! The file is renamed `<file>.imported` once it is in. A database that has
@@ -16,7 +16,7 @@ fn main() -> std::io::Result<()> {
 		eprintln!("usage: import_settings <database> <config.toml>");
 		std::process::exit(2);
 	};
-	let imported = timeslay_core::settings::import_file(Path::new(database), Path::new(file))?;
+	let imported = timeparagon_core::settings::import_file(Path::new(database), Path::new(file))?;
 	if imported {
 		println!("Imported {file} into {database}");
 	} else {

@@ -25,10 +25,10 @@ use crate::blocking;
 use crate::calendar::Event;
 use crate::config::{MapApp, Place, SavedRoute, TravelMode, TravelSettings};
 use crate::timeblocking as tb;
-use timeslay_core::places::get;
+use timeparagon_core::places::get;
 #[cfg(test)]
-use timeslay_core::places::search_url;
-pub use timeslay_core::places::{
+use timeparagon_core::places::search_url;
+pub use timeparagon_core::places::{
 	Found, Hop, Leg, Route, START_OF_DAY, Stop, distance_label, duration_label, location_text,
 	parse_places, route_label, saved_matches, search_places,
 };
@@ -642,12 +642,12 @@ fn save_cache(state: &State) -> Task<Message> {
 /// Google keeps, so it is matched against the saved places' titles and
 /// addresses.
 pub fn place_of(travel: &TravelSettings, event: &Event) -> Option<u64> {
-	timeslay_core::places::place_of(&travel.places, &travel.event_places, event)
+	timeparagon_core::places::place_of(&travel.places, &travel.event_places, event)
 }
 
 /// The trips a day needs, in order, given its events in the order they happen.
 pub fn hops(travel: &TravelSettings, stops: &[Stop]) -> Vec<Hop> {
-	timeslay_core::places::hops(&travel.places, travel.home, stops)
+	timeparagon_core::places::hops(&travel.places, travel.home, stops)
 }
 
 /// The trips of one day, from the events the grid draws for it.

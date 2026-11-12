@@ -3,8 +3,8 @@ use iced::advanced::widget::{Id, Operation, operation::scrollable};
 use iced::{Font, Pixels, Rectangle, Size, Vector};
 use iced_test::core::renderer::Headless;
 use iced_test::runtime::{UserInterface, user_interface};
-use timeslay::app::{EventEditMessage, EventMessage};
-use timeslay::{
+use timeparagon::app::{EventEditMessage, EventMessage};
+use timeparagon::{
 	app::{self, Message, State},
 	calendar,
 	timeblocking::Action,
@@ -45,7 +45,7 @@ fn time_block_edit_and_view_preserve_calendar_scroll() {
 		state.config.calendar.app_calendar =
 			Some(state.calendar.event("standup").unwrap().calendar_id.clone());
 		let mut ui = UserInterface::build(
-			timeslay::ui::view(&state),
+			timeparagon::ui::view(&state),
 			Size::new(width, 600.0),
 			user_interface::Cache::default(),
 			&mut renderer,
@@ -97,7 +97,7 @@ fn time_block_edit_and_view_preserve_calendar_scroll() {
 			let _ = app::update(&mut state, message);
 			let size = Size::new(width + if panel_open { 400.0 } else { 0.0 }, 600.0);
 			let mut ui =
-				UserInterface::build(timeslay::ui::view(&state), size, cache, &mut renderer);
+				UserInterface::build(timeparagon::ui::view(&state), size, cache, &mut renderer);
 			let mut offset = DayOffset::default();
 			ui.operate(&renderer, &mut offset);
 			assert_eq!(

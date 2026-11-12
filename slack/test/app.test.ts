@@ -32,7 +32,7 @@ test("resultText reports success with a task link", () => {
     task: { id: "t", title: "Buy milk", link: "https://tasks.google.com/task/1" },
     via: "direct",
   });
-  assert.match(text, /Added to your TimeSlay inbox: \*Buy milk\*/);
+  assert.match(text, /Added to your TimeParagon inbox: \*Buy milk\*/);
   assert.match(text, /<https:\/\/tasks\.google\.com\/task\/1\|Open the task>/);
   assert.match(text, /via direct/);
 });
@@ -41,10 +41,10 @@ test("resultText reports a failure with the whole trace", () => {
   const text = resultText({
     ok: false,
     error: "Could not read the link",
-    trace: "Steps:\nasking timeslay-window.sock",
+    trace: "Steps:\nasking timeparagon-window.sock",
   });
   assert.match(text, /:x: Could not read the link/);
-  assert.match(text, /timeslay-window\.sock/);
+  assert.match(text, /timeparagon-window\.sock/);
 });
 
 test("contextFor builds the Slack link and author", () => {

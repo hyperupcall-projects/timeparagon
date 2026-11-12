@@ -6,7 +6,7 @@ import { Installations } from "./installations.ts";
 
 export const BOT_SCOPES = ["chat:write", "commands", "im:write", "channels:history",
   "groups:history", "im:history", "mpim:history", "users:read"];
-const COOKIE = "timeslay_oauth_state";
+const COOKIE = "timeparagon_oauth_state";
 const random = () => randomBytes(32).toString("hex");
 function matches(a: string, b: string): boolean {
   const left = Buffer.from(a), right = Buffer.from(b);
@@ -30,7 +30,7 @@ export function oauthHandler(config: OAuthConfig, store: Installations, setupKey
       if (req.method !== "GET") { finish(405, "GET required."); return; }
       if (url.pathname === "/slack/install") {
         if (!matches(url.searchParams.get("key") ?? "", setupKey)) {
-          finish(403, "Open the private connection link printed by your TimeSlay bridge."); return;
+          finish(403, "Open the private connection link printed by your TimeParagon bridge."); return;
         }
         for (const [state, expires] of states) if (expires <= now()) states.delete(state);
         if (states.size >= 100) { finish(429, "Too many pending connections. Try again later."); return; }
@@ -69,7 +69,7 @@ export function oauthHandler(config: OAuthConfig, store: Installations, setupKey
       }
       store.save({ teamId: result.team.id, ownerUserId: result.authed_user.id,
         botToken: result.access_token, botUserId: result.bot_user_id, botId: auth.bot_id });
-      finish(200, "Workspace connected to your TimeSlay inbox. Only the Slack account you just authorized can add tasks. You can close this tab and connect another workspace using the same private link.");
+      finish(200, "Workspace connected to your TimeParagon inbox. Only the Slack account you just authorized can add tasks. You can close this tab and connect another workspace using the same private link.");
     } catch {
       // SDK errors can contain request credentials: never echo or log them.
       finish(500, "Could not connect the workspace. Check client credentials, bot rotation settings, and installation file permissions, then retry the private link. Existing workspace ownership cannot be replaced by another Slack account.");

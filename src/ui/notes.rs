@@ -4,8 +4,8 @@ use iced::widget::{
 	Space, button, column, container, responsive, rich_text, row, span, text, text_editor,
 };
 use iced::{Border, Center, Color, Element, Fill, Font, Length, Theme};
-use timeslay_core::notes::markdown::{self, Block, Inline, Marker};
-use timeslay_core::notes::{Link, Note, Pastel};
+use timeparagon_core::notes::markdown::{self, Block, Inline, Marker};
+use timeparagon_core::notes::{Link, Note, Pastel};
 
 use super::layout::Metrics;
 use crate::app::{Message, State};
@@ -329,7 +329,7 @@ fn editor_page<'a>(state: &'a State, note: &'a Note, metrics: &Metrics) -> Eleme
 }
 
 fn notes_untitled() -> &'static str {
-	timeslay_core::notes::UNTITLED
+	timeparagon_core::notes::UNTITLED
 }
 
 /// What the open note is connected to, and a search for more.
@@ -593,7 +593,7 @@ mod tests {
 	use iced::Size;
 	use iced_test::Simulator;
 	use iced_test::core::Settings;
-	use timeslay_core::notes::LinkKind;
+	use timeparagon_core::notes::LinkKind;
 
 	fn simulator<'a>(
 		view: Element<'a, Message>,

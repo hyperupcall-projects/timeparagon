@@ -1,4 +1,4 @@
-# TimeSlay browser extension
+# TimeParagon browser extension
 
 The toolbar button opens a small form with **Add to inbox**. The title is
 prefilled with the page's title, and you can edit it and add a description, a
@@ -9,14 +9,14 @@ The toolbar and extension icons use the same hourglass artwork as the Iced
 application, resized from `../assets/noto-hourglass-done.png` to 16, 32, 48 and
 128 pixels. Reload the extension after updating its icons.
 
-The popup is painted with the colors of the theme the TimeSlay app is currently
+The popup is painted with the colors of the theme the TimeParagon app is currently
 using: it asks the native host for them (the `theme` command) and applies them
 as CSS variables, so it matches the app even after you switch themes.
 
-The form sends the task to the `timeslay webextension` native host. The host
+The form sends the task to the `timeparagon webextension` native host. The host
 reads a Gmail link for its subject (the same way a pasted link is read in the
-app), then asks a running TimeSlay window, panel or dock to write the task. If
-no TimeSlay process is running, the host writes to Google Tasks itself.
+app), then asks a running TimeParagon window, panel or dock to write the task. If
+no TimeParagon process is running, the host writes to Google Tasks itself.
 
 The popup shows **Success!** with the new task, or the error and the complete
 debug trace if anything fails.
@@ -30,7 +30,7 @@ debug trace if anything fails.
 | Due date | Google Tasks' `due` day |
 | Deadline | Structured task metadata; day only, or day and time |
 
-## 1. Build TimeSlay
+## 1. Build TimeParagon
 
 ```sh
 cargo build --release
@@ -54,7 +54,7 @@ without asking Chrome for the ID.
 2. Choose **Load Temporary Add-on** and select `manifest.json` in this
    directory.
 
-Firefox identifies the add-on as `timeslay@example.org`.
+Firefox identifies the add-on as `timeparagon@example.org`.
 
 ## 3. Register the native host
 
@@ -64,16 +64,16 @@ Firefox identifies the add-on as `timeslay@example.org`.
 
 It writes:
 
-- a wrapper at `~/.local/share/timeslay/timeslay-webextension` that runs
-  `timeslay webextension` (browsers cannot pass arguments to a native host);
-- `com.timeslay.webextension.json` under the Chrome-family
+- a wrapper at `~/.local/share/timeparagon/timeparagon-webextension` that runs
+  `timeparagon webextension` (browsers cannot pass arguments to a native host);
+- `com.timeparagon.webextension.json` under the Chrome-family
   `NativeMessagingHosts` directories and under
   `~/.mozilla/native-messaging-hosts`.
 
-If the binary is not on `PATH`, set `TIMESLAY_BIN`:
+If the binary is not on `PATH`, set `TIMEPARAGON_BIN`:
 
 ```sh
-TIMESLAY_BIN="$PWD/target/release/timeslay" ./webextension/install.sh
+TIMEPARAGON_BIN="$PWD/target/release/timeparagon" ./webextension/install.sh
 ```
 
 Restart the browser after installing the host manifest. Chrome reads native
@@ -83,10 +83,10 @@ host manifests at startup.
 
 ```
 popup.js
-  ├─ chrome.runtime.sendNativeMessage("com.timeslay.webextension", {command:"theme"})
-  │    └─ timeslay webextension          (the app's chosen theme as hex colors)
-  └─ chrome.runtime.sendNativeMessage("com.timeslay.webextension", {command:"add-to-inbox", …})
-       └─ timeslay webextension          (length-prefixed JSON on stdin/stdout)
+  ├─ chrome.runtime.sendNativeMessage("com.timeparagon.webextension", {command:"theme"})
+  │    └─ timeparagon webextension          (the app's chosen theme as hex colors)
+  └─ chrome.runtime.sendNativeMessage("com.timeparagon.webextension", {command:"add-to-inbox", …})
+       └─ timeparagon webextension          (length-prefixed JSON on stdin/stdout)
             ├─ integrations::recognize/fetch  (Gmail subject)
             ├─ ipc::WINDOW / SIDEBAR / DOCK   (running app writes the task)
             └─ inbox::add                     (fallback when the app is closed)

@@ -218,7 +218,7 @@ struct Harness {
 impl Harness {
 	fn new() -> Self {
 		let directory = tempfile::tempdir().unwrap();
-		let path = directory.path().join("timeslay.sqlite3");
+		let path = directory.path().join("timeparagon.sqlite3");
 		Self {
 			_directory: directory,
 			path,

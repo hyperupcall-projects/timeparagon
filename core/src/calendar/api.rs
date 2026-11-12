@@ -245,7 +245,7 @@ pub fn fetch_range(
 	}
 	let fetch_started = crate::clock::now();
 	let mut calendars = fetch_calendars(access_token)?;
-	// Every event TimeSlay writes lives on one calendar. Find it by name, or
+	// Every event TimeParagon writes lives on one calendar. Find it by name, or
 	// create it the first time it is missing.
 	let _app_calendar = resolve_app_calendar(access_token, &mut calendars, app_calendar);
 	// Task refresh and independent calendar requests overlap. Bound concurrency
@@ -407,7 +407,7 @@ fn reconcile_task_metadata_and_overlay(
 	super::operations::overlay(path, events, Some(fetched_at))
 }
 
-/// The id of the app's TimeSlay calendar: the remembered id while it still
+/// The id of the app's TimeParagon calendar: the remembered id while it still
 /// exists, otherwise the calendar by that name, otherwise a freshly created
 /// one. Creation is best-effort so a read-only token still syncs; the calendar
 /// is then made on the first scheduling operation instead.
@@ -438,7 +438,7 @@ fn resolve_app_calendar(
 			Some(id)
 		}
 		Err(error) => {
-			log::warn!("could not create the TimeSlay calendar: {error}");
+			log::warn!("could not create the TimeParagon calendar: {error}");
 			None
 		}
 	}
@@ -678,7 +678,7 @@ fn forget_cached_task(task_id: &str) {
 }
 
 /// A habit event as Google Calendar stores it: the master of a recurring
-/// series on the app's TimeSlay calendar.
+/// series on the app's TimeParagon calendar.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HabitEvent {
 	pub id: String,
@@ -708,7 +708,7 @@ pub struct HabitListing {
 	pub completions: Vec<HabitCompletion>,
 }
 
-/// Every habit master on the app's TimeSlay calendar.
+/// Every habit master on the app's TimeParagon calendar.
 ///
 /// Habits are ordinary Calendar events tagged with `ttKind=habit`, so they
 /// keep Google's own recurrence model. `singleEvents=false` returns the master
@@ -810,7 +810,7 @@ pub fn link_habit_event(
 	)
 }
 
-/// The TimeSlay calendar id, or `None` when the calendar does not exist yet.
+/// The TimeParagon calendar id, or `None` when the calendar does not exist yet.
 /// Merely listing habits does not create a calendar.
 fn app_calendar_id(access_token: &str, calendar: Option<&str>) -> Result<Option<String>, String> {
 	match calendar {
@@ -819,7 +819,7 @@ fn app_calendar_id(access_token: &str, calendar: Option<&str>) -> Result<Option<
 	}
 }
 
-/// Creates a habit on the TimeSlay calendar, creating that calendar when this
+/// Creates a habit on the TimeParagon calendar, creating that calendar when this
 /// is the first one. Returns the master event Google assigned an id to.
 pub fn insert_habit(
 	access_token: &str,
@@ -1693,7 +1693,7 @@ fn event_patch_body(
 	body["extendedProperties"]["private"]["ttLabels"] = serde_json::to_string(labels)
 		.map_err(|e| e.to_string())?
 		.into();
-	// Display defaults belong to TimeSlay. Omitting colorId also preserves
+	// Display defaults belong to TimeParagon. Omitting colorId also preserves
 	// any explicit Google color when editing an existing event.
 	let _ = color_id;
 	if all_day {
@@ -2156,7 +2156,7 @@ pub fn insert_event(
 	}
 	body["description"] = serde_json::Value::String(description.to_owned());
 	super::projects::write(&mut body, projects)?;
-	// Display defaults belong to TimeSlay. Omitting colorId also preserves
+	// Display defaults belong to TimeParagon. Omitting colorId also preserves
 	// any explicit Google color when editing an existing event.
 	let _ = color_id;
 	if !recurrence.is_empty() {
@@ -2877,7 +2877,7 @@ pub(super) fn parse_sleep(value: serde_json::Value, calendar_id: &str) -> Result
 	let entry: EventEntry = serde_json::from_value(value).map_err(|e| e.to_string())?;
 	let calendar = Calendar {
 		id: calendar_id.to_owned(),
-		name: "TimeSlay".into(),
+		name: "TimeParagon".into(),
 		color: super::sleep::COLOR,
 		primary: false,
 		selected_by_google: true,
@@ -2897,7 +2897,7 @@ pub(super) fn parse_sleep(value: serde_json::Value, calendar_id: &str) -> Result
 mod tests {
 	fn mapped_task() -> (tempfile::TempDir, std::path::PathBuf, super::Event) {
 		let dir = tempfile::tempdir().unwrap();
-		let path = dir.path().join("timeslay.sqlite3");
+		let path = dir.path().join("timeparagon.sqlite3");
 		let mut db = crate::task_db::Database::open(&path).unwrap();
 		let mut event = super::super::sample_snapshot().events.remove(0);
 		event.id = "task:google-id".into();

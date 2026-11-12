@@ -1,4 +1,4 @@
-//! TimeSlay's Dioxus app.
+//! TimeParagon's Dioxus app.
 //!
 //! Do is the day's calendar, Plan shows a day, multiple days or month,
 //! Tasks holds the Overdue, Inbox, Today and Backlog lists,
@@ -27,13 +27,13 @@ mod widget;
 
 use chrono::{Datelike, Months, NaiveDate};
 use dioxus::prelude::*;
-use timeslay_core::calendar::first_day::FirstDayOfWeek;
-use timeslay_core::calendar::search::Search;
-use timeslay_core::calendar::time_format::{self, TimeFormat};
-use timeslay_core::calendar::{self, Event};
-use timeslay_core::config::CalendarSettings;
-use timeslay_core::theme as look;
-use timeslay_core::timeblocking as tb;
+use timeparagon_core::calendar::first_day::FirstDayOfWeek;
+use timeparagon_core::calendar::search::Search;
+use timeparagon_core::calendar::time_format::{self, TimeFormat};
+use timeparagon_core::calendar::{self, Event};
+use timeparagon_core::config::CalendarSettings;
+use timeparagon_core::theme as look;
+use timeparagon_core::timeblocking as tb;
 
 use day::{DayModel, EditContext, Theme, TimeBlock, TimedEvent};
 use plan::{PlanView, TaskTab};
@@ -60,13 +60,13 @@ return false;
 
 #[cfg(not(target_os = "android"))]
 fn main() {
-	timeslay_core::database_sync::start();
+	timeparagon_core::database_sync::start();
 	dioxus::LaunchBuilder::desktop()
 		.with_cfg(
 			dioxus::desktop::Config::new()
 				.with_window(
 					dioxus::desktop::WindowBuilder::new()
-						.with_title("TimeSlay — Day")
+						.with_title("TimeParagon — Day")
 						.with_inner_size(dioxus::desktop::LogicalSize::new(1180.0, 900.0))
 						.with_min_inner_size(dioxus::desktop::LogicalSize::new(760.0, 560.0)),
 				)
@@ -91,7 +91,7 @@ fn window_background() -> (u8, u8, u8, u8) {
 #[cfg(target_os = "android")]
 fn main() {
 	prepare_android_storage();
-	timeslay_core::database_sync::start();
+	timeparagon_core::database_sync::start();
 	dioxus::launch(App);
 }
 
@@ -180,9 +180,9 @@ fn App() -> Element {
 	// Local settings can change under the view when the iced app saves them.
 	let mut config = use_signal(day::load_config);
 	let settings = config.read().calendar.clone();
-	let config_hint = timeslay_core::task_db::path()
+	let config_hint = timeparagon_core::task_db::path()
 		.map(|path| path.display().to_string())
-		.unwrap_or_else(|| "timeslay.sqlite3".to_owned());
+		.unwrap_or_else(|| "timeparagon.sqlite3".to_owned());
 
 	let mut current_day = use_signal(|| day::today(&settings));
 	let mut revision = use_signal(|| 0u32);
@@ -242,7 +242,7 @@ fn App() -> Element {
 	// Nights of the days in memory as the database has them, reread whenever
 	// one changes there, as when another device's night arrives by sync.
 	let mut stored_nights = use_signal(Vec::<calendar::Event>::new);
-	let mut database_sync_status = use_signal(timeslay_core::database_sync::status);
+	let mut database_sync_status = use_signal(timeparagon_core::database_sync::status);
 	let search_state = use_signal(Search::default);
 	// A note's connection or an agenda row, waiting for its day to load.
 	let mut pending_open = use_signal(|| None::<String>);
@@ -254,7 +254,7 @@ fn App() -> Element {
 	let mut signed_in = use_signal(day::signed_in);
 	let mut cached_days = use_signal(move || {
 		let mut store = calendar::Store::new(config.peek().calendar.day_start_hour());
-		store.cache_days_in(timeslay_core::task_db::path());
+		store.cache_days_in(timeparagon_core::task_db::path());
 		store
 	});
 	// Paint cached data immediately, fetching missing or empty days on navigation.
@@ -277,7 +277,7 @@ fn App() -> Element {
 			&& !settings.incremental_sync
 			&& !cached_days
 				.peek()
-				.sync_due(settings.refresh_every(), timeslay_core::clock::now());
+				.sync_due(settings.refresh_every(), timeparagon_core::clock::now());
 		let cached = cached_days.peek().cached_snapshot();
 		async move {
 			if initial_is_fresh {
@@ -368,14 +368,14 @@ fn App() -> Element {
 		// The local edits are only drawn again when the database says they
 		// changed, which is one small query instead of a full read, and the
 		// notes only when their directory's fingerprint moved.
-		let mut changes: Option<timeslay_core::local_changes::Counters> = None;
+		let mut changes: Option<timeparagon_core::local_changes::Counters> = None;
 		loop {
 			tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-			database_sync_status.set(timeslay_core::database_sync::status());
-			let counters = timeslay_core::task_db::path()
-				.and_then(|path| timeslay_core::local_changes::read(&path).ok());
-			let moved = |part: fn(&timeslay_core::local_changes::Counters) -> i64| {
+			database_sync_status.set(timeparagon_core::database_sync::status());
+			let counters = timeparagon_core::task_db::path()
+				.and_then(|path| timeparagon_core::local_changes::read(&path).ok());
+			let moved = |part: fn(&timeparagon_core::local_changes::Counters) -> i64| {
 				counters.is_none_or(|now| changes.is_none_or(|seen| part(&seen) != part(&now)))
 			};
 			let new = calendar::operations::log_since(
@@ -397,7 +397,7 @@ fn App() -> Element {
 				local_edits.set(local_edits() + 1);
 			}
 			if moved(|c| c.sleep)
-				&& let Some(path) = timeslay_core::task_db::path()
+				&& let Some(path) = timeparagon_core::task_db::path()
 			{
 				let days = cached_days.peek().loaded_days();
 				if let (Some(&first), Some(&last)) = (days.first(), days.last()) {
@@ -519,7 +519,7 @@ fn App() -> Element {
 			day_end_hour,
 		);
 	}
-	if let (Some(snapshot), Some(path)) = (&mut snapshot, timeslay_core::task_db::path())
+	if let (Some(snapshot), Some(path)) = (&mut snapshot, timeparagon_core::task_db::path())
 		&& let Err(error) =
 			calendar::operations::overlay(&path, &mut snapshot.events, Some(snapshot.fetched_at))
 	{
@@ -575,7 +575,7 @@ fn App() -> Element {
 		}
 		let settings = config.peek().calendar.clone();
 		let format = config.peek().appearance.time_format;
-		if calendar::sleep::timer(&night, timeslay_core::clock::now())
+		if calendar::sleep::timer(&night, timeparagon_core::clock::now())
 			== Some(calendar::sleep::Timer::Start)
 			&& reminders::notifications_blocked()
 		{
@@ -1219,7 +1219,7 @@ fn App() -> Element {
 				settings: settings.clone(),
 				events: notes_events,
 				opening: note_opening,
-				on_follow: move |link: timeslay_core::notes::Link| {
+				on_follow: move |link: timeparagon_core::notes::Link| {
 					let mut note_opening = note_opening;
 					note_opening.set(None);
 					show_notes.set(false);
@@ -1317,7 +1317,7 @@ fn App() -> Element {
 							onsubmit: move |event| {
 								event.prevent_default();
 								sync_url_saved.set(false);
-								match timeslay_core::config::save_database_sync_url(&sync_url_input()) {
+								match timeparagon_core::config::save_database_sync_url(&sync_url_input()) {
 									Ok(()) => {
 										let saved = day::load_config();
 										sync_url_input.set(saved.database_sync.url.clone());
@@ -1517,7 +1517,7 @@ fn App() -> Element {
 				});
 				// Travel is not an event kind, but it is toggled with the sources
 				// that are, as on the desktop.
-				let travel_row = (heading == "TimeSlay").then(|| {
+				let travel_row = (heading == "TimeParagon").then(|| {
 					let swatch = format!("background:{};", css_color(calendar::colors::TRAVEL));
 					rsx! {
 						button {
@@ -1612,7 +1612,7 @@ fn App() -> Element {
 	});
 
 	rsx! {
-		document::Title { "TimeSlay · Day" }
+		document::Title { "TimeParagon · Day" }
 		document::Style { {style::STYLESHEET.as_str()} }
 		div { class: "app",
 			{topbar}
@@ -1803,7 +1803,7 @@ impl PlanNav {
 fn task_list(
 	tab: TaskTab,
 	snapshot: &calendar::Snapshot,
-	config: Signal<timeslay_core::config::Config>,
+	config: Signal<timeparagon_core::config::Config>,
 	signed_in: bool,
 	revision: Signal<u32>,
 	editing: Signal<Option<Event>>,
@@ -2207,7 +2207,8 @@ fn timed_event_view(
 				span { class: "block-plan", "Plan" }
 			}
 		}
-	} else if let Some(timer) = calendar::sleep::timer(&timed.event, timeslay_core::clock::now()) {
+	} else if let Some(timer) = calendar::sleep::timer(&timed.event, timeparagon_core::clock::now())
+	{
 		// A night splits like a time block: its label opens it, and the
 		// button beside it starts or finishes the timer.
 		let night = timed.event.clone();
@@ -2479,7 +2480,7 @@ fn travel_style(trip: &day::TravelBox) -> String {
 	)
 }
 
-pub(crate) fn css_color(color: timeslay_core::Color) -> String {
+pub(crate) fn css_color(color: timeparagon_core::Color) -> String {
 	let red = (color.r.clamp(0.0, 1.0) * 255.0).round() as u8;
 	let green = (color.g.clamp(0.0, 1.0) * 255.0).round() as u8;
 	let blue = (color.b.clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -2524,8 +2525,8 @@ mod tests {
 mod sheet_tests {
 	use super::*;
 	use chrono::{Local, TimeZone};
-	use timeslay_core::config::{Config, ProjectsSettings};
-	use timeslay_core::notes::Library;
+	use timeparagon_core::config::{Config, ProjectsSettings};
+	use timeparagon_core::notes::Library;
 
 	fn today() -> NaiveDate {
 		NaiveDate::from_ymd_opt(2026, 11, 4).unwrap()

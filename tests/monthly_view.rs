@@ -1,9 +1,9 @@
 use chrono::{Datelike, Duration, Local, NaiveDate, TimeZone};
 use iced::{Element, Size};
 use iced_test::{Simulator, core::Settings};
-use timeslay::app::{CalendarMessage, EventMessage, SettingsMessage};
-use timeslay::calendar::first_day::FirstDayOfWeek;
-use timeslay::{
+use timeparagon::app::{CalendarMessage, EventMessage, SettingsMessage};
+use timeparagon::calendar::first_day::FirstDayOfWeek;
+use timeparagon::{
 	app::{self, Message, State},
 	calendar::{self, Store},
 };
@@ -40,7 +40,7 @@ fn state() -> State {
 		events: vec![],
 		..snapshot.clone()
 	});
-	state.view = timeslay::app::CalendarView::Month;
+	state.view = timeparagon::app::CalendarView::Month;
 	state.week_anchor = snapshot.day;
 	let dates = state.calendar_dates();
 	state.calendar.apply_week_snapshot(snapshot, &dates);
@@ -48,7 +48,7 @@ fn state() -> State {
 }
 
 fn render(state: &State, size: Size) -> Simulator<'_, Message> {
-	let view: Element<'_, Message> = timeslay::ui::editor_window(state);
+	let view: Element<'_, Message> = timeparagon::ui::editor_window(state);
 	Simulator::with_size(Settings::default(), size, view)
 }
 
@@ -182,9 +182,9 @@ fn date_click_updates_day_panel_and_keeps_month_overlay_anchored() {
 		let mut panel = Simulator::with_size(
 			Settings::default(),
 			Size::new(400.0, 900.0),
-			timeslay::ui::view(&state),
+			timeparagon::ui::view(&state),
 		);
-		let month_button = format!("{} ▾", timeslay::calendar::month_day_label(day));
+		let month_button = format!("{} ▾", timeparagon::calendar::month_day_label(day));
 		assert!(panel.find(month_button).is_ok());
 	}
 }
@@ -226,7 +226,7 @@ fn month_navigation_remains_reachable_at_small_widths() {
 
 #[test]
 fn habit_month_filters_other_events_and_retains_completion_history() {
-	use timeslay::habits::{Action, Habit, Series};
+	use timeparagon::habits::{Action, Habit, Series};
 	let mut state = state();
 	let day = date(2026, 8, 16);
 	let mut completed = state.calendar.events_on(day)[0].clone();

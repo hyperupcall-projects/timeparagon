@@ -1,9 +1,9 @@
 use chrono::{Duration, Local, NaiveDate, TimeZone};
 use iced::{Element, Size};
 use iced_test::{Simulator, core::Settings};
-use timeslay::app::{CalendarMessage, EventDraftMessage, EventMessage, SettingsMessage};
-use timeslay::calendar::first_day::FirstDayOfWeek;
-use timeslay::{
+use timeparagon::app::{CalendarMessage, EventDraftMessage, EventMessage, SettingsMessage};
+use timeparagon::calendar::first_day::FirstDayOfWeek;
+use timeparagon::{
 	app::{self, Message, State},
 	calendar::{self, Store},
 };
@@ -48,7 +48,7 @@ fn state(events_per_day: u32) -> State {
 		events: vec![],
 		..snapshot.clone()
 	});
-	state.view = timeslay::app::CalendarView::TwoWeek;
+	state.view = timeparagon::app::CalendarView::TwoWeek;
 	state.week_anchor = snapshot.day;
 	let dates = state.calendar_dates();
 	state.calendar.apply_week_snapshot(snapshot, &dates);
@@ -56,7 +56,7 @@ fn state(events_per_day: u32) -> State {
 }
 
 fn render(state: &State, size: Size) -> Simulator<'_, Message> {
-	let view: Element<'_, Message> = timeslay::ui::editor_window(state);
+	let view: Element<'_, Message> = timeparagon::ui::editor_window(state);
 	Simulator::with_size(Settings::default(), size, view)
 }
 

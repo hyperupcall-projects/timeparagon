@@ -5,7 +5,7 @@
 //! couple of seconds. That look used to happen on the UI thread and reread
 //! everything each time: the local edits for every cached day, and the whole
 //! habits and notes. Now a worker thread reads the change
-//! counters (see [`timeslay_core::local_changes`]) and a fingerprint of the
+//! counters (see [`timeparagon_core::local_changes`]) and a fingerprint of the
 //! notes directory, rereads only what moved, and the UI thread only applies
 //! the result.
 //!
@@ -17,8 +17,8 @@
 use std::path::PathBuf;
 
 use iced::Task;
-use timeslay_core::calendar::operations::{self, Overlay};
-use timeslay_core::local_changes::Counters;
+use timeparagon_core::calendar::operations::{self, Overlay};
+use timeparagon_core::local_changes::Counters;
 
 use crate::app::{Message, State, SystemMessage};
 use crate::blocking;
@@ -33,7 +33,7 @@ pub struct Poll {
 	habits: Option<i64>,
 	alarms: Option<i64>,
 	sleep: Option<i64>,
-	/// The notes directory's [`timeslay_core::notes::fingerprint`].
+	/// The notes directory's [`timeparagon_core::notes::fingerprint`].
 	notes: Option<u64>,
 	/// Read the local edits again even though their counter has not moved,
 	/// because this process just wrote some and wants them shown at once.
@@ -44,16 +44,16 @@ pub struct Poll {
 #[derive(Debug, Clone)]
 pub struct Polled {
 	counters: Counters,
-	alarms: Option<Result<timeslay_core::alarms::Snapshot, String>>,
+	alarms: Option<Result<timeparagon_core::alarms::Snapshot, String>>,
 	alarms_before: Vec<crate::alarms::Alarm>,
 	overlay: Option<Result<Overlay, String>>,
 	/// The stored nights of the days in memory, unsent edits applied.
-	nights: Option<Result<Vec<timeslay_core::calendar::Event>, String>>,
-	habits: Option<Result<Option<timeslay_core::habits::Library>, String>>,
+	nights: Option<Result<Vec<timeparagon_core::calendar::Event>, String>>,
+	habits: Option<Result<Option<timeparagon_core::habits::Library>, String>>,
 	/// The habits' and notes' local revisions when the read started.
 	habits_revision: u64,
 	notes_revision: u64,
-	notes: Option<Result<timeslay_core::notes::Library, String>>,
+	notes: Option<Result<timeparagon_core::notes::Library, String>>,
 	notes_fingerprint: u64,
 	/// Local edits database sync has not sent yet.
 	database_unsent: usize,
@@ -64,7 +64,7 @@ pub fn start(state: &mut State) -> Task<Message> {
 	if state.poll.in_flight {
 		return Task::none();
 	}
-	let Some(database) = timeslay_core::task_db::path() else {
+	let Some(database) = timeparagon_core::task_db::path() else {
 		return Task::none();
 	};
 	let overlay_path: Option<PathBuf> = state.calendar.local_database().map(Into::into);
@@ -88,7 +88,7 @@ pub fn start(state: &mut State) -> Task<Message> {
 	state.poll.in_flight = true;
 
 	blocking::run(move || {
-		let counters = match timeslay_core::local_changes::read(&database) {
+		let counters = match timeparagon_core::local_changes::read(&database) {
 			Ok(counters) => counters,
 			Err(error) => {
 				log::warn!("could not read local changes: {error}");
@@ -99,11 +99,11 @@ pub fn start(state: &mut State) -> Task<Message> {
 		let moved = |seen: Option<i64>, now: i64| seen != Some(now);
 		let notes_fingerprint = notes_path
 			.as_deref()
-			.map_or(0, timeslay_core::notes::fingerprint);
+			.map_or(0, timeparagon_core::notes::fingerprint);
 		Some(Polled {
 			counters,
 			alarms: moved(previous_alarms, counters.alarms)
-				.then(|| timeslay_core::alarms::poll(&database).map_err(|e| e.to_string())),
+				.then(|| timeparagon_core::alarms::poll(&database).map_err(|e| e.to_string())),
 			alarms_before,
 			overlay: overlay_path
 				.filter(|_| force_overlay || moved(overlay, counters.overlay))
@@ -112,14 +112,14 @@ pub fn start(state: &mut State) -> Task<Message> {
 				.zip(nights_range)
 				.filter(|_| moved(previous_sleep, counters.sleep))
 				.map(|(path, (first, last))| {
-					timeslay_core::calendar::sleep::stored_nights(&path, first, last)
+					timeparagon_core::calendar::sleep::stored_nights(&path, first, last)
 				}),
 			habits: habits_path
 				.filter(|_| moved(habits, counters.habits))
 				.map(|path| {
-					timeslay_core::task_db::read_document(
+					timeparagon_core::task_db::read_document(
 						&path,
-						timeslay_core::task_db::keys::HABITS,
+						timeparagon_core::task_db::keys::HABITS,
 					)
 					.map_err(|error| error.to_string())
 				}),
@@ -128,10 +128,10 @@ pub fn start(state: &mut State) -> Task<Message> {
 			notes: notes_path
 				.filter(|_| notes != Some(notes_fingerprint))
 				.map(|path| {
-					timeslay_core::notes::Library::read(&path).map_err(|error| error.to_string())
+					timeparagon_core::notes::Library::read(&path).map_err(|error| error.to_string())
 				}),
 			notes_fingerprint,
-			database_unsent: timeslay_core::database_sync::unsent_edits(),
+			database_unsent: timeparagon_core::database_sync::unsent_edits(),
 		})
 	})
 	.map(|polled| Message::System(SystemMessage::DatabasePolled(polled.map(Box::new))))
@@ -195,7 +195,7 @@ pub fn apply(state: &mut State, polled: Option<Box<Polled>>) -> Task<Message> {
 	// occurrences on other cached days are swapped in, and the days in view
 	// are fetched again: the sync asked for when saving may have reached
 	// Google before the write did.
-	let series = timeslay_core::calendar::series::take_refreshed();
+	let series = timeparagon_core::calendar::series::take_refreshed();
 	let refused = if series.is_empty() {
 		refused
 	} else {
@@ -208,7 +208,7 @@ pub fn apply(state: &mut State, polled: Option<Box<Polled>>) -> Task<Message> {
 	if state.alarms.accepts_shared() && state.alarms.items() == alarms_before {
 		match alarms {
 			Some(Ok(snapshot)) => {
-				if let Some(path) = timeslay_core::task_db::path() {
+				if let Some(path) = timeparagon_core::task_db::path() {
 					snapshot.observe(&path);
 				}
 				state.alarms.adopt_shared(snapshot.library.alarms);
@@ -260,7 +260,11 @@ pub fn refresh_overlay(state: &mut State) -> Task<Message> {
 mod tests {
 	use super::*;
 
-	fn polled(state: &State, habits: timeslay_core::habits::Library, revision: u64) -> Box<Polled> {
+	fn polled(
+		state: &State,
+		habits: timeparagon_core::habits::Library,
+		revision: u64,
+	) -> Box<Polled> {
 		Box::new(Polled {
 			counters: Counters {
 				habits: 7,
@@ -279,11 +283,11 @@ mod tests {
 		})
 	}
 
-	fn renamed(state: &State) -> timeslay_core::habits::Library {
+	fn renamed(state: &State) -> timeparagon_core::habits::Library {
 		let mut library = state.habits.library.clone();
 		library.score_bucket = match library.score_bucket {
-			timeslay_core::habits::Bucket::Day => timeslay_core::habits::Bucket::Week,
-			_ => timeslay_core::habits::Bucket::Day,
+			timeparagon_core::habits::Bucket::Day => timeparagon_core::habits::Bucket::Week,
+			_ => timeparagon_core::habits::Bucket::Day,
 		};
 		library
 	}

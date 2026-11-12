@@ -29,7 +29,7 @@ pub struct Metadata {
 	/// `calendar/series`. Each occurrence belongs to that day's block.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub block_series: Option<String>,
-	/// Creation instant recorded by TimeSlay; absent for tasks created elsewhere.
+	/// Creation instant recorded by TimeParagon; absent for tasks created elsewhere.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 	/// Planning horizon in the backlog; older and newly created tasks use Someday.

@@ -8,7 +8,7 @@
 //! Best streaks, Frequency and the calendar events, with Back to the list.
 //!
 //! The rules, the add and edit form and the day dialog are
-//! `timeslay_core::habits` and `timeslay_core::habit_edit`, the same as on the
+//! `timeparagon_core::habits` and `timeparagon_core::habit_edit`, the same as on the
 //! desktop. Habits sync between devices through the database.
 
 use std::collections::HashMap;
@@ -16,11 +16,11 @@ use std::path::PathBuf;
 
 use chrono::{Datelike, Duration, NaiveDate};
 use dioxus::prelude::*;
-use timeslay_core::calendar::time_format::{self, TimeFormat};
-use timeslay_core::calendar::{self, Event};
-use timeslay_core::config::CalendarSettings;
-use timeslay_core::habit_edit::{DayDialog, Form, FormAction, FrequencyKind, Log, SectionEdit};
-use timeslay_core::habits::{
+use timeparagon_core::calendar::time_format::{self, TimeFormat};
+use timeparagon_core::calendar::{self, Event};
+use timeparagon_core::config::CalendarSettings;
+use timeparagon_core::habit_edit::{DayDialog, Form, FormAction, FrequencyKind, Log, SectionEdit};
+use timeparagon_core::habits::{
 	self as model, Bucket, Computed, Habit, Icons, Kind, Library, Outcome, PALETTE_SIZE, Section,
 	SortKey, Status,
 };
@@ -33,7 +33,7 @@ const DAY_COLUMNS: i64 = 4;
 
 /// The id of a habit event that is not on Google yet. The event editor
 /// creates it when it is saved.
-pub const NEW_HABIT_ID: &str = "timeslay:new-habit";
+pub const NEW_HABIT_ID: &str = "timeparagon:new-habit";
 
 // -------------------------------------------------------------------- saving
 
@@ -53,7 +53,7 @@ pub fn read(path: Option<PathBuf>) -> Saved {
 			..Saved::default()
 		};
 	};
-	match timeslay_core::task_db::read_document(&path, timeslay_core::task_db::keys::HABITS) {
+	match timeparagon_core::task_db::read_document(&path, timeparagon_core::task_db::keys::HABITS) {
 		Ok(library) => Saved {
 			library: library.unwrap_or_default(),
 			path: Some(path),
@@ -72,9 +72,9 @@ pub fn read(path: Option<PathBuf>) -> Saved {
 impl Saved {
 	fn save(&mut self) {
 		let Some(path) = &self.path else { return };
-		let written = timeslay_core::task_db::write_document(
+		let written = timeparagon_core::task_db::write_document(
 			path,
-			timeslay_core::task_db::keys::HABITS,
+			timeparagon_core::task_db::keys::HABITS,
 			&self.library,
 		);
 		self.error = written
@@ -104,7 +104,7 @@ pub fn for_tests(habits: Vec<Habit>) -> Saved {
 /// Completing or reopening a habit event in its editor counts as doing the
 /// habit that day, or undoes it, as it does on the desktop.
 pub fn record_completion(event: &Event) {
-	let mut saved = read(timeslay_core::task_db::path());
+	let mut saved = read(timeparagon_core::task_db::path());
 	if saved.error.is_some() {
 		return;
 	}
@@ -129,7 +129,7 @@ pub fn record_completion(event: &Event) {
 
 // -------------------------------------------------------------------- events
 
-/// A habit event, as the master event on the TimeSlay calendar.
+/// A habit event, as the master event on the TimeParagon calendar.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Series {
 	pub id: String,
@@ -137,7 +137,7 @@ pub struct Series {
 	pub habit_id: Option<String>,
 	pub title: String,
 	pub schedule: String,
-	pub color: timeslay_core::Color,
+	pub color: timeparagon_core::Color,
 	pub start: chrono::DateTime<chrono::Local>,
 	pub end: chrono::DateTime<chrono::Local>,
 	/// What opens in the event editor.
@@ -441,7 +441,7 @@ pub fn HabitsScreen(
 	on_open_event: EventHandler<Event>,
 	on_show_calendar: EventHandler<CalendarFilter>,
 ) -> Element {
-	let saved = use_signal(|| read(timeslay_core::task_db::path()));
+	let saved = use_signal(|| read(timeparagon_core::task_db::path()));
 	let ui = use_signal(Ui::default);
 	let mut series = use_signal(Vec::<Series>::new);
 	let reload_series = use_signal(|| 0_u32);
@@ -463,7 +463,7 @@ pub fn HabitsScreen(
 			if ui.peek().drag.is_some() {
 				continue;
 			}
-			let loaded = read(timeslay_core::task_db::path());
+			let loaded = read(timeparagon_core::task_db::path());
 			if loaded.error.is_none() && loaded.library != saved.peek().library {
 				saved.set(loaded);
 			}
@@ -992,7 +992,7 @@ fn export(
 ) {
 	let name = match single {
 		Some(name) => format!("{} {today}.zip", name.replace('/', "-")),
-		None => format!("TimeSlay Habits {today}.zip"),
+		None => format!("TimeParagon Habits {today}.zip"),
 	};
 	let bytes = model::export_archive(habits, sections, today);
 	let folder = downloads();
@@ -1131,8 +1131,8 @@ fn habit_page(
 		.as_ref()
 		.map(|measure| measure.label(habit.kind));
 	let streaks = computed.best_streaks(10);
-	let target = timeslay_core::notes::Link {
-		kind: timeslay_core::notes::LinkKind::Habit,
+	let target = timeparagon_core::notes::Link {
+		kind: timeparagon_core::notes::LinkKind::Habit,
 		id: habit.id.clone(),
 		title: habit.name.clone(),
 		day: None,
@@ -1783,7 +1783,7 @@ fn sync_occurrences(ctx: Ctx, id: &str, day: NaiveDate, events: &[Event]) {
 			.take(wanted - done)
 			.map(|mut event| {
 				event.completed = true;
-				event.details.habit_completed_at = Some(timeslay_core::clock::now());
+				event.details.habit_completed_at = Some(timeparagon_core::clock::now());
 				event
 			})
 			.collect()
@@ -2172,8 +2172,8 @@ mod tests {
 	fn habits_that_cannot_be_read_are_never_saved_over() {
 		let directory = tempfile_dir();
 		let path = directory.join("test.sqlite3");
-		let key = timeslay_core::task_db::keys::HABITS;
-		timeslay_core::task_db::write_document_json(&path, key, "not json").unwrap();
+		let key = timeparagon_core::task_db::keys::HABITS;
+		timeparagon_core::task_db::write_document_json(&path, key, "not json").unwrap();
 		let mut saved = read(Some(path.clone()));
 		assert!(saved.error.is_some());
 		saved.library.habits.push(Habit::new("a", "Run"));
@@ -2501,7 +2501,7 @@ mod tests {
 
 	fn tempfile_dir() -> PathBuf {
 		let directory = std::env::temp_dir().join(format!(
-			"timeslay-habits-{}-{:?}",
+			"timeparagon-habits-{}-{:?}",
 			std::process::id(),
 			std::thread::current().id()
 		));

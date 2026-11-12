@@ -26,25 +26,25 @@ pub fn read(notes: &str) -> Result<Option<TaskData>, String> {
 	for line in tail.lines() {
 		let (key, value) = line
 			.split_once(": ")
-			.ok_or("Malformed TimeSlay metadata line")?;
+			.ok_or("Malformed TimeParagon metadata line")?;
 		let key = key
 			.strip_prefix("tt-")
-			.ok_or("Unexpected line in TimeSlay metadata")?;
+			.ok_or("Unexpected line in TimeParagon metadata")?;
 		if fields
 			.insert(
 				key.to_owned(),
 				serde_json::from_str(value)
-					.map_err(|e| format!("Invalid TimeSlay metadata: {e}"))?,
+					.map_err(|e| format!("Invalid TimeParagon metadata: {e}"))?,
 			)
 			.is_some()
 		{
-			return Err(format!("Duplicate TimeSlay metadata key: {key}"));
+			return Err(format!("Duplicate TimeParagon metadata key: {key}"));
 		}
 	}
 	if fields.remove("version") != Some(json!(1)) {
-		return Err("Unsupported TimeSlay metadata version".into());
+		return Err("Unsupported TimeParagon metadata version".into());
 	}
-	let id = fields.remove("id").ok_or("Missing TimeSlay task ID")?;
+	let id = fields.remove("id").ok_or("Missing TimeParagon task ID")?;
 	// Written by the removed time block metadata propagation; ignored now.
 	fields.remove("inherited");
 	let allowed = [
@@ -63,12 +63,12 @@ pub fn read(notes: &str) -> Result<Option<TaskData>, String> {
 		"created_at",
 	];
 	if fields.keys().any(|key| !allowed.contains(&key.as_str())) {
-		return Err("Unknown TimeSlay metadata field; update the app before editing".into());
+		return Err("Unknown TimeParagon metadata field; update the app before editing".into());
 	}
 	let data: TaskData = serde_json::from_value(json!({"id":id,"metadata":fields}))
-		.map_err(|e| format!("Invalid TimeSlay metadata: {e}"))?;
+		.map_err(|e| format!("Invalid TimeParagon metadata: {e}"))?;
 	if data.id < 100 {
-		return Err("Invalid TimeSlay task ID".into());
+		return Err("Invalid TimeParagon task ID".into());
 	}
 	Ok(Some(data))
 }
@@ -110,7 +110,7 @@ pub fn load(
 		database.cache_remote(event, &data)?;
 		return Ok(data);
 	}
-	// New Google Tasks receive their first TimeSlay metadata on encounter.
+	// New Google Tasks receive their first TimeParagon metadata on encounter.
 	let data = database.import(event)?;
 	publish(&data)?;
 	Ok(data)

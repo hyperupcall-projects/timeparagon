@@ -1,6 +1,6 @@
-//! TimeSlay: slay the day with TimeSlay.
+//! TimeParagon: master the day with TimeParagon.
 //!
-//! The library backs a single binary, `timeslay`, so the interface can be
+//! The library backs a single binary, `timeparagon`, so the interface can be
 //! exercised by tests without a compositor. A subcommand picks what it runs
 //! (see [`cli`]):
 //!
@@ -12,7 +12,7 @@
 //! * `webextension` — the browser native-messaging host (see
 //!   [`webextension`]), which adds a link to the inbox and exits.
 
-pub use timeslay_core::{
+pub use timeparagon_core::{
 	calendar, clock, database_sync, fsutil, hex, recurrence, secrets, settings, shared_data,
 	task_db, task_input,
 };

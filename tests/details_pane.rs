@@ -2,11 +2,11 @@
 
 use iced::{Size, Task, futures::StreamExt, window};
 use iced_test::runtime::{self, Action, window::Action as WindowAction};
-use timeslay::app::{
+use timeparagon::app::{
 	CalendarMessage, EventDraftMessage, EventEditMessage, EventMessage, NavigationMessage,
 	SettingsMessage,
 };
-use timeslay::{
+use timeparagon::{
 	app::{self, LayoutField, Message, State},
 	calendar,
 	config::Config,
@@ -102,7 +102,7 @@ fn the_details_width_setting_resizes_only_the_editor_live() {
 		Message::Event(EventMessage::EventOpened("all-day".into())),
 	));
 	let editor = state.editor_window.unwrap();
-	let height = state.main_size.height - timeslay::ui::editor_window_top(&state);
+	let height = state.main_size.height - timeparagon::ui::editor_window_top(&state);
 	let result = assert_resize(
 		app::update(
 			&mut state,
@@ -238,7 +238,7 @@ fn description_popup_stages_event_changes_without_saving_the_event() {
 #[test]
 fn dragged_habit_stays_editable_after_description_and_project_done() {
 	use calendar::projects::Action as ProjectAction;
-	use timeslay::habits;
+	use timeparagon::habits;
 
 	let mut state = state();
 	let start = state.calendar.event("standup").unwrap().start;
@@ -413,7 +413,7 @@ fn loading_a_calendar_habit_keeps_the_selected_occurrence_and_sync_source() {
 /// Leaving Plan for Habits closes the overview and uses the habit editor.
 #[test]
 fn leaving_plan_for_habits_uses_the_habit_editor() {
-	use timeslay::{app::Screen, habits};
+	use timeparagon::{app::Screen, habits};
 	for open_overview in [
 		Message::Calendar(CalendarMessage::CalendarModeSelected(true)),
 		Message::Calendar(CalendarMessage::CalendarMonthViewSelected),
@@ -444,7 +444,7 @@ fn leaving_plan_for_habits_uses_the_habit_editor() {
 		let mut ui = iced_test::simulator::Simulator::with_size(
 			iced::Settings::default(),
 			Size::new(1216.0, 900.0),
-			timeslay::ui::editor_window(&state),
+			timeparagon::ui::editor_window(&state),
 		);
 		assert!(
 			ui.find("Notifications").is_ok(),
@@ -456,7 +456,7 @@ fn leaving_plan_for_habits_uses_the_habit_editor() {
 
 #[test]
 fn new_habit_uses_the_shared_right_pane_and_width_setting() {
-	use timeslay::{app::Screen, habits};
+	use timeparagon::{app::Screen, habits};
 	let mut state = state();
 	state.screen = Screen::Habits;
 	let original = state.main_size;
@@ -491,7 +491,7 @@ fn new_habit_uses_the_shared_right_pane_and_width_setting() {
 		),
 		Size::new(
 			280.0,
-			original.height - timeslay::ui::editor_window_top(&state),
+			original.height - timeparagon::ui::editor_window_top(&state),
 		),
 	);
 	let _ = actions(app::update(
@@ -505,7 +505,7 @@ fn new_habit_uses_the_shared_right_pane_and_width_setting() {
 
 #[test]
 fn editing_a_habit_outside_the_visible_day_uses_the_calendar_editor() {
-	use timeslay::{app::Screen, habits};
+	use timeparagon::{app::Screen, habits};
 	let mut state = state();
 	state.screen = Screen::Habits;
 	let start = state.calendar.events[1].start + chrono::Duration::days(10);
@@ -568,7 +568,7 @@ fn editing_a_habit_outside_the_visible_day_uses_the_calendar_editor() {
 
 #[test]
 fn a_new_habit_keeps_its_draft_on_save_failure_and_closes_on_success() {
-	use timeslay::{app::Screen, habits};
+	use timeparagon::{app::Screen, habits};
 	let mut state = state();
 	state.screen = Screen::Habits;
 	state
@@ -622,7 +622,10 @@ fn a_new_habit_keeps_its_draft_on_save_failure_and_closes_on_success() {
 
 #[test]
 fn floating_editor_matches_panel_height_with_screen_margins() {
-	for side in [timeslay::panel::Side::Left, timeslay::panel::Side::Right] {
+	for side in [
+		timeparagon::panel::Side::Left,
+		timeparagon::panel::Side::Right,
+	] {
 		for margin in [0.0, 8.0, 30.0] {
 			let mut state = state();
 			state.sidebar = Some(app::Sidebar { width: 200.0, side });
@@ -638,7 +641,7 @@ fn floating_editor_matches_panel_height_with_screen_margins() {
 				while let Some(action) = stream.next().await {
 					if let Action::Window(WindowAction::Open(id, settings, sender)) = action {
 						assert_eq!(settings.size, Size::new(DETAIL, 900.0 - 2.0 * margin));
-						assert_eq!(timeslay::ui::editor_window_top(&state), margin);
+						assert_eq!(timeparagon::ui::editor_window_top(&state), margin);
 						let _ = sender.send(id);
 						opened = true;
 					}
@@ -671,11 +674,10 @@ fn saved_habit_edits_refresh_both_the_habits_list_and_calendar() {
 		}
 		messages
 	});
-	assert!(
-		messages
-			.iter()
-			.any(|message| matches!(message, Message::Habits(timeslay::habits::Action::Refresh)))
-	);
+	assert!(messages.iter().any(|message| matches!(
+		message,
+		Message::Habits(timeparagon::habits::Action::Refresh)
+	)));
 	assert!(messages.iter().any(|message| matches!(
 		message,
 		Message::Calendar(CalendarMessage::CalendarSyncRequested)

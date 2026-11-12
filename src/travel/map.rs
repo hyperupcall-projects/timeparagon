@@ -158,7 +158,8 @@ struct BridgeMessage {
 }
 
 fn bridge_message(title: &str, session: u64) -> Option<BridgeMessage> {
-	let message: BridgeMessage = serde_json::from_str(title.strip_prefix("timeslay-map:")?).ok()?;
+	let message: BridgeMessage =
+		serde_json::from_str(title.strip_prefix("timeparagon-map:")?).ok()?;
 	if message.session != session {
 		return None;
 	}
@@ -186,7 +187,7 @@ fn page(key: &str, query: &str, center: Option<[f64; 2]>, session: u64) -> Strin
 		.replace('&', "\\u0026")
 		.replace('\u{2028}', "\\u2028")
 		.replace('\u{2029}', "\\u2029");
-	include_str!("../../assets/map-picker.html").replace("/*TIMESLAY_CONFIG*/null", &json)
+	include_str!("../../assets/map-picker.html").replace("/*TIMEPARAGON_CONFIG*/null", &json)
 }
 
 pub fn subscription(state: &State) -> Subscription<Message> {
@@ -323,17 +324,17 @@ mod tests {
 		);
 		assert!(!html.contains("</script><script>alert"));
 		assert!(html.contains("\\u003c/script\\u003e"));
-		assert!(!html.contains("/*TIMESLAY_CONFIG*/"));
+		assert!(!html.contains("/*TIMEPARAGON_CONFIG*/"));
 	}
 	#[test]
 	fn bridge_rejects_old_sessions_and_invalid_places() {
-		let title = r#"timeslay-map:{"session":9,"selected":{"place_id":"id","name":"Cafe","address":"1 Main St","lat":37.8,"lng":-122.4}}"#;
+		let title = r#"timeparagon-map:{"session":9,"selected":{"place_id":"id","name":"Cafe","address":"1 Main St","lat":37.8,"lng":-122.4}}"#;
 		assert!(bridge_message(title, 9).unwrap().selected.is_some());
 		assert!(bridge_message(title, 10).is_none());
 		assert!(bridge_message(&title.replace("37.8", "100"), 9).is_none());
 		assert!(bridge_message("A normal page title", 9).is_none());
 		assert!(
-			bridge_message(r#"timeslay-map:{"session":9,"selected":null}"#, 9)
+			bridge_message(r#"timeparagon-map:{"session":9,"selected":null}"#, 9)
 				.unwrap()
 				.selected
 				.is_none()

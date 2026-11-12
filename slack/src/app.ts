@@ -1,4 +1,4 @@
-// Add Slack messages to the TimeSlay inbox.
+// Add Slack messages to the TimeParagon inbox.
 //
 // Slack only lets a third-party app add its own entries to the shortcuts menu
 // and the message actions menu; it cannot add an item to Slack's built-in
@@ -11,7 +11,7 @@
 //   * an App Home tab with instructions.
 //
 // Every path builds the same task and sends it through the same native host
-// (`timeslay webextension`) the browser extension uses, so the Gmail-aware
+// (`timeparagon webextension`) the browser extension uses, so the Gmail-aware
 // link handling and the running-app IPC are shared.
 
 import { pathToFileURL } from "node:url";
@@ -35,7 +35,7 @@ import {
   type SlackMessage,
   type TaskContext,
 } from "./format.ts";
-import { addToInbox, type AddOptions, type AddResult } from "./timeslay.ts";
+import { addToInbox, type AddOptions, type AddResult } from "./timeparagon.ts";
 
 /** The message shortcut Slack shows on every message. */
 export const MESSAGE_SHORTCUT = "add_to_inbox";
@@ -54,10 +54,10 @@ const MAX_SLACK_TEXT = 3_500;
  * the app configuration so both the socket-mode app and any caller agree.
  */
 export function addOptions(config: Config): AddOptions {
-  return { bin: config.timeslayBin, timeoutMs: config.timeslayTimeoutMs };
+  return { bin: config.timeparagonBin, timeoutMs: config.timeparagonTimeoutMs };
 }
 
-/** The context lines TimeSlay stores above the message text. */
+/** The context lines TimeParagon stores above the message text. */
 export function contextFor(
   message: SlackMessage,
   channelId: string,
@@ -103,14 +103,14 @@ function truncate(text: string, limit = MAX_SLACK_TEXT): string {
 export function resultText(result: AddResult): string {
   if (result.ok) {
     const title = result.task?.title ?? "the task";
-    const lines = [`:white_check_mark: Added to your TimeSlay inbox: *${title}*`];
+    const lines = [`:white_check_mark: Added to your TimeParagon inbox: *${title}*`];
     if (result.task?.link && /^https?:\/\//.test(result.task.link)) {
       lines.push(`<${result.task.link}|Open the task>`);
     }
     if (result.via) lines.push(`_via ${result.via}_`);
     return lines.join("\n");
   }
-  const error = result.error ?? "TimeSlay could not add this task.";
+  const error = result.error ?? "TimeParagon could not add this task.";
   const lines = [`:x: ${error}`];
   if (result.trace) lines.push(truncate(`\`\`\`${result.trace}\`\`\``));
   return lines.join("\n");
@@ -261,7 +261,7 @@ export function register(app: App, config: Config): void {
       view: {
         type: "modal",
         callback_id: MODAL_CALLBACK,
-        title: { type: "plain_text", text: "Add to TimeSlay" },
+        title: { type: "plain_text", text: "Add to TimeParagon" },
         submit: { type: "plain_text", text: "Add to inbox" },
         close: { type: "plain_text", text: "Cancel" },
         blocks: [
@@ -381,12 +381,12 @@ export function register(app: App, config: Config): void {
         view: {
           type: "home",
           blocks: [
-            { type: "header", text: { type: "plain_text", text: "TimeSlay" } },
+            { type: "header", text: { type: "plain_text", text: "TimeParagon" } },
             {
               type: "section",
               text: {
                 type: "mrkdwn",
-                text: "Add a Slack message to your TimeSlay inbox.",
+                text: "Add a Slack message to your TimeParagon inbox.",
               },
             },
             { type: "divider" },
@@ -414,7 +414,7 @@ export function register(app: App, config: Config): void {
               elements: [
                 {
                   type: "mrkdwn",
-                  text: "TimeSlay must be able to run the `timeslay` binary on this machine.",
+                  text: "TimeParagon must be able to run the `timeparagon` binary on this machine.",
                 },
               ],
             },
@@ -443,7 +443,7 @@ export function installOwnerGuard(app: App): void {
     }
     if ("ack" in args && typeof args.ack === "function") await args.ack();
     if ("respond" in args && typeof args.respond === "function") {
-      await args.respond({ response_type: "ephemeral", text: "This TimeSlay inbox belongs to another Slack account." });
+      await args.respond({ response_type: "ephemeral", text: "This TimeParagon inbox belongs to another Slack account." });
     }
   });
 }
@@ -483,7 +483,7 @@ if (invokedDirectly) {
   await startOAuth(config.oauth, installations);
   let app = createApp(config, installations);
   await app.start();
-  console.log("TimeSlay Slack app is running (socket mode).");
+  console.log("TimeParagon Slack app is running (socket mode).");
   let retrying = false;
   while (true) {
     if (!retrying) await delay(Math.max(1_000, tokens.refreshAt - Date.now()));

@@ -28,18 +28,18 @@ export type AddResult = {
 };
 
 export type AddOptions = {
-  /** The timeslay binary. Defaults to TIMESLAY_BIN or `timeslay` on PATH. */
+  /** The timeparagon binary. Defaults to TIMEPARAGON_BIN or `timeparagon` on PATH. */
   bin?: string;
   timeoutMs?: number;
 };
 
 function binary(options: AddOptions): string {
-  return options.bin?.trim() || process.env.TIMESLAY_BIN?.trim() || "timeslay";
+  return options.bin?.trim() || process.env.TIMEPARAGON_BIN?.trim() || "timeparagon";
 }
 
 function timeout(options: AddOptions): number {
   if (options.timeoutMs && options.timeoutMs > 0) return options.timeoutMs;
-  const raw = Number(process.env.TIMESLAY_TIMEOUT_MS);
+  const raw = Number(process.env.TIMEPARAGON_TIMEOUT_MS);
   return Number.isFinite(raw) && raw > 0 ? raw : 30_000;
 }
 
@@ -76,7 +76,7 @@ function isAddResult(value: unknown): value is AddResult {
 }
 
 /**
- * Runs `timeslay webextension` for one message. The binary is the same
+ * Runs `timeparagon webextension` for one message. The binary is the same
  * native host the browser uses, so the Slack app and the extension share one
  * code path (including the Gmail-aware link handling and the running-app IPC).
  */
@@ -108,12 +108,12 @@ export async function addToInbox(
       ok: false,
       error,
       trace: [
-        "TimeSlay Slack bridge failure",
+        "TimeParagon Slack bridge failure",
         `binary: ${bin}`,
         `url: ${request.url}`,
         `timeout: ${limit}ms`,
         extra,
-        stderr ? `\n--- timeslay stderr ---\n${stderr}` : "",
+        stderr ? `\n--- timeparagon stderr ---\n${stderr}` : "",
       ]
         .filter(Boolean)
         .join("\n"),
@@ -147,7 +147,7 @@ export async function addToInbox(
     child.on("error", (error) => {
       finish(
         failure(
-          `Could not run ${bin}: ${error.message}. Set TIMESLAY_BIN to the timeslay binary.`,
+          `Could not run ${bin}: ${error.message}. Set TIMEPARAGON_BIN to the timeparagon binary.`,
           error.stack ?? "",
         ),
       );

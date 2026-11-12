@@ -150,7 +150,7 @@ pub fn inbox_destination(token: &str, list: Option<&str>) -> Result<String, Stri
 	}
 }
 
-/// The id of the app's single TimeSlay calendar: the one already there under
+/// The id of the app's single TimeParagon calendar: the one already there under
 /// that name or a former name, or a freshly created one. Matching by name and
 /// ignoring the access role means a calendar the app just made is reused rather
 /// than duplicated on the next sync.
@@ -163,7 +163,7 @@ pub fn app_calendar(token: &str) -> Result<String, String> {
 	request("POST", api::EVENTS, token, Some(&body)).map_err(|e| e.message)?["id"]
 		.as_str()
 		.map(str::to_owned)
-		.ok_or_else(|| "Google did not return an ID for the TimeSlay calendar".into())
+		.ok_or_else(|| "Google did not return an ID for the TimeParagon calendar".into())
 }
 
 /// The id of the first calendar whose name is the app calendar or a former

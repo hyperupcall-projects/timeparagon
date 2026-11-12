@@ -11,14 +11,14 @@
 mod backend;
 
 pub mod decode;
-pub use timeslay_core::sounds::synth;
+pub use timeparagon_core::sounds::synth;
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-pub use timeslay_core::sounds::{CHANNELS, Pcm, SAMPLE_RATE, Tone};
+pub use timeparagon_core::sounds::{CHANNELS, Pcm, SAMPLE_RATE, Tone};
 
 /// A request to play something.
 pub struct Play {
@@ -233,7 +233,7 @@ impl Audio {
 		shared.alive.store(true, Ordering::Release);
 
 		match std::thread::Builder::new()
-			.name("timeslay-audio".to_owned())
+			.name("timeparagon-audio".to_owned())
 			.spawn(move || backend::run(shared, receiver))
 		{
 			Ok(_handle) => self.sender = Some(sender),

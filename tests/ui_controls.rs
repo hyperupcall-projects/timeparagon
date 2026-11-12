@@ -1,8 +1,8 @@
 //! Calendar selection and multiline forms exercised through the real widget tree.
 use iced::{Size, widget::text_editor};
 use iced_test::{Simulator, core::Settings};
-use timeslay::app::{EventDraftMessage, EventMessage};
-use timeslay::{
+use timeparagon::app::{EventDraftMessage, EventMessage};
+use timeparagon::{
 	app::{self, Message, State},
 	ui,
 };
@@ -15,7 +15,10 @@ fn state() -> State {
 fn task_dates_open_calendar_and_day_buttons_select_real_dates() {
 	for width in [200.0, 320.0, 720.0] {
 		let mut state = state();
-		let _ = app::update(&mut state, Message::Inbox(timeslay::inbox::Action::NewTask));
+		let _ = app::update(
+			&mut state,
+			Message::Inbox(timeparagon::inbox::Action::NewTask),
+		);
 		let mut form: Simulator<'_, Message> = Simulator::with_size(
 			Settings::default(),
 			Size::new(width, 700.0),
@@ -41,7 +44,7 @@ fn task_dates_open_calendar_and_day_buttons_select_real_dates() {
 fn multiline_descriptions_survive_editing_and_habit_handoff() {
 	let mut state = state();
 	let now = chrono::Local::now();
-	state.calendar.draft = Some(timeslay::calendar::Draft::new(
+	state.calendar.draft = Some(timeparagon::calendar::Draft::new(
 		"calendar".into(),
 		now,
 		now + chrono::Duration::hours(1),
@@ -59,7 +62,7 @@ fn multiline_descriptions_survive_editing_and_habit_handoff() {
 	let _ = app::update(
 		&mut state,
 		Message::Event(EventMessage::FormEdited(
-			timeslay::app::FormField::EventDraft,
+			timeparagon::app::FormField::EventDraft,
 			text_editor::Action::Edit(text_editor::Edit::Insert('!')),
 		)),
 	);
@@ -69,7 +72,7 @@ fn multiline_descriptions_survive_editing_and_habit_handoff() {
 	let _ = app::update(
 		&mut state,
 		Message::EventDraft(EventDraftMessage::EventDraftKindSelected(
-			timeslay::calendar::DraftKind::Habit,
+			timeparagon::calendar::DraftKind::Habit,
 		)),
 	);
 	assert_eq!(state.form_editors.event_edit.text(), expected);
@@ -89,7 +92,7 @@ fn multiline_descriptions_survive_editing_and_habit_handoff() {
 fn time_picker_retains_the_other_segment() {
 	for (x, expected) in [(40.0, "22:47"), (160.0, "23:46")] {
 		let control = ui::controls::time(
-			timeslay::calendar::time_format::TimeFormat::TwentyFourHour,
+			timeparagon::calendar::time_format::TimeFormat::TwentyFourHour,
 			"23:47",
 			true,
 			13.0,
@@ -126,7 +129,7 @@ fn twelve_hour_picker_keeps_noon_and_midnight_unambiguous() {
 		("12:47", 260.0, "00:47"),
 	] {
 		let control = ui::controls::time(
-			timeslay::calendar::time_format::TimeFormat::TwelveHour,
+			timeparagon::calendar::time_format::TimeFormat::TwelveHour,
 			value,
 			true,
 			13.0,
@@ -158,7 +161,7 @@ fn twelve_hour_picker_keeps_noon_and_midnight_unambiguous() {
 #[test]
 fn compact_picker_displays_short_periods_and_preserves_stored_time() {
 	let control = ui::controls::time(
-		timeslay::calendar::time_format::TimeFormat::Compact,
+		timeparagon::calendar::time_format::TimeFormat::Compact,
 		"13:30",
 		true,
 		13.0,

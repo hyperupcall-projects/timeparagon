@@ -23,7 +23,7 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
 			Task::none()
 		}
 		SettingsMessage::NotesDirectoryApply => {
-			let settings = timeslay_core::config::NotesSettings {
+			let settings = timeparagon_core::config::NotesSettings {
 				directory: state.notes.directory_input.trim().to_owned(),
 			};
 			match state.notes.configure(settings.path()) {
@@ -418,8 +418,8 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
 			state.calendar.color_editor = None;
 			queue_save(state)
 		}
-		SettingsMessage::TimeSlayColorPicked(id, color) => {
-			if let Some(source) = calendar::sources::TimeSlaySource::from_id(&id) {
+		SettingsMessage::TimeParagonColorPicked(id, color) => {
+			if let Some(source) = calendar::sources::TimeParagonSource::from_id(&id) {
 				source.set_color(&mut state.config.calendar, color);
 				state.calendar.apply_task_colors(&state.config.calendar);
 				state.calendar.color_editor = None;

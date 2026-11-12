@@ -1,5 +1,5 @@
 use chrono::Duration;
-use timeslay_core::{calendar, config::CalendarSettings, task_edit, timeblocking};
+use timeparagon_core::{calendar, config::CalendarSettings, task_edit, timeblocking};
 
 #[test]
 fn adding_four_tasks_keeps_all_four_assigned_after_automatic_layout() {
@@ -104,7 +104,7 @@ fn planned_task_survives_reload_moves_with_its_block_and_is_released_on_delete()
 	)
 	.unwrap();
 
-	let path = timeslay_core::task_db::path().unwrap();
+	let path = timeparagon_core::task_db::path().unwrap();
 	let reload = || {
 		let mut restored = Vec::new();
 		calendar::operations::load_overlay(&path)
@@ -195,7 +195,7 @@ fn planned_habit_keeps_its_link_through_duration_edits_reload_and_unassign() {
 		Some("reading-library-habit")
 	);
 	let mut restored = Vec::new();
-	calendar::operations::load_overlay(&timeslay_core::task_db::path().unwrap())
+	calendar::operations::load_overlay(&timeparagon_core::task_db::path().unwrap())
 		.unwrap()
 		.apply(&mut restored, None);
 	let restored = restored.into_iter().find(|task| task.id == id).unwrap();

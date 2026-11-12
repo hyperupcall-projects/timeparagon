@@ -381,7 +381,7 @@ pub struct PendingTime {
 /// What a new event from the add-event popup is.
 ///
 /// An `Event` is an ordinary calendar entry on the chosen calendar. A
-/// `TimeBlock` is written to the app's single TimeSlay calendar and is
+/// `TimeBlock` is written to the app's single TimeParagon calendar and is
 /// labelled and colored as a block, the same as one created anywhere else.
 /// A `Habit` is a recurring event; choosing it hands the popup's fields to
 /// the Habits editor.
@@ -929,7 +929,7 @@ pub fn event_enabled(calendars: &[Calendar], event: &Event, settings: &CalendarS
 			.find(|calendar| calendar.is_app_calendar(settings))
 			.map(|calendar| calendar.id.as_str())
 	});
-	let kind = sources::TimeSlaySource::of(event, app_calendar.unwrap_or(""));
+	let kind = sources::TimeParagonSource::of(event, app_calendar.unwrap_or(""));
 	calendar_enabled(event.source_id(), settings)
 		&& kind.is_none_or(|kind| calendar_enabled(kind.id(), settings))
 }
@@ -987,7 +987,7 @@ pub struct Details {
 	pub attendees: Vec<String>,
 	/// The guests as data: their replies, permissions and the user's part.
 	pub attendance: meeting::Attendance,
-	/// This is a habit event on the app's TimeSlay calendar.
+	/// This is a habit event on the app's TimeParagon calendar.
 	pub habit: bool,
 	/// The habit this event counts towards, from its `ttHabit` property.
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -1928,7 +1928,7 @@ impl Store {
 	}
 
 	/// Plain events belong on regular Google calendars, not task lists or
-	/// the app's calendar, which is reserved for TimeSlay's own kinds.
+	/// the app's calendar, which is reserved for TimeParagon's own kinds.
 	pub fn event_calendars<'a>(
 		&'a self,
 		settings: &'a CalendarSettings,
@@ -1953,7 +1953,7 @@ impl Store {
 	/// The calendars `event` can be on, including its current one.
 	///
 	/// Empty when it has to stay where it is: tasks, habits, sleep and anything
-	/// else living on the TimeSlay calendar belong to the app, and the TimeSlay
+	/// else living on the TimeParagon calendar belong to the app, and the TimeParagon
 	/// calendar is never a destination. Also empty with nowhere else to go.
 	pub fn move_targets(&self, event: &Event, settings: &CalendarSettings) -> Vec<&Calendar> {
 		if event.is_task() || event.details.habit || event.details.sleep.is_some() {
@@ -2409,7 +2409,7 @@ pub fn sync_habit_listing(
 	api::fetch_habit_listing(&token, app_calendar)
 }
 
-/// Pulls every habit master from the app's TimeSlay calendar.
+/// Pulls every habit master from the app's TimeParagon calendar.
 pub fn sync_habits(
 	client: &GoogleClient,
 	app_calendar: Option<&str>,
@@ -2463,7 +2463,7 @@ pub fn create_habit(
 		crate::config::Config::load()
 			.calendar
 			.app_calendar
-			.ok_or("Sync Google once to discover the TimeSlay calendar")?
+			.ok_or("Sync Google once to discover the TimeParagon calendar")?
 	} else {
 		draft.calendar_id.clone()
 	};
@@ -2720,7 +2720,7 @@ pub fn create_event(
 	})
 }
 
-/// Creates a time block on the app's single TimeSlay calendar and returns its
+/// Creates a time block on the app's single TimeParagon calendar and returns its
 /// id together with the calendar it landed on. Blocks do not repeat, so there
 /// are no recurrence lines.
 #[allow(clippy::too_many_arguments)]
@@ -2733,7 +2733,7 @@ pub fn create_time_block(
 	end: DateTime<Local>,
 	projects: &[u64],
 ) -> Result<(String, String), String> {
-	let calendar = known_calendar.ok_or("Sync Google once to discover the TimeSlay calendar")?;
+	let calendar = known_calendar.ok_or("Sync Google once to discover the TimeParagon calendar")?;
 	let inserted = create_event(
 		calendar,
 		title,
@@ -3417,7 +3417,7 @@ mod tests {
 		let mut snapshot = sample_snapshot();
 		snapshot.calendars.push(Calendar {
 			id: "app".into(),
-			name: "TimeSlay".into(),
+			name: "TimeParagon".into(),
 			color: colors::DEFAULT_EVENT,
 			primary: false,
 			selected_by_google: true,
@@ -3959,7 +3959,7 @@ mod tests {
 			app_calendar: Some("app".into()),
 			..CalendarSettings::default()
 		};
-		// The color Google gives an event on the TimeSlay calendar. It is what
+		// The color Google gives an event on the TimeParagon calendar. It is what
 		// an overlay reload puts back, and it must never be drawn for an
 		// app-owned item.
 		let calendar_red = colors::calendar("2").unwrap();
@@ -4637,7 +4637,7 @@ mod tests {
 	#[test]
 	fn a_location_reaches_every_copy_of_an_event() {
 		let temporary = tempfile::tempdir().unwrap();
-		let directory = temporary.path().join("timeslay.sqlite3");
+		let directory = temporary.path().join("timeparagon.sqlite3");
 		let snapshot = sample_snapshot();
 		let day = snapshot.day;
 		let other = day.succ_opt().unwrap();

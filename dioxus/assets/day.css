@@ -3,7 +3,7 @@
  * the day's heading and controls, its all-day chips, and the grid in a card.
  *
  * Every color, radius and shadow here is a variable from `src/style.rs`, which
- * reads them from `timeslay_core::theme`. Controls are taller than on the
+ * reads them from `timeparagon_core::theme`. Controls are taller than on the
  * desktop, since they are pressed with a finger.
  */
 

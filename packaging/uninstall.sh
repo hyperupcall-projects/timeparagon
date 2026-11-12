@@ -1,5 +1,5 @@
 #!/bin/sh
-# Remove the TimeSlay desktop application installed by install.sh.
+# Remove the TimeParagon desktop application installed by install.sh.
 #
 # Usage:
 #   packaging/uninstall.sh [--prefix DIR] [--purge] [--help]
@@ -46,29 +46,27 @@ say() { printf '%s\n' "$*"; }
 
 # --- Stop and disable the service ------------------------------------------
 if command -v systemctl >/dev/null 2>&1; then
-    systemctl --user disable --now timeslay-database-sync.service >/dev/null 2>&1 || true
-    systemctl --user disable --now timeslay.service >/dev/null 2>&1 || true
-    systemctl --user disable --now timeslay-shortcuts.service >/dev/null 2>&1 || true
-    systemctl --user disable --now timeslay-slack.service >/dev/null 2>&1 || true
+    systemctl --user disable --now timeparagon-database-sync.service >/dev/null 2>&1 || true
+    systemctl --user disable --now timeparagon.service >/dev/null 2>&1 || true
+    systemctl --user disable --now timeparagon-shortcuts.service >/dev/null 2>&1 || true
+    systemctl --user disable --now timeparagon-slack.service >/dev/null 2>&1 || true
 fi
 
 # --- Remove installed files ------------------------------------------------
-rm -f "$config_home/systemd/user/timeslay.service"
-rm -f "$config_home/systemd/user/timeslay-shortcuts.service"
-rm -f "$config_home/systemd/user/timeslay-slack.service"
-rm -rf "$data_home/timeslay/slack"
-rm -f "$data_home/applications/timeslay.desktop"
-rm -f "$data_home/icons/hicolor/512x512/apps/timeslay.png"
-rm -f "$prefix/bin/timeslay"
-rm -f "$prefix/bin/timeslay-database-sync"
-rm -f "$config_home/systemd/user/timeslay-database-sync.service"
-rm -rf "$prefix/lib/timeslay/cef"
-rm -f "$prefix/bin/timeslay-panel"
-rm -f "$prefix/bin/timeslay-dock"
+rm -f "$config_home/systemd/user/timeparagon.service"
+rm -f "$config_home/systemd/user/timeparagon-shortcuts.service"
+rm -f "$config_home/systemd/user/timeparagon-slack.service"
+rm -rf "$data_home/timeparagon/slack"
+rm -f "$data_home/applications/timeparagon.desktop"
+rm -f "$data_home/icons/hicolor/512x512/apps/timeparagon.png"
+rm -f "$prefix/bin/timeparagon"
+rm -f "$prefix/bin/timeparagon-database-sync"
+rm -f "$config_home/systemd/user/timeparagon-database-sync.service"
+rm -rf "$prefix/lib/timeparagon/cef"
 say "Removed binaries, desktop entry, icon and systemd units."
 
 # --- Remove the KWin window rule -------------------------------------------
-rule="TimeSlay Sidebar"
+rule="TimeParagon Sidebar"
 if command -v kwriteconfig6 >/dev/null 2>&1; then
     rules_file="$config_home/kwinrulesrc"
     current=$(sed -n 's/^Order=//p' "$rules_file" 2>/dev/null | tail -n 1)
@@ -95,8 +93,8 @@ fi
 
 # --- Optionally remove user data -------------------------------------------
 if [ "$purge" -eq 1 ]; then
-    rm -rf "$config_home/timeslay"
-    rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/timeslay"
+    rm -rf "$config_home/timeparagon"
+    rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/timeparagon"
     say "Purged config and cache."
 fi
 

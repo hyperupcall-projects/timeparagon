@@ -301,7 +301,7 @@ mod tests {
 
 	fn database() -> (tempfile::TempDir, std::path::PathBuf) {
 		let directory = tempfile::tempdir().unwrap();
-		let path = directory.path().join("timeslay.sqlite3");
+		let path = directory.path().join("timeparagon.sqlite3");
 		(directory, path)
 	}
 
@@ -457,9 +457,9 @@ mod tests {
 				.execute_batch(
 					"INSERT INTO settings VALUES('calendar.sync_minutes','\"often\"');
                      INSERT INTO settings VALUES('future.setting','1');
-                     UPDATE timeslay_sync_control SET projecting=1;
+                     UPDATE timeparagon_sync_control SET projecting=1;
                      INSERT INTO settings VALUES('calendar.weekly_days','not json');
-                     UPDATE timeslay_sync_control SET projecting=0;",
+                     UPDATE timeparagon_sync_control SET projecting=0;",
 				)
 				.unwrap();
 		}

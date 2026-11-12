@@ -9,7 +9,7 @@ use iced::advanced::{Layout, Widget, layout, renderer};
 use iced::widget::{Space, button, column, container, mouse_area, row, stack, text};
 use iced::{Border, Color, Element, Fill, Renderer, Shadow, Theme, Vector, mouse};
 use std::sync::Arc;
-use timeslay_core::theme as look;
+use timeparagon_core::theme as look;
 
 /// Consistent section captions for metadata editors.
 /// Shows fields that are owned elsewhere grayed out, with `reason` above
@@ -570,7 +570,7 @@ pub fn page_toolbar<'a>(
 	}
 }
 
-pub use timeslay_core::theme::{RADIUS_CARD, RADIUS_CONTROL, RADIUS_ROW, RADIUS_SMALL, SCRIM};
+pub use timeparagon_core::theme::{RADIUS_CARD, RADIUS_CONTROL, RADIUS_ROW, RADIUS_SMALL, SCRIM};
 
 /// A soft black shadow, deepened on dark themes where it would otherwise vanish.
 pub fn shadow(theme: &Theme, alpha: f32, y: f32, blur_radius: f32) -> Shadow {
@@ -658,7 +658,7 @@ pub fn summary_surface(theme: &Theme) -> container::Style {
 /// The border drawn around anything whose change is still on its way to the
 /// cloud (Google Calendar, Tasks, Contacts, …). The Dioxus day view draws the
 /// same color, as `--pending-border`.
-pub use timeslay_core::theme::PENDING_BORDER;
+pub use timeparagon_core::theme::PENDING_BORDER;
 
 /// The font for text whose change is still on its way to the cloud: italic,
 /// so it reads as not yet final. Pair it with [`locked`], which adds the
@@ -675,7 +675,7 @@ pub fn pending_font(font: iced::Font, pending: bool) -> iced::Font {
 }
 
 /// Outlines an event or task whose change is still on its way to Google
-/// ([`timeslay_core::calendar::Details::sending`]) in [`PENDING_BORDER`], and
+/// ([`timeparagon_core::calendar::Details::sending`]) in [`PENDING_BORDER`], and
 /// keeps the pointer off it until Google answers, so it cannot be changed
 /// again in the meantime. The text inside is made italic by its builder,
 /// with [`pending_font`].

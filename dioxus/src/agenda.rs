@@ -2,9 +2,9 @@
 
 use chrono::{Duration, Months, NaiveDate};
 use dioxus::prelude::*;
-use timeslay_core::calendar::search::Search;
-use timeslay_core::calendar::{self, Event};
-use timeslay_core::config::CalendarSettings;
+use timeparagon_core::calendar::search::Search;
+use timeparagon_core::calendar::{self, Event};
+use timeparagon_core::config::CalendarSettings;
 
 use crate::css_color;
 use crate::day;

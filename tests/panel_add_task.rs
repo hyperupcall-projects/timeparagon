@@ -1,7 +1,7 @@
 use iced::{Size, widget::Id};
 use iced_test::{Simulator, core::Settings};
-use timeslay::app::{EventMessage, SystemMessage};
-use timeslay::{
+use timeparagon::app::{EventMessage, SystemMessage};
+use timeparagon::{
 	app::{self, Message, Sidebar, State},
 	calendar, inbox, panel,
 };
@@ -23,7 +23,7 @@ fn panel_add_task_stays_at_the_bottom_and_keeps_its_size_when_panes_open() {
 			let mut ui = Simulator::with_size(
 				Settings::default(),
 				state.main_size,
-				timeslay::ui::view(&state),
+				timeparagon::ui::view(&state),
 			);
 			let original = ui.find(Id::new("panel-add-task")).unwrap().bounds();
 			let body = ui.find(Id::new("sidebar-body")).unwrap().bounds();
@@ -39,7 +39,7 @@ fn panel_add_task_stays_at_the_bottom_and_keeps_its_size_when_panes_open() {
 				let mut ui = Simulator::with_size(
 					Settings::default(),
 					state.main_size,
-					timeslay::ui::view(&state),
+					timeparagon::ui::view(&state),
 				);
 				assert_eq!(
 					ui.find(Id::new("panel-add-task")).unwrap().bounds(),
@@ -56,7 +56,7 @@ fn panel_plus_opens_the_inbox_task_form() {
 	let mut ui = Simulator::with_size(
 		Settings::default(),
 		state.main_size,
-		timeslay::ui::view(&state),
+		timeparagon::ui::view(&state),
 	);
 	ui.click(Id::new("panel-add-task")).unwrap();
 	let messages: Vec<_> = ui.into_messages().collect();
@@ -72,7 +72,7 @@ fn panel_plus_opens_the_inbox_task_form() {
 	let mut ui = Simulator::with_size(
 		Settings::default(),
 		state.main_size,
-		timeslay::ui::view(&state),
+		timeparagon::ui::view(&state),
 	);
 	for label in [
 		"Task, or paste a link",
@@ -101,7 +101,7 @@ fn dock_editor_window_uses_the_full_form_and_can_open_the_estimate_dialog() {
 		let mut ui = Simulator::with_size(
 			Settings::default(),
 			Size::new(width, 700.0),
-			timeslay::ui::view(&state),
+			timeparagon::ui::view(&state),
 		);
 		assert!(ui.find(Id::new("application-body")).is_err());
 		for label in [
@@ -122,14 +122,14 @@ fn dock_editor_window_uses_the_full_form_and_can_open_the_estimate_dialog() {
 	}
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(timeslay::timeblocking::Action::EditEstimate(
+		Message::TimeBlocking(timeparagon::timeblocking::Action::EditEstimate(
 			inbox::DRAFT_ID.into(),
 		)),
 	);
 	let mut ui = Simulator::with_size(
 		Settings::default(),
 		Size::new(480.0, 700.0),
-		timeslay::ui::view(&state),
+		timeparagon::ui::view(&state),
 	);
 	assert!(ui.find("Estimated completion time").is_ok());
 	assert!(ui.find("Save").is_ok());
@@ -144,7 +144,7 @@ fn dock_task_card_bottom_matches_the_dock_surface_at_short_and_tall_heights() {
 		let mut ui = Simulator::with_size(
 			Settings::default(),
 			Size::new(440.0, height),
-			timeslay::ui::view(&state),
+			timeparagon::ui::view(&state),
 		);
 		let card = ui.find(Id::new("dock-task-card")).unwrap().bounds();
 		assert!((card.y + card.height - height).abs() < 1.0, "{card:?}");
@@ -166,7 +166,7 @@ fn dock_map_input_region_covers_the_surface_and_returns_to_the_task_card() {
 			// reported by the actual popover view, before events reach CEF.
 			state.travel.map.active = map_open;
 			let mut ui =
-				Simulator::with_size(Settings::default(), size, timeslay::ui::view(&state));
+				Simulator::with_size(Settings::default(), size, timeparagon::ui::view(&state));
 			let expected = if map_open {
 				iced::Rectangle::with_size(size)
 			} else {
@@ -191,7 +191,7 @@ fn panel_footer_shows_logs_beside_the_plus_and_opens_the_log() {
 	let mut ui = Simulator::with_size(
 		Settings::default(),
 		state.main_size,
-		timeslay::ui::view(&state),
+		timeparagon::ui::view(&state),
 	);
 	let status = ui.find(Id::new("activity-status")).unwrap().bounds();
 	let add = ui.find(Id::new("panel-add-task")).unwrap().bounds();
@@ -210,7 +210,7 @@ fn panel_footer_shows_logs_beside_the_plus_and_opens_the_log() {
 	let mut ui = Simulator::with_size(
 		Settings::default(),
 		state.main_size,
-		timeslay::ui::view(&state),
+		timeparagon::ui::view(&state),
 	);
 	assert!(ui.find(Id::new("activity-log")).is_ok());
 	assert!(ui.find("Synced 3 events and 24 tasks from Google").is_ok());
@@ -223,7 +223,7 @@ fn loading_shows_in_the_footer_without_moving_the_view() {
 		let mut ui = Simulator::with_size(
 			Settings::default(),
 			state.main_size,
-			timeslay::ui::view(state),
+			timeparagon::ui::view(state),
 		);
 		ui.find(Id::new("panel-footer")).unwrap().bounds()
 	};
@@ -235,7 +235,7 @@ fn loading_shows_in_the_footer_without_moving_the_view() {
 	let mut ui = Simulator::with_size(
 		Settings::default(),
 		state.main_size,
-		timeslay::ui::view(&state),
+		timeparagon::ui::view(&state),
 	);
 	assert!(ui.find("Loading from cloud").is_ok());
 	assert!(ui.find("Loading...").is_err());

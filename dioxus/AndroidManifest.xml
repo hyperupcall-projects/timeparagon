@@ -38,47 +38,47 @@
             </intent-filter>
         </activity>
 
-        <activity android:name="dev.timeslay.day.notes.NotesFolderActivity"
+        <activity android:name="dev.kofler.timeparagon.notes.NotesFolderActivity"
             android:exported="false" android:excludeFromRecents="true"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
         <!-- The day view widget. Its sources are in android/; scripts/build-android.sh
              adds them to the project `dx` generates. -->
-        <receiver android:name="dev.timeslay.day.widget.DayWidgetProvider"
+        <receiver android:name="dev.kofler.timeparagon.widget.DayWidgetProvider"
             android:exported="false"
             android:label="@string/day_widget_label">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-                <action android:name="dev.timeslay.day.widget.DATA_CHANGED" />
+                <action android:name="dev.kofler.timeparagon.widget.DATA_CHANGED" />
             </intent-filter>
             <meta-data android:name="android.appwidget.provider"
                 android:resource="@xml/day_widget_info" />
         </receiver>
-        <service android:name="dev.timeslay.day.widget.DayWidgetService"
+        <service android:name="dev.kofler.timeparagon.widget.DayWidgetService"
             android:exported="false"
             android:permission="android.permission.BIND_REMOTEVIEWS" />
         <!-- A separate process, because the native library's Android context is
              set up once per process and the activity's own setup must not race it. -->
-        <service android:name="dev.timeslay.day.widget.WidgetRefreshService"
+        <service android:name="dev.kofler.timeparagon.widget.WidgetRefreshService"
             android:exported="false"
             android:process=":widget"
             android:permission="android.permission.BIND_JOB_SERVICE" />
 
-        <!-- Reminders. Sources in android/kotlin/dev/timeslay/day/reminders. -->
-        <receiver android:name="dev.timeslay.day.reminders.ReminderReceiver"
+        <!-- Reminders. Sources in android/kotlin/dev/kofler/timeparagon/reminders. -->
+        <receiver android:name="dev.kofler.timeparagon.reminders.ReminderReceiver"
             android:exported="false">
             <intent-filter>
-                <action android:name="dev.timeslay.day.reminders.SYNC" />
-                <action android:name="dev.timeslay.day.reminders.TEST" />
-                <action android:name="dev.timeslay.day.reminders.DEVICE_INFO" />
-                <action android:name="dev.timeslay.day.reminders.SLEEP" />
+                <action android:name="dev.kofler.timeparagon.reminders.SYNC" />
+                <action android:name="dev.kofler.timeparagon.reminders.TEST" />
+                <action android:name="dev.kofler.timeparagon.reminders.DEVICE_INFO" />
+                <action android:name="dev.kofler.timeparagon.reminders.SLEEP" />
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
                 <action android:name="android.intent.action.TIME_SET" />
                 <action android:name="android.intent.action.TIMEZONE_CHANGED" />
             </intent-filter>
         </receiver>
-        <activity android:name="dev.timeslay.day.reminders.PermissionActivity"
+        <activity android:name="dev.kofler.timeparagon.reminders.PermissionActivity"
             android:exported="false"
             android:excludeFromRecents="true"
             android:noHistory="true"

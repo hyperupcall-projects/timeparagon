@@ -282,7 +282,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			let stop = voice.stop.clone();
 			let cancel = voice.cancel.clone();
 			match std::thread::Builder::new()
-				.name("timeslay-voice".into())
+				.name("timeparagon-voice".into())
 				.spawn(move || {
 					let result = pipeline(&settings, context, &stop, &cancel, &tx)
 						.map_err(|e| e.to_string());

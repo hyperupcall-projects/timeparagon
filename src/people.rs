@@ -2,7 +2,7 @@
 //! Workspace directories those accounts belong to.
 //!
 //! What a contact is, how it is searched and how an edit becomes an update is
-//! shared with the Dioxus app in [`timeslay_core::people`]. This is the iced
+//! shared with the Dioxus app in [`timeparagon_core::people`]. This is the iced
 //! screen's state: which accounts are loaded, what is being searched, and the
 //! contact open in the side panel.
 
@@ -17,7 +17,7 @@ use crate::blocking::{self, WorkerFailed};
 use crate::config::CalendarSettings;
 use crate::integrations::accounts::{self, Login};
 
-pub use timeslay_core::people::{
+pub use timeparagon_core::people::{
 	Book, Contact, Edit, Entry, Field, Group, List, MIN_SEARCH, PAGE, Problem, SEARCH_DELAY, api,
 	cache, parse_all,
 };

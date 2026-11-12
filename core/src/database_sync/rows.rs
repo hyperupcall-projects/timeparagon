@@ -35,11 +35,11 @@ pub(super) fn predicate() -> String {
 		.join(" OR ")
 }
 
-const ACTIVE: &str = "(SELECT projecting FROM timeslay_sync_control WHERE singleton=1)=0";
+const ACTIVE: &str = "(SELECT projecting FROM timeparagon_sync_control WHERE singleton=1)=0";
 
 fn journal(document: &str, before: &str, after: &str) -> String {
 	format!(
-		"INSERT INTO timeslay_sync_edits VALUES(lower(hex(randomblob(16))),{document},{before},{after},(SELECT coalesce(max(clock),0)+1 FROM timeslay_sync_edits),0);"
+		"INSERT INTO timeparagon_sync_edits VALUES(lower(hex(randomblob(16))),{document},{before},{after},(SELECT coalesce(max(clock),0)+1 FROM timeparagon_sync_edits),0);"
 	)
 }
 
@@ -50,7 +50,7 @@ fn triggers(table: &Table) -> Vec<(String, String)> {
 	let (old, new) = (table.object_sql("OLD."), table.object_sql("NEW."));
 	let (old_key, new_key) = (table.key_sql("OLD."), table.key_sql("NEW."));
 	let trigger = |kind: &str, event: &str, condition: String, body: String| {
-		let trigger = format!("timeslay_sync_{name}_{kind}");
+		let trigger = format!("timeparagon_sync_{name}_{kind}");
 		let sql = format!(
 			"CREATE TRIGGER {trigger} AFTER {event} ON {name} WHEN {condition} BEGIN {body} END"
 		);
@@ -123,7 +123,7 @@ pub(super) fn install(tx: &Connection) -> rusqlite::Result<()> {
 pub(super) fn journal_existing(tx: &Connection) -> rusqlite::Result<()> {
 	for table in schema::synced() {
 		tx.execute_batch(&format!(
-            "INSERT INTO timeslay_sync_edits SELECT lower(hex(randomblob(16))),'{}:'||{},NULL,{},1,0 FROM {};",
+            "INSERT INTO timeparagon_sync_edits SELECT lower(hex(randomblob(16))),'{}:'||{},NULL,{},1,0 FROM {};",
             table.name,
             table.key_sql(""),
             table.object_sql(""),

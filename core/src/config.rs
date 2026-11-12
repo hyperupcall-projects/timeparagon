@@ -525,7 +525,7 @@ pub struct CalendarSettings {
 	/// Whether standalone Google Tasks are visible; tasks inside time blocks stay visible.
 	pub show_tasks: bool,
 	pub hide_overdue_tasks: bool,
-	/// The discovered id of the app-owned TimeSlay calendar. Every event the
+	/// The discovered id of the app-owned TimeParagon calendar. Every event the
 	/// app writes (time blocks and scheduled tasks) lives here. Managed by the
 	/// app from the calendar list; not exposed as a user setting.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -578,23 +578,23 @@ pub struct CalendarSettings {
 	/// Local calendar color overrides, keyed by Google Calendar ID.
 	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
 	pub calendar_colors: BTreeMap<String, HexColor>,
-	/// Color of all-day events on the TimeSlay calendar. None uses the
+	/// Color of all-day events on the TimeParagon calendar. None uses the
 	/// built-in event color.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub event_color: Option<HexColor>,
-	/// Color of sleep events on the TimeSlay calendar. None uses the built-in
+	/// Color of sleep events on the TimeParagon calendar. None uses the built-in
 	/// sleep gray.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub sleep_color: Option<HexColor>,
-	/// Color of time-block events on the TimeSlay calendar. None uses the
+	/// Color of time-block events on the TimeParagon calendar. None uses the
 	/// built-in block color.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub time_block_color: Option<HexColor>,
-	/// Color of scheduled task events on the TimeSlay calendar. None uses
+	/// Color of scheduled task events on the TimeParagon calendar. None uses
 	/// Google's task blue.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub task_event_color: Option<HexColor>,
-	/// Color of habit events on the TimeSlay calendar. None uses the built-in
+	/// Color of habit events on the TimeParagon calendar. None uses the built-in
 	/// grape. A habit with its own Google `colorId` keeps that color.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub habit_color: Option<HexColor>,
@@ -712,7 +712,7 @@ impl CalendarSettings {
 
 	/// The name of the single calendar every event the app writes lives on.
 	/// Created on first use; not customizable from Settings.
-	pub const APP_CALENDAR_NAME: &str = "TimeSlay";
+	pub const APP_CALENDAR_NAME: &str = "TimeParagon";
 
 	/// Whether `name` is the app calendar.
 	pub fn is_app_calendar_name(name: &str) -> bool {
@@ -967,14 +967,92 @@ pub fn project_dirs() -> Option<ProjectDirs> {
 	if let Some(root) = isolated_root() {
 		return Some(ProjectDirs::under(root));
 	}
-	let dirs = directories::ProjectDirs::from("dev", "TimeSlay", "timeslay")?;
-	Some(ProjectDirs {
-		config: dirs.config_dir().to_owned(),
-		data: dirs.data_dir().to_owned(),
-		data_local: dirs.data_local_dir().to_owned(),
-		cache: dirs.cache_dir().to_owned(),
-		state: dirs.state_dir().map(Path::to_owned),
-	})
+	let dirs = ProjectDirs::from(directories::ProjectDirs::from(
+		"dev",
+		"TimeParagon",
+		"timeparagon",
+	)?);
+	static MIGRATED: OnceLock<()> = OnceLock::new();
+	MIGRATED.get_or_init(|| {
+		if let Some(legacy) = directories::ProjectDirs::from("dev", "TimeSlay", "timeslay") {
+			migrate_legacy_dirs(&ProjectDirs::from(legacy), &dirs);
+		}
+	});
+	Some(dirs)
+}
+
+impl ProjectDirs {
+	fn from(dirs: directories::ProjectDirs) -> Self {
+		Self {
+			config: dirs.config_dir().to_owned(),
+			data: dirs.data_dir().to_owned(),
+			data_local: dirs.data_local_dir().to_owned(),
+			cache: dirs.cache_dir().to_owned(),
+			state: dirs.state_dir().map(Path::to_owned),
+		}
+	}
+}
+
+/// The database's name before the project was renamed from TimeSlay.
+const LEGACY_DATABASE: &str = "timeslay.sqlite3";
+
+/// Moves what the app kept under its old name, TimeSlay, to the TimeParagon
+/// directories. A directory is only moved when its new one does not exist
+/// yet, so nothing is ever overwritten; `packaging/install.sh` does the same.
+/// Inside the data directory the database is renamed too, its WAL first so
+/// that an interruption never separates committed pages from the database.
+fn migrate_legacy_dirs(legacy: &ProjectDirs, current: &ProjectDirs) {
+	let pairs = [
+		(Some(&legacy.config), Some(&current.config)),
+		(Some(&legacy.data), Some(&current.data)),
+		(Some(&legacy.data_local), Some(&current.data_local)),
+		(Some(&legacy.cache), Some(&current.cache)),
+		(legacy.state.as_ref(), current.state.as_ref()),
+	];
+	for (old, new) in pairs {
+		let (Some(old), Some(new)) = (old, new) else {
+			continue;
+		};
+		// On Linux the data and local data directories are the same.
+		if !old.is_dir() || new.exists() {
+			continue;
+		}
+		let moved = new
+			.parent()
+			.map_or(Ok(()), std::fs::create_dir_all)
+			.and_then(|()| std::fs::rename(old, new));
+		match moved {
+			Ok(()) => log::info!("moved {} to {}", old.display(), new.display()),
+			Err(error) => log::error!(
+				"could not move {} to {}: {error}",
+				old.display(),
+				new.display()
+			),
+		}
+	}
+	let directory = &current.data_local;
+	let database = directory.join("timeparagon.sqlite3");
+	if database.exists() || !directory.join(LEGACY_DATABASE).exists() {
+		return;
+	}
+	for suffix in ["-wal", "-shm", "-journal", ""] {
+		let old = directory.join(format!("{LEGACY_DATABASE}{suffix}"));
+		if !old.exists() {
+			continue;
+		}
+		let new = directory.join(format!("timeparagon.sqlite3{suffix}"));
+		if let Err(error) = std::fs::rename(&old, &new) {
+			log::error!(
+				"could not rename {} to {}: {error}",
+				old.display(),
+				new.display()
+			);
+			return;
+		}
+	}
+	// Only a lock; the sync worker makes a new one under the new name.
+	let _ = std::fs::remove_file(directory.join("timeslay-sync.owner"));
+	log::info!("renamed the database to {}", database.display());
 }
 
 /// Whether this process is a test run that must not touch the user's files or
@@ -1004,7 +1082,7 @@ fn isolated_root() -> Option<&'static Path> {
 		// Fail closed: never fall back to the user's files if allocation fails.
 		Some(
 			tempfile::Builder::new()
-				.prefix("timeslay-test-")
+				.prefix("timeparagon-test-")
 				.tempdir()
 				.expect("tests need a scratch directory instead of the real data"),
 		)
@@ -1224,9 +1302,60 @@ impl Config {
 mod tests {
 	use super::*;
 
+	#[test]
+	fn legacy_directories_and_database_are_moved_once() {
+		use std::fs;
+		let root = tempfile::tempdir().unwrap();
+		let legacy = ProjectDirs::under(&root.path().join("old"));
+		let current = ProjectDirs::under(&root.path().join("new"));
+		fs::create_dir_all(&legacy.data_local).unwrap();
+		fs::write(legacy.data_local.join(LEGACY_DATABASE), "pages").unwrap();
+		fs::write(legacy.data_local.join("timeslay.sqlite3-wal"), "wal").unwrap();
+		fs::write(legacy.data_local.join("timeslay-sync.owner"), "").unwrap();
+		fs::create_dir_all(&legacy.config).unwrap();
+		fs::write(legacy.config.join("config.toml.imported"), "old").unwrap();
+		// A directory the new name already has is left alone, both copies intact.
+		fs::create_dir_all(legacy.state.as_ref().unwrap()).unwrap();
+		fs::write(legacy.state.as_ref().unwrap().join("secrets.json"), "old").unwrap();
+		fs::create_dir_all(current.state.as_ref().unwrap()).unwrap();
+
+		migrate_legacy_dirs(&legacy, &current);
+
+		let local = &current.data_local;
+		assert_eq!(
+			fs::read_to_string(local.join("timeparagon.sqlite3")).unwrap(),
+			"pages"
+		);
+		assert_eq!(
+			fs::read_to_string(local.join("timeparagon.sqlite3-wal")).unwrap(),
+			"wal"
+		);
+		assert!(!local.join(LEGACY_DATABASE).exists());
+		assert!(!local.join("timeslay-sync.owner").exists());
+		assert!(!legacy.data_local.exists());
+		assert!(current.config.join("config.toml.imported").exists());
+		assert!(legacy.state.as_ref().unwrap().join("secrets.json").exists());
+		assert!(
+			!current
+				.state
+				.as_ref()
+				.unwrap()
+				.join("secrets.json")
+				.exists()
+		);
+
+		// Running again, as every process does, changes nothing.
+		fs::write(local.join("timeparagon.sqlite3"), "newer").unwrap();
+		migrate_legacy_dirs(&legacy, &current);
+		assert_eq!(
+			fs::read_to_string(local.join("timeparagon.sqlite3")).unwrap(),
+			"newer"
+		);
+	}
+
 	fn database() -> (tempfile::TempDir, PathBuf) {
 		let directory = tempfile::tempdir().unwrap();
-		let path = directory.path().join("timeslay.sqlite3");
+		let path = directory.path().join("timeparagon.sqlite3");
 		(directory, path)
 	}
 
@@ -1484,7 +1613,7 @@ mod tests {
 		let (_directory, path) = database();
 		save_google_client_at(&path, "id", "").unwrap();
 		let settings = CalendarSettings {
-			disabled: vec!["timeslay:habits".into(), "work".into()],
+			disabled: vec!["timeparagon:habits".into(), "work".into()],
 			show_tasks: false,
 			..CalendarSettings::default()
 		};

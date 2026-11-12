@@ -4,7 +4,7 @@
 //! two sit side by side.
 //!
 //! What a contact is, how it is searched and how an edit becomes an update are
-//! `timeslay_core::people`, shared with the desktop. So is the cache, which
+//! `timeparagon_core::people`, shared with the desktop. So is the cache, which
 //! opens the sheet straight away and keeps it useful offline.
 //!
 //! Only the calendar's own sign-in is used here: the desktop's extra accounts
@@ -16,10 +16,10 @@ use std::path::PathBuf;
 use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
 use serde_json::Value;
-use timeslay_core::calendar::GoogleClient;
-use timeslay_core::calendar::oauth;
-use timeslay_core::config::CalendarSettings;
-use timeslay_core::people::{
+use timeparagon_core::calendar::GoogleClient;
+use timeparagon_core::calendar::oauth;
+use timeparagon_core::config::CalendarSettings;
+use timeparagon_core::people::{
 	self as shared, Book, Contact, Directory, Edit, Field, Group, List, Login, PAGE, Problem, api,
 	cache,
 };
@@ -133,7 +133,7 @@ impl Store {
 	pub fn live() -> Self {
 		Self {
 			live: true,
-			cache_path: timeslay_core::task_db::path(),
+			cache_path: timeparagon_core::task_db::path(),
 			..Self::default()
 		}
 	}

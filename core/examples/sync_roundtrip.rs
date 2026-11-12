@@ -5,7 +5,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let url = std::env::args().nth(1).ok_or("usage: sync_roundtrip URL")?;
 	let mut random = [0u8; 8];
 	getrandom::fill(&mut random)?;
-	let name = format!("timeslay_probe_{}", u64::from_le_bytes(random));
+	let name = format!("timeparagon_probe_{}", u64::from_le_bytes(random));
 	let directory = tempfile::tempdir()?;
 	tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(async {
         tokio::time::timeout(Duration::from_secs(120),async {

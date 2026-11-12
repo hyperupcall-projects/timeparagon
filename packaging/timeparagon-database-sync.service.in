@@ -1,5 +1,5 @@
 [Unit]
-Description=TimeSlay database sync with configured server
+Description=TimeParagon database sync with configured server
 
 [Service]
 Type=simple

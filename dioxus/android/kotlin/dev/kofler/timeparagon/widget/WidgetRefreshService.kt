@@ -1,4 +1,4 @@
-package dev.timeslay.day.widget
+package dev.kofler.timeparagon.widget
 
 import android.app.job.JobInfo
 import android.app.job.JobParameters
@@ -35,7 +35,7 @@ class WidgetRefreshService : JobService() {
 
     companion object {
         const val JOB_ID = 7301
-        private const val TAG = "TimeSlayWidget"
+        private const val TAG = "TimeParagonWidget"
         private const val PERIOD_MILLIS = 30 * 60 * 1000L
 
         fun schedule(context: Context) {

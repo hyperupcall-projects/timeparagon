@@ -3,9 +3,9 @@
 
 use chrono::{Datelike, NaiveDate, Timelike};
 use dioxus::prelude::*;
-use timeslay_core::calendar::{Calendar, Details, Event, sleep};
-use timeslay_core::config::{CalendarSettings, ProjectsSettings};
-use timeslay_core::task_input::{self, Value};
+use timeparagon_core::calendar::{Calendar, Details, Event, sleep};
+use timeparagon_core::config::{CalendarSettings, ProjectsSettings};
+use timeparagon_core::task_input::{self, Value};
 
 use crate::day::{self, NewEvent};
 use crate::editor::worker;
@@ -99,7 +99,7 @@ pub fn CreateSheet(
 	on_close: EventHandler<()>,
 ) -> Element {
 	let today = day::today(&settings);
-	let (start, end) = default_times(day, today, timeslay_core::clock::now().hour());
+	let (start, end) = default_times(day, today, timeparagon_core::clock::now().hour());
 	let mut kind = use_signal(|| Kind::Task);
 	let mut title = use_signal(String::new);
 	let mut on_day = use_signal(|| false);

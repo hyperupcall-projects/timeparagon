@@ -1,8 +1,8 @@
 //! All task/event/habit/block editors share one independent window lifecycle.
 use iced::{Size, Task, futures::StreamExt, window};
 use iced_test::runtime::{self, Action, window::Action as WindowAction};
-use timeslay::app::{EventMessage, NavigationMessage, SettingsMessage, SystemMessage};
-use timeslay::{
+use timeparagon::app::{EventMessage, NavigationMessage, SettingsMessage, SystemMessage};
+use timeparagon::{
 	app::{self, LayoutField, Message, Screen, Sidebar, State},
 	calendar,
 	config::Config,
@@ -114,7 +114,7 @@ fn closing_a_block_preserves_details_and_resizes_only_the_editor() {
 		let mut state = state(sidebar, Screen::Calendar);
 		let _ = actions(app::update(
 			&mut state,
-			Message::TimeBlocking(timeslay::timeblocking::Action::Plan("standup".into())),
+			Message::TimeBlocking(timeparagon::timeblocking::Action::Plan("standup".into())),
 		));
 		let editor = state.editor_window.unwrap();
 		let _ = actions(app::update(
@@ -145,7 +145,7 @@ fn deleting_an_open_block_closes_its_editor_only_on_success() {
 		let mut state = state(sidebar, Screen::Calendar);
 		let _ = actions(app::update(
 			&mut state,
-			Message::TimeBlocking(timeslay::timeblocking::Action::Plan("standup".into())),
+			Message::TimeBlocking(timeparagon::timeblocking::Action::Plan("standup".into())),
 		));
 		let editor = state.editor_window.unwrap();
 		assert!(
@@ -178,7 +178,7 @@ fn configured_editor_widths_apply_live_and_survive_restart() {
 		let mut state = state(sidebar, Screen::Inbox);
 		let _ = actions(app::update(
 			&mut state,
-			Message::TimeBlocking(timeslay::timeblocking::Action::Plan("standup".into())),
+			Message::TimeBlocking(timeparagon::timeblocking::Action::Plan("standup".into())),
 		));
 		let editor = state.editor_window.unwrap();
 		let original = state.main_size;
@@ -262,7 +262,7 @@ fn switching_tabs_closes_and_reopens_the_editor_surface() {
 #[test]
 fn hiding_and_reopening_a_panel_preserves_only_its_original_reservation() {
 	use std::sync::mpsc;
-	use timeslay::app::PanelCommand;
+	use timeparagon::app::PanelCommand;
 	let mut state = state(true, Screen::Inbox);
 	state.panel_config = Some(panel::PanelConfig::default());
 	let (tx, rx) = mpsc::channel();

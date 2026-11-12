@@ -95,7 +95,7 @@ fn store(
 
 	let journal = tx
 		.query_row(
-			"SELECT 1 FROM sqlite_master WHERE type='table' AND name='timeslay_sync_edits'",
+			"SELECT 1 FROM sqlite_master WHERE type='table' AND name='timeparagon_sync_edits'",
 			[],
 			|_| Ok(()),
 		)
@@ -104,7 +104,7 @@ fn store(
 		.is_some();
 	let journaled_before: i64 = if journal {
 		tx.query_row(
-			"SELECT coalesce(max(rowid),0) FROM timeslay_sync_edits",
+			"SELECT coalesce(max(rowid),0) FROM timeparagon_sync_edits",
 			[],
 			|row| row.get(0),
 		)
@@ -136,7 +136,7 @@ fn store(
 
 	if journal {
 		tx.execute(
-			"UPDATE timeslay_sync_edits SET clock=1 WHERE rowid>?1",
+			"UPDATE timeparagon_sync_edits SET clock=1 WHERE rowid>?1",
 			[journaled_before],
 		)
 		.map_err(other)?;
@@ -259,7 +259,7 @@ dock_width = nan
 		let directory = tempfile::tempdir().unwrap();
 		let file = directory.path().join("config.toml");
 		fs::write(&file, FILE).unwrap();
-		let database = directory.path().join("timeslay.sqlite3");
+		let database = directory.path().join("timeparagon.sqlite3");
 		(directory, database, file)
 	}
 
@@ -349,7 +349,7 @@ dock_width = nan
 		.unwrap();
 		let journal = rows(
 			&path,
-			"SELECT document, clock FROM timeslay_sync_edits ORDER BY rowid",
+			"SELECT document, clock FROM timeparagon_sync_edits ORDER BY rowid",
 		);
 		let clock = |document: &str| -> Vec<i64> {
 			journal

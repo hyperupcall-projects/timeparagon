@@ -608,7 +608,7 @@ fn save_menu_overlays_the_scroll_pane_without_changing_layout() {
 	let beside = closed.find("Beside the pane").unwrap().bounds();
 	let save = closed.find("Save current event").unwrap().bounds();
 	let snapshots =
-		std::env::temp_dir().join(format!("timeslay-save-overlay-{}", std::process::id()));
+		std::env::temp_dir().join(format!("timeparagon-save-overlay-{}", std::process::id()));
 	std::fs::create_dir_all(&snapshots).unwrap();
 	let closed_image = snapshots.join("closed.png");
 	closed
@@ -2493,12 +2493,12 @@ fn the_popup_offers_the_detail_filter_and_the_button_stays_lit_for_it() {
 }
 
 #[test]
-fn the_event_pane_offers_a_calendar_dropdown_without_timeslay() {
+fn the_event_pane_offers_a_calendar_dropdown_without_timeparagon() {
 	let mut state = State::blank();
 	let mut snapshot = calendar::sample_snapshot();
 	snapshot.calendars.push(calendar::Calendar {
 		id: "app".into(),
-		name: "TimeSlay".into(),
+		name: "TimeParagon".into(),
 		color: calendar::colors::DEFAULT_EVENT,
 		primary: false,
 		selected_by_google: true,
@@ -2555,7 +2555,7 @@ fn the_event_pane_offers_a_calendar_dropdown_without_timeslay() {
 		Size::new(400.0, 1200.0),
 		event_editor(&state, &event, &metrics),
 	);
-	assert!(ui.find("TimeSlay").is_err());
+	assert!(ui.find("TimeParagon").is_err());
 	ui.click(other.name.as_str()).unwrap();
 	assert!(ui.into_messages().any(|message| matches!(
 		message,
@@ -2832,7 +2832,7 @@ fn calendar_tasks_offer_completion_but_deadline_markers_and_events_do_not() {
 		calendar::search::Action::DetailsByVisibility(false),
 	);
 	event.id = "calendar-task".into();
-	event.details.task_data = Some(timeslay_core::task_db::TaskData {
+	event.details.task_data = Some(timeparagon_core::task_db::TaskData {
 		id: 100,
 		metadata: Default::default(),
 	});
@@ -2940,13 +2940,13 @@ fn day_unslotted_count_matches_today_and_keeps_overdue_separate() {
 	overdue
 		.details
 		.task_data
-		.get_or_insert_with(|| timeslay_core::task_db::TaskData {
+		.get_or_insert_with(|| timeparagon_core::task_db::TaskData {
 			id: 100,
 			metadata: Default::default(),
 		})
 		.metadata
 		.deadline = Some(
-		timeslay_core::calendar::deadline::parse_input(&format!(
+		timeparagon_core::calendar::deadline::parse_input(&format!(
 			"{} 00:00",
 			today.pred_opt().unwrap()
 		))

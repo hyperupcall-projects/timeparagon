@@ -2,8 +2,8 @@
 //!
 //! The app is not running when most reminders are due, so it cannot deliver
 //! them itself. Instead it plans the next day and a half from the day cache
-//! (`timeslay_core::reminders`), writes the plan to `reminders.json`, and
-//! `android/kotlin/dev/timeslay/day/reminders` hands each entry to
+//! (`timeparagon_core::reminders`), writes the plan to `reminders.json`, and
+//! `android/kotlin/dev/kofler/timeparagon/reminders` hands each entry to
 //! `AlarmManager` and posts it on a notification channel that plays the
 //! chosen sound. The widget's background sync re-plans while the app is
 //! closed, and the plan is re-armed after a reboot.
@@ -13,8 +13,8 @@
 
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
-use timeslay_core::config::Config;
-use timeslay_core::reminders::{Category, LEAD_CHOICES, ReminderSettings, Sound, lead_label};
+use timeparagon_core::config::Config;
+use timeparagon_core::reminders::{Category, LEAD_CHOICES, ReminderSettings, Sound, lead_label};
 
 #[cfg(any(target_os = "android", test))]
 use chrono::{DateTime, Local};
@@ -77,7 +77,7 @@ fn sound_plan(sound: &Sound) -> SoundPlan {
 	}
 }
 
-fn hex(color: timeslay_core::Color) -> String {
+fn hex(color: timeparagon_core::Color) -> String {
 	let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
 	format!(
 		"#{:02x}{:02x}{:02x}",
@@ -88,7 +88,7 @@ fn hex(color: timeslay_core::Color) -> String {
 }
 
 #[cfg(any(target_os = "android", test))]
-fn plan(config: &Config, due: Vec<timeslay_core::reminders::Due>) -> Plan {
+fn plan(config: &Config, due: Vec<timeparagon_core::reminders::Due>) -> Plan {
 	let settings = &config.reminders;
 	Plan {
 		enabled: true,
@@ -118,9 +118,9 @@ fn plan(config: &Config, due: Vec<timeslay_core::reminders::Due>) -> Plan {
 #[cfg(any(target_os = "android", test))]
 fn append_alarms(
 	plan: &mut Plan,
-	library: timeslay_core::alarms::Library,
+	library: timeparagon_core::alarms::Library,
 	now: DateTime<Local>,
-	format: timeslay_core::calendar::time_format::TimeFormat,
+	format: timeparagon_core::calendar::time_format::TimeFormat,
 ) {
 	for alarm in library.alarms {
 		if alarm.at < now - chrono::Duration::minutes(5) {
@@ -132,8 +132,8 @@ fn append_alarms(
 			Sound::Silent
 		} else {
 			match profile.sound.choice {
-				timeslay_core::alarms::SoundChoice::Builtin(tone) => Sound::Tone { tone },
-				timeslay_core::alarms::SoundChoice::Custom { .. } => Sound::Default,
+				timeparagon_core::alarms::SoundChoice::Builtin(tone) => Sound::Tone { tone },
+				timeparagon_core::alarms::SoundChoice::Custom { .. } => Sound::Default,
 			}
 		};
 		plan.categories.push(CategoryPlan {
@@ -155,15 +155,15 @@ fn append_alarms(
 
 /// Everything due from `now` to the end of the planning horizon.
 #[cfg(target_os = "android")]
-fn due(config: &Config, now: DateTime<Local>) -> Vec<timeslay_core::reminders::Due> {
-	let Some(database) = timeslay_core::task_db::path() else {
+fn due(config: &Config, now: DateTime<Local>) -> Vec<timeparagon_core::reminders::Due> {
+	let Some(database) = timeparagon_core::task_db::path() else {
 		return Vec::new();
 	};
 	// A little behind now, so a reminder due this minute is still armed;
 	// the scheduler drops the ones it has already posted.
-	let from = now - chrono::Duration::minutes(timeslay_core::reminders::LATE_GRACE_MINUTES);
-	let until = now + chrono::Duration::hours(timeslay_core::reminders::HORIZON_HOURS);
-	timeslay_core::reminders::plan_from_cache(
+	let from = now - chrono::Duration::minutes(timeparagon_core::reminders::LATE_GRACE_MINUTES);
+	let until = now + chrono::Duration::hours(timeparagon_core::reminders::HORIZON_HOURS);
+	timeparagon_core::reminders::plan_from_cache(
 		&database,
 		&config.reminders,
 		&config.calendar,
@@ -185,7 +185,7 @@ fn files_dir() -> Option<std::path::PathBuf> {
 #[cfg(target_os = "android")]
 pub fn publish(config: &Config) {
 	use std::sync::atomic::{AtomicBool, Ordering};
-	use timeslay_core::fsutil::{Kind, write_atomic};
+	use timeparagon_core::fsutil::{Kind, write_atomic};
 
 	// The first publish in a process always re-arms, in case the alarms were
 	// lost (an update, a force stop) while the plan on disk stayed the same.
@@ -198,17 +198,17 @@ pub fn publish(config: &Config) {
 	let Some(path) = files_dir().map(|dir| dir.join("reminders.json")) else {
 		return;
 	};
-	let mut plan = plan(config, due(config, timeslay_core::clock::now()));
-	let Some(database) = timeslay_core::task_db::path() else {
+	let mut plan = plan(config, due(config, timeparagon_core::clock::now()));
+	let Some(database) = timeparagon_core::task_db::path() else {
 		return;
 	};
-	let Ok(library) = timeslay_core::alarms::read(&database) else {
+	let Ok(library) = timeparagon_core::alarms::read(&database) else {
 		return;
 	};
 	append_alarms(
 		&mut plan,
 		library,
-		timeslay_core::clock::now(),
+		timeparagon_core::clock::now(),
 		config.appearance.time_format,
 	);
 	let Ok(json) = serde_json::to_vec(&plan) else {
@@ -227,13 +227,13 @@ pub fn publish(config: &Config) {
 }
 
 #[cfg(target_os = "android")]
-const ACTION_SYNC: &str = "dev.timeslay.day.reminders.SYNC";
+const ACTION_SYNC: &str = "dev.kofler.timeparagon.reminders.SYNC";
 #[cfg(target_os = "android")]
-const ACTION_TEST: &str = "dev.timeslay.day.reminders.TEST";
+const ACTION_TEST: &str = "dev.kofler.timeparagon.reminders.TEST";
 #[cfg(target_os = "android")]
-const ACTION_DEVICE_INFO: &str = "dev.timeslay.day.reminders.DEVICE_INFO";
+const ACTION_DEVICE_INFO: &str = "dev.kofler.timeparagon.reminders.DEVICE_INFO";
 #[cfg(target_os = "android")]
-const PERMISSION_ACTIVITY: &str = "dev.timeslay.day.reminders.PermissionActivity";
+const PERMISSION_ACTIVITY: &str = "dev.kofler.timeparagon.reminders.PermissionActivity";
 
 /// Sends an intent to the app's own reminder receiver, or starts one of its
 /// activities. Only framework classes are looked up, because this runs on
@@ -384,7 +384,7 @@ pub fn notifications_blocked() -> bool {
 
 /// Saves the reminder settings and returns the config as it now reads.
 fn save(settings: &ReminderSettings) -> Result<Config, String> {
-	timeslay_core::config::save_reminders(settings)
+	timeparagon_core::config::save_reminders(settings)
 		.map_err(|error| format!("Could not save the reminder settings: {error}"))?;
 	Ok(Config::load())
 }
@@ -596,7 +596,7 @@ pub fn ReminderSection(config: Signal<Config>) -> Element {
 		}
 		if blocked {
 			div { class: "reminder-blocked",
-				p { class: "hint", "Notifications are turned off for TimeSlay." }
+				p { class: "hint", "Notifications are turned off for TimeParagon." }
 				button {
 					class: "btn",
 					r#type: "button",
@@ -617,7 +617,7 @@ pub fn ReminderSection(config: Signal<Config>) -> Element {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use timeslay_core::reminders::Due;
+	use timeparagon_core::reminders::Due;
 
 	#[test]
 	fn a_desktop_sound_file_synced_to_the_phone_plays_the_default_sound() {
@@ -635,13 +635,13 @@ mod tests {
 		});
 		assert_eq!((desktop.kind, desktop.uri.as_str()), ("default", ""));
 	}
-	use timeslay_core::sounds::Tone;
+	use timeparagon_core::sounds::Tone;
 
 	#[test]
 	fn alarms_are_planned_independently_of_reminders_and_keep_their_sound() {
-		use timeslay_core::alarms::{Alarm, AlarmProfile, Library, SoundChoice};
+		use timeparagon_core::alarms::{Alarm, AlarmProfile, Library, SoundChoice};
 		let config = Config::default();
-		let now = timeslay_core::clock::now();
+		let now = timeparagon_core::clock::now();
 		let mut profile = AlarmProfile::default();
 		profile.sound.choice = SoundChoice::Builtin(Tone::Bell);
 		let alarm = Alarm {
@@ -668,7 +668,7 @@ mod tests {
 		);
 		let category = plan.categories.last().unwrap();
 		assert!(category.enabled);
-		assert_eq!(category.sound.resource, "timeslay_tone_bell");
+		assert_eq!(category.sound.resource, "timeparagon_tone_bell");
 		assert_eq!(plan.reminders[0].title, "Tea");
 		assert_eq!(plan.reminders[0].at, alarm.at.timestamp_millis());
 		let mut expired = alarm;
@@ -715,7 +715,7 @@ mod tests {
 		assert_eq!(json["categories"][1]["sound"]["kind"], "tone");
 		assert_eq!(
 			json["categories"][1]["sound"]["resource"],
-			"timeslay_tone_kalimba"
+			"timeparagon_tone_kalimba"
 		);
 		assert_eq!(json["categories"][4]["sound"]["kind"], "device");
 		assert_eq!(json["reminders"][0]["at"], 1_800_000_000_000_i64);

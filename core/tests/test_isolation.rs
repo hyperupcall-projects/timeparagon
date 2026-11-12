@@ -1,5 +1,5 @@
 //! This links core as an ordinary dependency, without cfg(test) or opt-in features.
-use timeslay_core::{calendar, config, secrets, task_db};
+use timeparagon_core::{calendar, config, secrets, task_db};
 
 #[test]
 fn default_storage_is_temporary() {
@@ -15,7 +15,7 @@ fn default_storage_is_temporary() {
 			.unwrap()
 			.to_str()
 			.unwrap()
-			.starts_with("timeslay-test-")
+			.starts_with("timeparagon-test-")
 	);
 	for path in [
 		dirs.config_dir(),
@@ -65,10 +65,10 @@ fn default_writes_leave_existing_user_storage_untouched() {
 	let home = tempfile::tempdir().unwrap();
 	let mut sentinels = Vec::new();
 	for directory in ["config", "data", "cache", "state"] {
-		let path = home.path().join(directory).join("timeslay");
+		let path = home.path().join(directory).join("timeparagon");
 		std::fs::create_dir_all(&path).unwrap();
 		for file in [
-			"timeslay.sqlite3",
+			"timeparagon.sqlite3",
 			"tasks.sqlite3",
 			"secrets.json",
 			"config.toml",
@@ -103,7 +103,7 @@ fn default_writes_leave_existing_user_storage_untouched() {
 	}
 	for directory in ["config", "data", "cache", "state"] {
 		assert_eq!(
-			std::fs::read_dir(home.path().join(directory).join("timeslay"))
+			std::fs::read_dir(home.path().join(directory).join("timeparagon"))
 				.unwrap()
 				.count(),
 			4

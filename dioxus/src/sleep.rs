@@ -6,9 +6,9 @@ use std::sync::Mutex;
 
 use chrono::NaiveDate;
 use dioxus::prelude::*;
-use timeslay_core::calendar::time_format::{self, TimeFormat};
-use timeslay_core::calendar::{self, Event, Snapshot, sleep};
-use timeslay_core::config::{CalendarSettings, Config};
+use timeparagon_core::calendar::time_format::{self, TimeFormat};
+use timeparagon_core::calendar::{self, Event, Snapshot, sleep};
+use timeparagon_core::config::{CalendarSettings, Config};
 
 /// The night whose timer is running among `events`, the latest if several.
 pub fn active<'a>(events: impl IntoIterator<Item = &'a Event>) -> Option<&'a Event> {
@@ -48,7 +48,7 @@ pub fn running(
 		}
 	}
 	if !cached.is_empty()
-		&& let Some(path) = timeslay_core::task_db::path()
+		&& let Some(path) = timeparagon_core::task_db::path()
 		&& let Err(error) = calendar::operations::overlay(
 			&path,
 			&mut cached,
@@ -72,7 +72,7 @@ pub fn press(
 	mut event: Event,
 	format: TimeFormat,
 ) -> Result<Event, String> {
-	let now = timeslay_core::clock::now();
+	let now = timeparagon_core::clock::now();
 	let timer = sleep::timer(&event, now).ok_or("This night's sleep timer is not available now")?;
 	sleep::apply_timer(&mut event, timer, now)?;
 	let saved = sleep::save(settings, event, false)?;
@@ -149,7 +149,7 @@ fn post(state: &str, title: &str, body: &str, since: Option<i64>) {
 	{
 		let since = since.map(|millis| millis.to_string()).unwrap_or_default();
 		crate::reminders::broadcast_extras(
-			"dev.timeslay.day.reminders.SLEEP",
+			"dev.kofler.timeparagon.reminders.SLEEP",
 			&[
 				("state", state),
 				("title", title),
@@ -189,7 +189,7 @@ pub fn SleepStrip(
 	else {
 		return rsx! {};
 	};
-	let elapsed = sleep::minutes_label((timeslay_core::clock::now() - start).num_minutes());
+	let elapsed = sleep::minutes_label((timeparagon_core::clock::now() - start).num_minutes());
 	let since = time_format::clock(start, time_format);
 	let predictions = sleep::predictions_line(&event, time_format);
 	let disabled = busy || !can_press(&event);
@@ -222,7 +222,7 @@ pub fn save_weekday(
 	let time = chrono::NaiveTime::parse_from_str(value, "%H:%M")
 		.map_err(|_| "Enter the time as HH:MM".to_owned())?;
 	let mut config = crate::day::load_config();
-	let from = sleep::next_night(timeslay_core::clock::now().date_naive(), weekday);
+	let from = sleep::next_night(timeparagon_core::clock::now().date_naive(), weekday);
 	let mut times = config.calendar.sleep_schedule[weekday.num_days_from_monday() as usize];
 	if bedtime {
 		times.bedtime = time;
@@ -242,7 +242,10 @@ pub fn save_from_night(night: &Event) -> Result<Config, String> {
 		.as_ref()
 		.ok_or("Missing sleep metadata")?;
 	let mut config = crate::day::load_config();
-	let from = sleep::change_from(record.wake_date, timeslay_core::clock::now().date_naive());
+	let from = sleep::change_from(
+		record.wake_date,
+		timeparagon_core::clock::now().date_naive(),
+	);
 	sleep::set_weekday_times(
 		&mut config.calendar,
 		from,
@@ -256,7 +259,7 @@ pub fn save_from_night(night: &Event) -> Result<Config, String> {
 }
 
 fn save_schedule(settings: &CalendarSettings) -> Result<(), String> {
-	timeslay_core::config::save_sleep_schedule(settings)
+	timeparagon_core::config::save_sleep_schedule(settings)
 		.map_err(|error| format!("Could not save the sleep schedule: {error}"))
 }
 

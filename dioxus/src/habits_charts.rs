@@ -8,8 +8,8 @@
 
 use chrono::{Datelike, Duration, NaiveDate, Weekday};
 use dioxus::prelude::*;
-use timeslay_core::calendar::month_short;
-use timeslay_core::habits::{self, Bucket, Computed, Icons, Kind, Status, Streak};
+use timeparagon_core::calendar::month_short;
+use timeparagon_core::habits::{self, Bucket, Computed, Icons, Kind, Status, Streak};
 
 /// The week the charts group by, matching the desktop.
 pub const FIRST_WEEKDAY: Weekday = Weekday::Mon;

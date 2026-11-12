@@ -154,7 +154,7 @@ impl Activity {
 
 	/// Copies in what database sync has done since it was last asked.
 	pub fn pull_database_log(&mut self) {
-		for entry in timeslay_core::database_sync::log_since(self.database_sequence) {
+		for entry in timeparagon_core::database_sync::log_since(self.database_sequence) {
 			self.database_sequence = self.database_sequence.max(entry.sequence);
 			let failed = !entry.text.starts_with("Sent")
 				&& !entry.text.starts_with("Received")
@@ -168,7 +168,7 @@ impl Activity {
 	/// caller can fetch Google's version of what it changed.
 	pub fn pull_google_log(&mut self) -> bool {
 		let mut refused = false;
-		for entry in timeslay_core::calendar::operations::log_since(self.google_sequence) {
+		for entry in timeparagon_core::calendar::operations::log_since(self.google_sequence) {
 			self.google_sequence = self.google_sequence.max(entry.sequence);
 			refused |= entry.failed;
 			self.record_at(entry.at, entry.text, entry.failed);
@@ -178,7 +178,7 @@ impl Activity {
 }
 
 /// "Synced 12 events and 24 tasks from Google".
-pub fn synced_text(events: &[timeslay_core::calendar::Event]) -> String {
+pub fn synced_text(events: &[timeparagon_core::calendar::Event]) -> String {
 	let tasks = events.iter().filter(|event| event.is_task()).count();
 	let timed = events.len() - tasks;
 	let count = |count: usize, noun: &str| {

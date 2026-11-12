@@ -1,6 +1,6 @@
 //! Reminders on the desktop.
 //!
-//! What is due comes from `timeslay_core::reminders`, planned from the same
+//! What is due comes from `timeparagon_core::reminders`, planned from the same
 //! day cache the phone uses. Delivery is the freedesktop way: a notification
 //! through the session's notification daemon, with the sound either left to
 //! the daemon's sound theme or played here through PipeWire.
@@ -14,7 +14,7 @@ use iced::Task;
 use crate::app::{self, Message, State, SystemMessage};
 use crate::{alarm, blocking, config};
 
-pub use timeslay_core::reminders::{Category, Due, ReminderSettings, Sound};
+pub use timeparagon_core::reminders::{Category, Due, ReminderSettings, Sound};
 
 /// How often the calendar is checked while reminders are on. A minute's
 /// resolution is what a reminder needs; every 20 seconds keeps a reminder
@@ -116,7 +116,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			deliver_with(
 				state,
 				format!("{label} reminder"),
-				"This is how TimeSlay reminds you.".to_owned(),
+				"This is how TimeParagon reminds you.".to_owned(),
 				&sound,
 			)
 		}
@@ -145,12 +145,12 @@ fn poll(state: &mut State) -> Task<Message> {
 	if state.reminders.polling || !needs_poll(state) {
 		return Task::none();
 	}
-	let Some(database) = timeslay_core::task_db::path() else {
+	let Some(database) = timeparagon_core::task_db::path() else {
 		return Task::none();
 	};
 
 	let now = crate::clock::now();
-	let earliest = now - Duration::minutes(timeslay_core::reminders::LATE_GRACE_MINUTES);
+	let earliest = now - Duration::minutes(timeparagon_core::reminders::LATE_GRACE_MINUTES);
 	// The first poll starts at now, so a restart does not replay reminders
 	// that went off before it.
 	let from = state
@@ -163,7 +163,7 @@ fn poll(state: &mut State) -> Task<Message> {
 	let settings = state.config.reminders.clone();
 	let calendar = state.config.calendar.clone();
 	let travel = &state.config.travel;
-	let places = timeslay_core::places::PlaceSettings {
+	let places = timeparagon_core::places::PlaceSettings {
 		api_key: String::new(),
 		home: travel.home,
 		places: travel.places.clone(),
@@ -176,7 +176,7 @@ fn poll(state: &mut State) -> Task<Message> {
 	let time_format = state.config.appearance.time_format;
 
 	blocking::run(move || {
-		Some(timeslay_core::reminders::plan_from_cache(
+		Some(timeparagon_core::reminders::plan_from_cache(
 			&database,
 			&settings,
 			&calendar,

@@ -31,7 +31,7 @@ use std::{
 	time::Duration,
 };
 
-const TABLE: &str = "timeslay_revisions_v1";
+const TABLE: &str = "timeparagon_revisions_v1";
 /// The documents shared between devices. The rows of the synced settings
 /// tables are too (see [`rows`]); everything else stays local.
 const SHARED_KEYS: [&str; 6] = [
@@ -108,7 +108,7 @@ pub fn unsent_edits() -> usize {
 		.and_then(|db| {
 			db.query_row(
 				&format!(
-					"SELECT COUNT(*) FROM timeslay_sync_edits WHERE uploaded=0 AND ({})",
+					"SELECT COUNT(*) FROM timeparagon_sync_edits WHERE uploaded=0 AND ({})",
 					shared_predicate()
 				),
 				[],
@@ -177,7 +177,7 @@ pub fn generation() -> u64 {
 		})
 		.and_then(|db| {
 			db.query_row(
-				"SELECT generation FROM timeslay_sync_control WHERE singleton=1",
+				"SELECT generation FROM timeparagon_sync_control WHERE singleton=1",
 				[],
 				|r| r.get::<_, u32>(0),
 			)
@@ -224,8 +224,8 @@ fn now() -> i64 {
 /// The tables holding snapshots and the IDs of deleted rows. Idempotent.
 pub(crate) fn install_snapshots(db: &Connection) -> rusqlite::Result<()> {
 	db.execute_batch(
-        "CREATE TABLE IF NOT EXISTS timeslay_sync_snapshots(id TEXT PRIMARY KEY, document TEXT NOT NULL, after_json TEXT, clock INTEGER NOT NULL, folds TEXT NOT NULL, uploaded INTEGER NOT NULL DEFAULT 0, seen_at INTEGER NOT NULL);
-         CREATE TABLE IF NOT EXISTS timeslay_sync_folded(id TEXT PRIMARY KEY, remote_deleted INTEGER NOT NULL DEFAULT 0, folded_at INTEGER NOT NULL);",
+        "CREATE TABLE IF NOT EXISTS timeparagon_sync_snapshots(id TEXT PRIMARY KEY, document TEXT NOT NULL, after_json TEXT, clock INTEGER NOT NULL, folds TEXT NOT NULL, uploaded INTEGER NOT NULL DEFAULT 0, seen_at INTEGER NOT NULL);
+         CREATE TABLE IF NOT EXISTS timeparagon_sync_folded(id TEXT PRIMARY KEY, remote_deleted INTEGER NOT NULL DEFAULT 0, folded_at INTEGER NOT NULL);",
     )
 }
 
@@ -235,14 +235,17 @@ pub fn enroll(path: &Path) -> io::Result<()> {
 	let tx = db
 		.transaction_with_behavior(TransactionBehavior::Immediate)
 		.map_err(other)?;
-	tx.execute_batch("CREATE TABLE IF NOT EXISTS timeslay_sync_control(singleton INTEGER PRIMARY KEY CHECK(singleton=1), projecting INTEGER NOT NULL DEFAULT 0, generation INTEGER NOT NULL DEFAULT 0);
-        CREATE TABLE IF NOT EXISTS timeslay_sync_edits(id TEXT PRIMARY KEY, document TEXT NOT NULL, before_json TEXT, after_json TEXT, clock INTEGER NOT NULL, uploaded INTEGER NOT NULL DEFAULT 0);
-        CREATE INDEX IF NOT EXISTS timeslay_sync_edits_clock ON timeslay_sync_edits(clock);").map_err(other)?;
+	// The sync worker may enroll before anything has opened the database
+	// through `task_db`, so the old tables must be renamed here too.
+	crate::legacy_name::rename_schema(&tx).map_err(other)?;
+	tx.execute_batch("CREATE TABLE IF NOT EXISTS timeparagon_sync_control(singleton INTEGER PRIMARY KEY CHECK(singleton=1), projecting INTEGER NOT NULL DEFAULT 0, generation INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS timeparagon_sync_edits(id TEXT PRIMARY KEY, document TEXT NOT NULL, before_json TEXT, after_json TEXT, clock INTEGER NOT NULL, uploaded INTEGER NOT NULL DEFAULT 0);
+        CREATE INDEX IF NOT EXISTS timeparagon_sync_edits_clock ON timeparagon_sync_edits(clock);").map_err(other)?;
 	install_snapshots(&tx).map_err(other)?;
 	let shared = shared_sql();
 	let enrolled = tx
 		.query_row(
-			"SELECT 1 FROM timeslay_sync_control WHERE singleton=1",
+			"SELECT 1 FROM timeparagon_sync_control WHERE singleton=1",
 			[],
 			|r| r.get::<_, i64>(0),
 		)
@@ -250,9 +253,9 @@ pub fn enroll(path: &Path) -> io::Result<()> {
 		.map_err(other)?
 		.is_some();
 	if !enrolled {
-		tx.execute("INSERT INTO timeslay_sync_control VALUES(1,0,0)", [])
+		tx.execute("INSERT INTO timeparagon_sync_control VALUES(1,0,0)", [])
 			.map_err(other)?;
-		tx.execute_batch(&format!("INSERT INTO timeslay_sync_edits SELECT lower(hex(randomblob(16))),key,NULL,value,1,0 FROM documents WHERE key IN ({shared});")).map_err(other)?;
+		tx.execute_batch(&format!("INSERT INTO timeparagon_sync_edits SELECT lower(hex(randomblob(16))),key,NULL,value,1,0 FROM documents WHERE key IN ({shared});")).map_err(other)?;
 	}
 	// Every write to a synced table journals the row, triggers included.
 	rows::install(&tx).map_err(other)?;
@@ -273,7 +276,7 @@ pub fn enroll(path: &Path) -> io::Result<()> {
 	] {
 		// Older installations journaled the retired scratchpad. Replace their
 		// triggers so it stays local even when an older process writes it.
-		let trigger = format!("timeslay_sync_{name}");
+		let trigger = format!("timeparagon_sync_{name}");
 		let existing: Option<String> = tx
 			.query_row(
 				"SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?1",
@@ -288,9 +291,9 @@ pub fn enroll(path: &Path) -> io::Result<()> {
 		}
 		// The clock also counts snapshots, so a save after a fold still sorts
 		// after everything this device has seen.
-		tx.execute_batch(&format!("CREATE TRIGGER IF NOT EXISTS timeslay_sync_{name} AFTER {kind} ON documents
-          WHEN {key} IN ({shared}) AND ({condition}) AND (SELECT projecting FROM timeslay_sync_control WHERE singleton=1)=0
-          BEGIN INSERT INTO timeslay_sync_edits VALUES(lower(hex(randomblob(16))),{key},{before},{after},(SELECT coalesce(max(clock),0)+1 FROM timeslay_sync_edits),0); END;")).map_err(other)?;
+		tx.execute_batch(&format!("CREATE TRIGGER IF NOT EXISTS timeparagon_sync_{name} AFTER {kind} ON documents
+          WHEN {key} IN ({shared}) AND ({condition}) AND (SELECT projecting FROM timeparagon_sync_control WHERE singleton=1)=0
+          BEGIN INSERT INTO timeparagon_sync_edits VALUES(lower(hex(randomblob(16))),{key},{before},{after},(SELECT coalesce(max(clock),0)+1 FROM timeparagon_sync_edits),0); END;")).map_err(other)?;
 	}
 	tx.commit().map_err(other)?;
 	crate::fsutil::make_private(path)
@@ -320,7 +323,7 @@ fn rows(db: &Connection, pending: bool) -> io::Result<Vec<(Edit, Local)>> {
 	);
 	let mut out: Vec<(Edit, Local)> = db
         .prepare(&format!(
-            "SELECT id,document,before_json,after_json,clock,uploaded FROM timeslay_sync_edits {filter} ORDER BY clock,id"
+            "SELECT id,document,before_json,after_json,clock,uploaded FROM timeparagon_sync_edits {filter} ORDER BY clock,id"
         ))
         .map_err(other)?
         .query_map([], |r| {
@@ -344,7 +347,7 @@ fn rows(db: &Connection, pending: bool) -> io::Result<Vec<(Edit, Local)>> {
         .map_err(other)?;
 	let snapshots = db
         .prepare(&format!(
-            "SELECT id,document,after_json,clock,folds,uploaded,seen_at FROM timeslay_sync_snapshots {filter} ORDER BY clock,id"
+            "SELECT id,document,after_json,clock,folds,uploaded,seen_at FROM timeparagon_sync_snapshots {filter} ORDER BY clock,id"
         ))
         .map_err(other)?
         .query_map([], |r| {
@@ -389,9 +392,9 @@ fn shared(key: &str) -> bool {
 fn known_ids(db: &Connection) -> io::Result<HashSet<String>> {
 	let mut known = HashSet::new();
 	for table in [
-		"timeslay_sync_edits",
-		"timeslay_sync_snapshots",
-		"timeslay_sync_folded",
+		"timeparagon_sync_edits",
+		"timeparagon_sync_snapshots",
+		"timeparagon_sync_folded",
 	] {
 		let mut q = db
 			.prepare(&format!("SELECT id FROM {table}"))
@@ -404,12 +407,12 @@ fn known_ids(db: &Connection) -> io::Result<HashSet<String>> {
 }
 
 fn delete_row(tx: &Connection, id: &str, remote_deleted: bool, at: i64) -> io::Result<()> {
-	tx.execute("DELETE FROM timeslay_sync_edits WHERE id=?1", [id])
+	tx.execute("DELETE FROM timeparagon_sync_edits WHERE id=?1", [id])
 		.map_err(other)?;
-	tx.execute("DELETE FROM timeslay_sync_snapshots WHERE id=?1", [id])
+	tx.execute("DELETE FROM timeparagon_sync_snapshots WHERE id=?1", [id])
 		.map_err(other)?;
 	tx.execute(
-        "INSERT INTO timeslay_sync_folded(id,remote_deleted,folded_at) VALUES(?1,?2,?3) ON CONFLICT(id) DO NOTHING",
+        "INSERT INTO timeparagon_sync_folded(id,remote_deleted,folded_at) VALUES(?1,?2,?3) ON CONFLICT(id) DO NOTHING",
         params![id, remote_deleted, at],
     )
     .map_err(other)?;
@@ -446,7 +449,7 @@ fn apply(
 		.map_err(other)?;
 	let tombstones: HashSet<String> = {
 		let mut q = tx
-			.prepare("SELECT id FROM timeslay_sync_folded")
+			.prepare("SELECT id FROM timeparagon_sync_folded")
 			.map_err(other)?;
 		q.query_map([], |r| r.get::<_, String>(0))
 			.map_err(other)?
@@ -469,7 +472,7 @@ fn apply(
 			let folds = serde_json::to_string(&edit.folds).map_err(other)?;
 			let existing: Option<(String, Option<String>, i64, String)> = tx
 				.query_row(
-					"SELECT document,after_json,clock,folds FROM timeslay_sync_snapshots WHERE id=?1",
+					"SELECT document,after_json,clock,folds FROM timeparagon_sync_snapshots WHERE id=?1",
 					[&edit.id],
 					|r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
 				)
@@ -490,7 +493,7 @@ fn apply(
 				Some(_) => {}
 				None => {
 					tx.execute(
-                        "INSERT INTO timeslay_sync_snapshots(id,document,after_json,clock,folds,uploaded,seen_at) VALUES(?1,?2,?3,?4,?5,1,?6)",
+                        "INSERT INTO timeparagon_sync_snapshots(id,document,after_json,clock,folds,uploaded,seen_at) VALUES(?1,?2,?3,?4,?5,1,?6)",
                         params![edit.id, edit.document, edit.after, edit.clock, folds, at],
                     )
                     .map_err(other)?;
@@ -500,7 +503,7 @@ fn apply(
 		}
 		let existing: Option<(String, Option<String>, Option<String>, i64)> = tx
 			.query_row(
-				"SELECT document,before_json,after_json,clock FROM timeslay_sync_edits WHERE id=?1",
+				"SELECT document,before_json,after_json,clock FROM timeparagon_sync_edits WHERE id=?1",
 				[&edit.id],
 				|r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
 			)
@@ -518,7 +521,7 @@ fn apply(
 			}
 		} else {
 			tx.execute(
-				"INSERT INTO timeslay_sync_edits VALUES(?1,?2,?3,?4,?5,1)",
+				"INSERT INTO timeparagon_sync_edits VALUES(?1,?2,?3,?4,?5,1)",
 				params![edit.id, edit.document, edit.before, edit.after, edit.clock],
 			)
 			.map_err(other)?;
@@ -537,7 +540,7 @@ fn apply(
 	let all = edits(&tx, false)?;
 	let projection = model::project(&all).map_err(other)?;
 	tx.execute(
-		"UPDATE timeslay_sync_control SET projecting=1 WHERE singleton=1",
+		"UPDATE timeparagon_sync_control SET projecting=1 WHERE singleton=1",
 		[],
 	)
 	.map_err(other)?;
@@ -571,13 +574,13 @@ fn apply(
 		}
 	}
 	tx.execute(
-		"UPDATE timeslay_sync_control SET projecting=0 WHERE singleton=1",
+		"UPDATE timeparagon_sync_control SET projecting=0 WHERE singleton=1",
 		[],
 	)
 	.map_err(other)?;
 	if applied.changed {
 		tx.execute(
-			"UPDATE timeslay_sync_control SET generation=generation+1 WHERE singleton=1",
+			"UPDATE timeparagon_sync_control SET generation=generation+1 WHERE singleton=1",
 			[],
 		)
 		.map_err(other)?;
@@ -588,7 +591,7 @@ fn apply(
 	}
 	applied.remote_deletions = {
 		let mut q = tx
-			.prepare("SELECT id FROM timeslay_sync_folded WHERE remote_deleted=0")
+			.prepare("SELECT id FROM timeparagon_sync_folded WHERE remote_deleted=0")
 			.map_err(other)?;
 		q.query_map([], |r| r.get::<_, String>(0))
 			.map_err(other)?
@@ -630,7 +633,7 @@ fn tidy(tx: &Connection, remote: &HashSet<String>, at: i64) -> io::Result<()> {
 	for (edit, state) in &all {
 		if !state.uploaded && folded_anywhere.contains(edit.id.as_str()) {
 			tx.execute(
-				"UPDATE timeslay_sync_edits SET uploaded=1 WHERE id=?1",
+				"UPDATE timeparagon_sync_edits SET uploaded=1 WHERE id=?1",
 				[&edit.id],
 			)
 			.map_err(other)?;
@@ -651,7 +654,7 @@ fn tidy(tx: &Connection, remote: &HashSet<String>, at: i64) -> io::Result<()> {
 				.any(|other| other.id != head.id && !head.folds.contains(&other.id));
 			if unsent && rival {
 				tx.execute(
-					"DELETE FROM timeslay_sync_snapshots WHERE id=?1",
+					"DELETE FROM timeparagon_sync_snapshots WHERE id=?1",
 					[&head.id],
 				)
 				.map_err(other)?;
@@ -689,7 +692,7 @@ fn tidy(tx: &Connection, remote: &HashSet<String>, at: i64) -> io::Result<()> {
 		}
 	}
 	tx.execute(
-		"DELETE FROM timeslay_sync_folded WHERE remote_deleted=1 AND folded_at < ?1",
+		"DELETE FROM timeparagon_sync_folded WHERE remote_deleted=1 AND folded_at < ?1",
 		[at - TOMBSTONE_LIFETIME],
 	)
 	.map_err(other)?;
@@ -722,7 +725,7 @@ fn compact(tx: &Connection, remote: &HashSet<String>, at: i64) -> io::Result<()>
 			crate::calendar::operations::new_id().map_err(other)?
 		);
 		tx.execute(
-            "INSERT INTO timeslay_sync_snapshots(id,document,after_json,clock,folds,uploaded,seen_at) VALUES(?1,?2,?3,?4,?5,0,?6)",
+            "INSERT INTO timeparagon_sync_snapshots(id,document,after_json,clock,folds,uploaded,seen_at) VALUES(?1,?2,?3,?4,?5,0,?6)",
             params![
                 snapshot.id,
                 snapshot.document,
@@ -750,9 +753,9 @@ fn mark_sent(path: &Path, sent: &[Edit], deleted: &[String]) -> io::Result<()> {
 		.map_err(other)?;
 	for edit in sent {
 		let table = if edit.snapshot {
-			"timeslay_sync_snapshots"
+			"timeparagon_sync_snapshots"
 		} else {
-			"timeslay_sync_edits"
+			"timeparagon_sync_edits"
 		};
 		tx.execute(
 			&format!("UPDATE {table} SET uploaded=1 WHERE id=?1"),
@@ -762,7 +765,7 @@ fn mark_sent(path: &Path, sent: &[Edit], deleted: &[String]) -> io::Result<()> {
 	}
 	for id in deleted {
 		tx.execute(
-			"UPDATE timeslay_sync_folded SET remote_deleted=1 WHERE id=?1",
+			"UPDATE timeparagon_sync_folded SET remote_deleted=1 WHERE id=?1",
 			[id],
 		)
 		.map_err(other)?;
@@ -785,7 +788,7 @@ pub fn start() {
 	STARTED.get_or_init(|| {
 		set_status("Database sync starting…".into());
 		if let Err(e) = std::thread::Builder::new()
-			.name("timeslay-database-sync".into())
+			.name("timeparagon-database-sync".into())
 			.spawn(run)
 		{
 			set_failure(format!("Database sync could not start: {e}"));
@@ -798,7 +801,7 @@ fn run() {
 		return;
 	};
 	let parent = path.parent().expect("database directory");
-	let lock_path = parent.join("timeslay-sync.owner");
+	let lock_path = parent.join("timeparagon-sync.owner");
 	loop {
 		let url = crate::config::DatabaseSyncSettings::load()
 			.url
@@ -818,7 +821,7 @@ fn run() {
 			crate::fsutil::make_private(&lock_path)?;
 			// Unlike fsutil::locked, failure must never permit two owners.
 			if let Err(error) = lock.try_lock() {
-				set_status("Database sync running in another TimeSlay process".into());
+				set_status("Database sync running in another TimeParagon process".into());
 				return Err(other(error));
 			}
 			set_status("Database sync connecting…".into());
@@ -832,7 +835,7 @@ fn run() {
 			Ok(())
 		})();
 		if let Err(e) = attempt
-			&& status() != "Database sync running in another TimeSlay process"
+			&& status() != "Database sync running in another TimeParagon process"
 		{
 			set_failure(format!("Database sync waiting; local data saved: {e}"));
 		}
@@ -878,6 +881,38 @@ async fn read_remote(
 	Ok((remote, incoming))
 }
 
+/// Moves the history from the table named for the project's old name,
+/// TimeSlay. A device still running an old build recreates that table, so this
+/// runs on every connection, and it costs one schema lookup when there is
+/// nothing to move. Copies are keyed by ID, so moving twice is harmless.
+/// Whether anything moved, which then needs pushing.
+async fn migrate_remote_table(conn: &turso::Connection) -> io::Result<bool> {
+	use crate::legacy_name::OLD_REVISIONS_TABLE as OLD;
+	let mut rows = conn
+		.query(
+			"SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?1",
+			[OLD],
+		)
+		.await
+		.map_err(other)?;
+	let exists = rows.next().await.map_err(other)?.is_some();
+	drop(rows);
+	if !exists {
+		return Ok(false);
+	}
+	conn.execute(
+		&format!("INSERT OR IGNORE INTO {TABLE}(id,payload) SELECT id,payload FROM {OLD}"),
+		(),
+	)
+	.await
+	.map_err(other)?;
+	conn.execute(&format!("DROP TABLE {OLD}"), ())
+		.await
+		.map_err(other)?;
+	log_activity(format!("Moved the sync history from {OLD} to {TABLE}"));
+	Ok(true)
+}
+
 async fn transport(path: &Path, url: &str) -> io::Result<()> {
 	let replica_directory = path
 		.parent()
@@ -905,6 +940,10 @@ async fn transport(path: &Path, url: &str) -> io::Result<()> {
 	)
 	.await
 	.map_err(other)?;
+	replica.pull().await.map_err(other)?;
+	if migrate_remote_table(&conn).await? {
+		replica.push().await.map_err(other)?;
+	}
 	loop {
 		if crate::config::DatabaseSyncSettings::load().url.trim() != url {
 			return Ok(());
@@ -1007,12 +1046,12 @@ mod tests {
 		// Simulate an existing database with the old trigger and unsent data.
 		let sql: String = db
 			.query_row(
-				"SELECT sql FROM sqlite_master WHERE name='timeslay_sync_insert'",
+				"SELECT sql FROM sqlite_master WHERE name='timeparagon_sync_insert'",
 				[],
 				|r| r.get(0),
 			)
 			.unwrap();
-		db.execute_batch("DROP TRIGGER timeslay_sync_insert;")
+		db.execute_batch("DROP TRIGGER timeparagon_sync_insert;")
 			.unwrap();
 		db.execute_batch(&sql.replace("'habits'", "'shared.todos','habits'"))
 			.unwrap();
@@ -1029,7 +1068,7 @@ mod tests {
 			.unwrap();
 		let count: i64 = db
 			.query_row(
-				"SELECT COUNT(*) FROM timeslay_sync_edits WHERE document='shared.todos'",
+				"SELECT COUNT(*) FROM timeparagon_sync_edits WHERE document='shared.todos'",
 				[],
 				|r| r.get(0),
 			)

@@ -1,25 +1,25 @@
 //! The day view's data model.
 //!
 //! Sync, OAuth, Google Tasks metadata and time-block assignment all come from
-//! the existing `timeslay` library, so this crate only has to arrange that
+//! the existing `timeparagon` library, so this crate only has to arrange that
 //! data for the screen: which events are timed, which are all-day, which task
 //! belongs to which block, and how overlaps share a column.
 
 use std::collections::{HashMap, HashSet};
-use timeslay_core::calendar::ids;
+use timeparagon_core::calendar::ids;
 
 use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Timelike};
-use timeslay_core::calendar::first_day::FirstDayOfWeek;
-use timeslay_core::calendar::layout::{self, Span};
-use timeslay_core::calendar::search::Search;
-use timeslay_core::calendar::sources::TimeSlaySource;
-use timeslay_core::calendar::time_format::TimeFormat;
-use timeslay_core::calendar::{self, Event, Snapshot};
-use timeslay_core::config::{CalendarSettings, Config, ProjectsSettings};
-use timeslay_core::places::{self, Found, Place, PlaceSettings};
-use timeslay_core::task_edit::{self, Change};
-use timeslay_core::task_input;
-use timeslay_core::timeblocking as tb;
+use timeparagon_core::calendar::first_day::FirstDayOfWeek;
+use timeparagon_core::calendar::layout::{self, Span};
+use timeparagon_core::calendar::search::Search;
+use timeparagon_core::calendar::sources::TimeParagonSource;
+use timeparagon_core::calendar::time_format::TimeFormat;
+use timeparagon_core::calendar::{self, Event, Snapshot};
+use timeparagon_core::config::{CalendarSettings, Config, ProjectsSettings};
+use timeparagon_core::places::{self, Found, Place, PlaceSettings};
+use timeparagon_core::task_edit::{self, Change};
+use timeparagon_core::task_input;
+use timeparagon_core::timeblocking as tb;
 
 /// Reads the same configuration the iced app uses.
 pub fn load_config() -> Config {
@@ -86,11 +86,11 @@ impl Theme {
 	/// A per-device choice, so it is in the database and not the synced config.
 	/// The saved choice, or `System` when nothing has been saved.
 	pub fn load() -> Self {
-		timeslay_core::task_db::path()
+		timeparagon_core::task_db::path()
 			.and_then(|path| {
-				timeslay_core::task_db::read_document::<String>(
+				timeparagon_core::task_db::read_document::<String>(
 					&path,
-					timeslay_core::task_db::keys::THEME,
+					timeparagon_core::task_db::keys::THEME,
 				)
 				.ok()
 				.flatten()
@@ -100,12 +100,12 @@ impl Theme {
 	}
 
 	pub fn save(self) {
-		let Some(path) = timeslay_core::task_db::path() else {
+		let Some(path) = timeparagon_core::task_db::path() else {
 			return;
 		};
-		let _ = timeslay_core::task_db::write_document(
+		let _ = timeparagon_core::task_db::write_document(
 			&path,
-			timeslay_core::task_db::keys::THEME,
+			timeparagon_core::task_db::keys::THEME,
 			self.name(),
 		);
 	}
@@ -113,7 +113,7 @@ impl Theme {
 
 /// The calendar day that `now` belongs to, honoring the configured end of day.
 pub fn today(settings: &CalendarSettings) -> NaiveDate {
-	calendar::day_at(timeslay_core::clock::now(), settings.day_start_hour())
+	calendar::day_at(timeparagon_core::clock::now(), settings.day_start_hour())
 }
 
 /// Pulls calendars, events and Google Tasks for one day.
@@ -314,7 +314,7 @@ pub fn create_time_block(new: &NewEvent, settings: &CalendarSettings) -> Result<
 pub struct AgendaRow {
 	pub event: Event,
 	pub time: String,
-	pub color: timeslay_core::Color,
+	pub color: timeparagon_core::Color,
 }
 
 /// Blocking: callers run this on a worker thread.
@@ -421,21 +421,21 @@ pub fn save_google_client(client_id: &str, client_secret: &str) -> Result<Config
 	if client_id.trim().is_empty() {
 		return Err("Enter the Google OAuth client ID.".to_owned());
 	}
-	timeslay_core::config::save_google_client(client_id, client_secret)
+	timeparagon_core::config::save_google_client(client_id, client_secret)
 		.map_err(|error| format!("Could not save the Google client: {error}"))?;
 	Ok(load_config())
 }
 
 /// Saves which day weeks start on and returns the config as it now reads.
 pub fn set_first_day_of_week(first_day: FirstDayOfWeek) -> Result<Config, String> {
-	timeslay_core::config::save_first_day_of_week(first_day)
+	timeparagon_core::config::save_first_day_of_week(first_day)
 		.map_err(|error| format!("Could not save the first day of the week: {error}"))?;
 	Ok(load_config())
 }
 
 /// Turns incremental sync on or off and returns the config as it now reads.
 pub fn set_incremental_sync(on: bool) -> Result<Config, String> {
-	timeslay_core::config::save_incremental_sync(on)
+	timeparagon_core::config::save_incremental_sync(on)
 		.map_err(|error| format!("Could not save the sync setting: {error}"))?;
 	Ok(load_config())
 }
@@ -449,7 +449,7 @@ pub fn set_source_enabled(
 ) -> Result<Config, String> {
 	let mut config = load_config();
 	calendar::set_source_enabled(&mut config.calendar, calendars, id, enabled);
-	timeslay_core::config::save_calendar_visibility(&config.calendar)
+	timeparagon_core::config::save_calendar_visibility(&config.calendar)
 		.map_err(|error| format!("Could not save the calendar settings: {error}"))?;
 	Ok(config)
 }
@@ -513,7 +513,7 @@ pub struct TimedEvent {
 	pub column_span: usize,
 	pub time_block: bool,
 	/// The color to draw it in, with the calendar and kind settings applied.
-	pub color: timeslay_core::Color,
+	pub color: timeparagon_core::Color,
 	/// A time block's tasks, in order.
 	pub tasks: Vec<AssignedTask>,
 }
@@ -580,7 +580,7 @@ pub struct BlockRef {
 pub struct SourceRow {
 	pub id: String,
 	pub name: String,
-	pub color: timeslay_core::Color,
+	pub color: timeparagon_core::Color,
 	pub enabled: bool,
 }
 
@@ -606,7 +606,7 @@ pub fn source_sections(
 			})
 			.collect()
 	};
-	let time_slay = TimeSlaySource::ALL
+	let time_paragon = TimeParagonSource::ALL
 		.into_iter()
 		.map(|source| SourceRow {
 			id: source.id().to_owned(),
@@ -618,7 +618,7 @@ pub fn source_sections(
 	vec![
 		("Google Calendars", google(false)),
 		("Google Task Lists", google(true)),
-		("TimeSlay", time_slay),
+		("TimeParagon", time_paragon),
 	]
 }
 
@@ -686,9 +686,9 @@ pub fn build_model(snapshot: &Snapshot, settings: &CalendarSettings) -> DayModel
 
 	let summary = day_summary(snapshot, &events, settings);
 
-	let today = calendar::day_at(timeslay_core::clock::now(), hour_start);
+	let today = calendar::day_at(timeparagon_core::clock::now(), hour_start);
 	let now_min = (day == today)
-		.then(|| minutes_into_day(timeslay_core::clock::now(), day, offset).clamp(0, 24 * 60));
+		.then(|| minutes_into_day(timeparagon_core::clock::now(), day, offset).clamp(0, 24 * 60));
 
 	DayModel {
 		day,
@@ -706,7 +706,7 @@ pub fn build_model(snapshot: &Snapshot, settings: &CalendarSettings) -> DayModel
 }
 
 fn day_summary(snapshot: &Snapshot, events: &[Event], settings: &CalendarSettings) -> DaySummary {
-	let now = timeslay_core::clock::now();
+	let now = timeparagon_core::clock::now();
 	let tasks = || events.iter().filter(|event| event.is_task());
 	let unslotted = tasks()
 		.filter(|task| tb::unslotted_on(task, snapshot.day, now))
@@ -725,7 +725,7 @@ fn view_bounds(day: NaiveDate, offset: i32) -> (DateTime<Local>, DateTime<Local>
 	let start = Local
 		.from_local_datetime(&day.and_hms_opt(0, 0, 0).unwrap())
 		.earliest()
-		.unwrap_or_else(timeslay_core::clock::now)
+		.unwrap_or_else(timeparagon_core::clock::now)
 		+ Duration::minutes(i64::from(offset));
 	(start, start + Duration::days(1))
 }
@@ -978,7 +978,7 @@ fn task_groups(
 			status: tb::task_status(event),
 			minutes: metadata.minutes,
 			block,
-			overdue: tb::past_due(event, timeslay_core::clock::now()),
+			overdue: tb::past_due(event, timeparagon_core::clock::now()),
 			inbox: untriaged_in(event, settings, &snapshot.calendars),
 		});
 	}
@@ -1086,7 +1086,7 @@ pub fn travel_boxes(
 
 /// Shows or hides travel and returns the config as it now reads.
 pub fn set_travel_shown(show: bool) -> Result<Config, String> {
-	timeslay_core::config::save_travel_show(show)
+	timeparagon_core::config::save_travel_show(show)
 		.map_err(|error| format!("Could not save the travel setting: {error}"))?;
 	Ok(load_config())
 }
@@ -1123,7 +1123,7 @@ impl EditContext {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Source {
 	pub name: String,
-	pub color: timeslay_core::Color,
+	pub color: timeparagon_core::Color,
 }
 
 /// How the editor describes where an item comes from, like the iced details pane.
@@ -1289,7 +1289,7 @@ pub struct HabitRow {
 	pub title: String,
 	pub schedule: String,
 	pub time: String,
-	pub color: timeslay_core::Color,
+	pub color: timeparagon_core::Color,
 	/// What opens in the editor.
 	pub event: Event,
 }
@@ -1298,11 +1298,11 @@ pub struct HabitRow {
 /// opening it loads the full master through the same path as an occurrence.
 pub fn habit_row(habit: calendar::api::HabitEvent, settings: &CalendarSettings) -> HabitRow {
 	let anchor = habit.start.date_naive();
-	let recurrence = timeslay_core::recurrence::Recurrence::from_lines(&habit.recurrence);
+	let recurrence = timeparagon_core::recurrence::Recurrence::from_lines(&habit.recurrence);
 	let schedule = if recurrence.is_empty() {
 		"Does not repeat".to_owned()
 	} else {
-		timeslay_core::recurrence::Rule::from_recurrence(anchor, &recurrence).summary(anchor)
+		timeparagon_core::recurrence::Rule::from_recurrence(anchor, &recurrence).summary(anchor)
 	};
 	let color = habit
 		.color_id
@@ -1488,13 +1488,13 @@ pub fn save_event(
 pub fn save_event_place(event: &Event, place: Option<&Place>) -> Result<(), String> {
 	let text = place.map(places::location_text).unwrap_or_default();
 	calendar::set_event_location(&event.calendar_id, &event.id, &text)?;
-	timeslay_core::config::save_event_place(&event.id, place.map(|place| place.id))
+	timeparagon_core::config::save_event_place(&event.id, place.map(|place| place.id))
 		.map_err(|error| format!("Could not save the location: {error}"))
 }
 
 /// Saves a place Mapbox found, so tasks and events can refer to it.
 pub fn save_found_place(found: &Found) -> Result<Place, String> {
-	let id = timeslay_core::config::save_found_place(found)
+	let id = timeparagon_core::config::save_found_place(found)
 		.map_err(|error| format!("Could not save the place: {error}"))?;
 	Ok(Place {
 		id,
@@ -1510,9 +1510,9 @@ pub fn save_found_place(found: &Found) -> Result<Place, String> {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use timeslay_core::calendar::{Calendar, Details};
-	use timeslay_core::task_db::TaskData;
-	use timeslay_core::timeblocking::Metadata;
+	use timeparagon_core::calendar::{Calendar, Details};
+	use timeparagon_core::task_db::TaskData;
+	use timeparagon_core::timeblocking::Metadata;
 
 	fn day() -> NaiveDate {
 		NaiveDate::from_ymd_opt(2026, 10, 26).unwrap()
@@ -1719,14 +1719,17 @@ mod tests {
 		late.details.description = "".into();
 		late.details
 			.task_data
-			.get_or_insert_with(|| timeslay_core::task_db::TaskData {
+			.get_or_insert_with(|| timeparagon_core::task_db::TaskData {
 				id: 100,
 				metadata: Default::default(),
 			})
 			.metadata
 			.deadline = Some(
-			timeslay_core::calendar::deadline::parse_input(&format!("{}", late.start.date_naive()))
-				.unwrap(),
+			timeparagon_core::calendar::deadline::parse_input(&format!(
+				"{}",
+				late.start.date_naive()
+			))
+			.unwrap(),
 		);
 		let model = build_model(&snapshot(vec![late]), &settings());
 		assert!(model.task_groups[0].tasks[0].overdue);
@@ -1753,14 +1756,17 @@ mod tests {
 		late.details.description = "".into();
 		late.details
 			.task_data
-			.get_or_insert_with(|| timeslay_core::task_db::TaskData {
+			.get_or_insert_with(|| timeparagon_core::task_db::TaskData {
 				id: 100,
 				metadata: Default::default(),
 			})
 			.metadata
 			.deadline = Some(
-			timeslay_core::calendar::deadline::parse_input(&format!("{}", late.start.date_naive()))
-				.unwrap(),
+			timeparagon_core::calendar::deadline::parse_input(&format!(
+				"{}",
+				late.start.date_naive()
+			))
+			.unwrap(),
 		);
 		let snapshot = snapshot(vec![block, slotted, unslotted, finished, late]);
 
@@ -1776,7 +1782,7 @@ mod tests {
 
 	#[test]
 	fn the_summary_separates_today_unslotted_tasks_from_overdue_tasks() {
-		let today = timeslay_core::clock::now().date_naive();
+		let today = timeparagon_core::clock::now().date_naive();
 		let mut open = task("open", "Open", None, 1, 30, false);
 		open.start = calendar::at_clock(today, 0, 0);
 		open.end = open.start + Duration::days(1);
@@ -1785,13 +1791,13 @@ mod tests {
 		late.details.description = "".into();
 		late.details
 			.task_data
-			.get_or_insert_with(|| timeslay_core::task_db::TaskData {
+			.get_or_insert_with(|| timeparagon_core::task_db::TaskData {
 				id: 100,
 				metadata: Default::default(),
 			})
 			.metadata
 			.deadline = Some(
-			timeslay_core::calendar::deadline::parse_input(&format!(
+			timeparagon_core::calendar::deadline::parse_input(&format!(
 				"{} 00:00",
 				today.pred_opt().unwrap()
 			))
@@ -1811,7 +1817,7 @@ mod tests {
 
 	#[test]
 	fn an_event_is_drawn_in_its_calendars_custom_color() {
-		let custom = timeslay_core::hex::parse("#123456").unwrap();
+		let custom = timeparagon_core::hex::parse("#123456").unwrap();
 		let mut settings = settings();
 		settings
 			.calendar_colors
@@ -2006,14 +2012,14 @@ mod tests {
 	}
 
 	#[test]
-	fn hiding_a_time_slay_kind_leaves_the_calendar_alone() {
+	fn hiding_a_time_paragon_kind_leaves_the_calendar_alone() {
 		let block = event("b1", "blocks", "Deep work", at(9, 0), at(11, 0));
 		let meeting = event("m1", "work", "Standup", at(12, 0), at(12, 30));
 		let snapshot = snapshot(vec![block, meeting]);
 		let mut settings = settings();
 		settings
 			.disabled
-			.push(TimeSlaySource::TimeBlocks.id().into());
+			.push(TimeParagonSource::TimeBlocks.id().into());
 		let model = build_model(&snapshot, &settings);
 
 		assert!(model.blocks.is_empty());
@@ -2031,7 +2037,9 @@ mod tests {
 		];
 		let mut settings = settings();
 		settings.disabled.push("work".into());
-		settings.disabled.push(TimeSlaySource::Habits.id().into());
+		settings
+			.disabled
+			.push(TimeParagonSource::Habits.id().into());
 		let sections = source_sections(&sources, &settings);
 
 		let names = |rows: &[SourceRow]| -> Vec<String> {
@@ -2043,7 +2051,7 @@ mod tests {
 		assert_eq!(sections[1].0, "Google Task Lists");
 		assert_eq!(names(&sections[1].1), ["Home"]);
 		assert!(sections[1].1[0].enabled);
-		assert_eq!(sections[2].0, "TimeSlay");
+		assert_eq!(sections[2].0, "TimeParagon");
 		assert_eq!(
 			names(&sections[2].1),
 			["Tasks", "Time Blocks", "Habits", "Sleep"]
@@ -2057,7 +2065,7 @@ mod tests {
 		let block = event("b1", "scheduled", "Write", at(9, 0), at(9, 45));
 		let snapshot = Snapshot {
 			calendars: vec![
-				calendar("scheduled", "TimeSlay"),
+				calendar("scheduled", "TimeParagon"),
 				calendar("tasks:work", "Work"),
 			],
 			events: vec![block],
@@ -2113,12 +2121,12 @@ mod tests {
 		timed
 			.details
 			.task_data
-			.get_or_insert_with(|| timeslay_core::task_db::TaskData {
+			.get_or_insert_with(|| timeparagon_core::task_db::TaskData {
 				id: 100,
 				metadata: Default::default(),
 			})
 			.metadata
-			.deadline = Some(timeslay_core::calendar::deadline::parse_input("2026-11-05 17:30").unwrap());
+			.deadline = Some(timeparagon_core::calendar::deadline::parse_input("2026-11-05 17:30").unwrap());
 		let mut fields = TaskFields::new(&timed);
 		assert_eq!(fields.description, "Notes");
 		assert_eq!(fields.estimate, "45");
@@ -2414,7 +2422,7 @@ mod deadline_display_tests {
 			.into_iter()
 			.find(|event| event.id == "standup")
 			.unwrap();
-		task.details.task_data = Some(timeslay_core::task_db::TaskData {
+		task.details.task_data = Some(timeparagon_core::task_db::TaskData {
 			id: 73,
 			metadata: Default::default(),
 		});

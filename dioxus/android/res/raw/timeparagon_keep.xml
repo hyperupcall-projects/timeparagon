@@ -3,4 +3,4 @@
      scripts/build-android.sh) and only referenced by URI at run time, so
      resource shrinking must not remove them. -->
 <resources xmlns:tools="http://schemas.android.com/tools"
-    tools:keep="@raw/timeslay_tone_*" />
+    tools:keep="@raw/timeparagon_tone_*" />

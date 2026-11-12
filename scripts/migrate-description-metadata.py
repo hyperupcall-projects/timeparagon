@@ -74,7 +74,7 @@ def task_notes(notes):
         # External tasks without app-owned metadata are left untouched unless
         # they contain reserved fields, which requires a stable task ID first.
         if any(FIELD.fullmatch(line) for line in notes.splitlines()):
-            raise ValueError('Reserved field on task without TimeSlay metadata')
+            raise ValueError('Reserved field on task without TimeParagon metadata')
         return notes, None
     fields = {}
     for line in parts[1].splitlines():
@@ -289,9 +289,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     home = pathlib.Path.home()
     parser.add_argument('--backup', default='.migration-backups/structured-deadlines')
-    parser.add_argument('--config', default=str(home / '.config/timeslay/config.toml'))
-    parser.add_argument('--secrets', default=str(home / '.local/state/timeslay/secrets.json'))
-    parser.add_argument('--database', default=str(home / '.local/share/timeslay/timeslay.sqlite3'))
+    parser.add_argument('--config', default=str(home / '.config/timeparagon/config.toml'))
+    parser.add_argument('--secrets', default=str(home / '.local/state/timeparagon/secrets.json'))
+    parser.add_argument('--database', default=str(home / '.local/share/timeparagon/timeparagon.sqlite3'))
     parser.add_argument('--apply', action='store_true')
     args = parser.parse_args()
     migration = Migration(args)

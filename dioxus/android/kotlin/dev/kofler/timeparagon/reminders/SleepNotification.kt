@@ -1,4 +1,4 @@
-package dev.timeslay.day.reminders
+package dev.kofler.timeparagon.reminders
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -8,7 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.util.Log
-import dev.timeslay.day.R
+import dev.kofler.timeparagon.R
 
 /**
  * The notification kept up while sleep is being timed, as `dioxus/src/sleep.rs`
@@ -16,7 +16,7 @@ import dev.timeslay.day.R
  * sleep began; finishing replaces it with how long was slept.
  */
 object SleepNotification {
-    const val ACTION = "dev.timeslay.day.reminders.SLEEP"
+    const val ACTION = "dev.kofler.timeparagon.reminders.SLEEP"
 
     /** `sleeping`, `slept` or `none`, which takes the notification down. */
     const val EXTRA_STATE = "state"
@@ -26,7 +26,7 @@ object SleepNotification {
     /** When sleep began, in milliseconds since the epoch. */
     const val EXTRA_SINCE = "since"
 
-    private const val TAG = "TimeSlaySleep"
+    private const val TAG = "TimeParagonSleep"
     private const val CHANNEL = "sleep_timer"
 
     /** One notification, replaced in place as the night moves on. */
@@ -62,7 +62,7 @@ object SleepNotification {
             Notification.Builder(context).setPriority(Notification.PRIORITY_LOW)
         }
         builder
-            .setSmallIcon(R.drawable.timeslay_reminder)
+            .setSmallIcon(R.drawable.timeparagon_reminder)
             .setContentTitle(title)
             .setContentText(body)
             .setStyle(Notification.BigTextStyle().bigText(body))

@@ -507,7 +507,7 @@ pub(super) fn draft_calendar_picker<'a>(
 
 	let caption = crate::ui::controls::field_label("Calendar", metrics.label() - 1.0);
 
-	// A time block always goes to the app's TimeSlay calendar, so the picker
+	// A time block always goes to the app's TimeParagon calendar, so the picker
 	// is a fixed label rather than a choice.
 	if state
 		.calendar

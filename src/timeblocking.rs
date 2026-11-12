@@ -9,10 +9,10 @@ use crate::{
 };
 use chrono::{DateTime, Local, NaiveDate, NaiveTime, TimeZone};
 use iced::Task;
-use timeslay_core::calendar::google::GoogleError;
-use timeslay_core::task_edit::{self, Change, clean_label};
+use timeparagon_core::calendar::google::GoogleError;
+use timeparagon_core::task_edit::{self, Change, clean_label};
 
-pub use timeslay_core::timeblocking::*;
+pub use timeparagon_core::timeblocking::*;
 
 pub const PANEL_WIDTH: f32 = 400.0;
 /// A save in progress, and what its result will be for.
@@ -95,7 +95,7 @@ impl Busy {
 		self.tasks.len() + usize::from(self.adding_todo) + usize::from(self.adding_habit)
 	}
 }
-use timeslay_core::task_edit::MAX_TITLE_CHARS as MAX_TODO_CHARS;
+use timeparagon_core::task_edit::MAX_TITLE_CHARS as MAX_TODO_CHARS;
 /// What a recurring item being added to a time block is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecurringItem {
@@ -387,7 +387,7 @@ fn take_drag(state: &mut State) -> Option<String> {
 }
 
 /// The tasks in `block`, in the order they are laid out (see
-/// [`timeslay_core::timeblocking::membership`]).
+/// [`timeparagon_core::timeblocking::membership`]).
 pub fn assigned_all<'a>(state: &'a State, block: &Event) -> Vec<&'a Event> {
 	tasks_in(block, &state.calendar.events, day_start_hour(state))
 }
@@ -1954,7 +1954,7 @@ fn create_and_assign(
 	blocks: Vec<Event>,
 	related: Vec<Event>,
 ) -> Result<Vec<Event>, String> {
-	let task = timeslay_core::task_edit::create_inbox_task(
+	let task = timeparagon_core::task_edit::create_inbox_task(
 		&settings,
 		"",
 		&title,
@@ -2531,13 +2531,14 @@ mod tests {
 		task.details.description = "Notes".into();
 		task.details
 			.task_data
-			.get_or_insert_with(|| timeslay_core::task_db::TaskData {
+			.get_or_insert_with(|| timeparagon_core::task_db::TaskData {
 				id: 100,
 				metadata: Default::default(),
 			})
 			.metadata
-			.deadline =
-			Some(timeslay_core::calendar::deadline::parse_input(&format!("{yesterday}")).unwrap());
+			.deadline = Some(
+			timeparagon_core::calendar::deadline::parse_input(&format!("{yesterday}")).unwrap(),
+		);
 		assert!(overdue(&task));
 		task.details.task_data.as_mut().unwrap().metadata.deadline = None;
 		task.start = crate::clock::now() - chrono::Duration::days(5);

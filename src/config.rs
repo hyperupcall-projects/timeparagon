@@ -1,4 +1,4 @@
-//! The desktop's settings, kept in the database by `timeslay_core::settings`.
+//! The desktop's settings, kept in the database by `timeparagon_core::settings`.
 //!
 //! A setting that cannot be read must never stop the app from starting, so it
 //! is left at its default and reported. It is not lost to that default either:
@@ -17,11 +17,11 @@ use serde::{Deserialize, Serialize};
 use crate::audio::Tone;
 use crate::hex::HexColor;
 
-pub use timeslay_core::config::{
+pub use timeparagon_core::config::{
 	CalendarSettings, DatabaseSyncSettings, Goal, LifeArea, Objective, PERSONAL_AREA, Project,
 	ProjectsSettings, TriageRequirements, WeekRange, config_path, project_dirs,
 };
-pub use timeslay_core::places::{DistanceUnit, Place, RouteMode, SavedRoute, TravelMode};
+pub use timeparagon_core::places::{DistanceUnit, Place, RouteMode, SavedRoute, TravelMode};
 
 /// How long to wait after the last change before saving.
 pub const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
@@ -41,16 +41,16 @@ pub struct Config {
 	/// something is changed, so an untouched config stays as it was.
 	#[serde(
 		default,
-		skip_serializing_if = "timeslay_core::reminders::ReminderSettings::is_default"
+		skip_serializing_if = "timeparagon_core::reminders::ReminderSettings::is_default"
 	)]
-	pub reminders: timeslay_core::reminders::ReminderSettings,
+	pub reminders: timeparagon_core::reminders::ReminderSettings,
 	pub database_sync: DatabaseSyncSettings,
 	/// Where the notes are kept. Left out of the file while unset.
 	#[serde(
 		default,
-		skip_serializing_if = "timeslay_core::config::NotesSettings::is_empty"
+		skip_serializing_if = "timeparagon_core::config::NotesSettings::is_empty"
 	)]
-	pub notes: timeslay_core::config::NotesSettings,
+	pub notes: timeparagon_core::config::NotesSettings,
 	pub calendar: CalendarSettings,
 	pub projects: ProjectsSettings,
 	/// Places and travel. It is left out of the file until something is set,
@@ -490,7 +490,7 @@ pub struct TravelSettings {
 	/// The map "Open in Maps" opens a trip on.
 	pub map_app: MapApp,
 	/// Whether travel times are shown on the calendar. Toggled from the
-	/// calendar menu beside the TimeSlay sources, and off until then.
+	/// calendar menu beside the TimeParagon sources, and off until then.
 	pub show: bool,
 	pub places: Vec<Place>,
 	/// Trips whose method was chosen by hand.
@@ -545,7 +545,7 @@ impl TravelSettings {
 		lat: f64,
 		lng: f64,
 	) -> u64 {
-		timeslay_core::places::add_place(&mut self.places, name, address, place_id, lat, lng)
+		timeparagon_core::places::add_place(&mut self.places, name, address, place_id, lat, lng)
 	}
 
 	/// How the trip from `from` to `to` is made.
@@ -568,7 +568,9 @@ impl TravelSettings {
 	}
 }
 
-pub use timeslay_core::alarms::{AlarmProfile, Flash, Notification, Sound, SoundChoice, Urgency};
+pub use timeparagon_core::alarms::{
+	AlarmProfile, Flash, Notification, Sound, SoundChoice, Urgency,
+};
 
 impl Config {
 	/// Reads the settings, falling back to defaults for anything unreadable.
@@ -606,8 +608,8 @@ impl Config {
 
 	/// Reads the settings in `database`. Settings this build does not know
 	/// (a newer version's) are reported and left alone.
-	fn read(database: &Path) -> io::Result<timeslay_core::settings::Loaded<Self>> {
-		let loaded = timeslay_core::settings::load::<Self>(database, |path| {
+	fn read(database: &Path) -> io::Result<timeparagon_core::settings::Loaded<Self>> {
+		let loaded = timeparagon_core::settings::load::<Self>(database, |path| {
 			log::warn!("ignoring unknown setting: {path}");
 		})?;
 		for problem in &loaded.problems {
@@ -627,7 +629,7 @@ impl Config {
 	}
 
 	fn save_at(&self, database: &Path, baseline: &Config) -> io::Result<()> {
-		timeslay_core::settings::save(database, baseline, self)
+		timeparagon_core::settings::save(database, baseline, self)
 	}
 
 	/// Changes the stored settings rather than this process's copy of them,
@@ -636,18 +638,18 @@ impl Config {
 		let database = crate::task_db::path().ok_or_else(|| {
 			io::Error::new(io::ErrorKind::NotFound, "no data directory available")
 		})?;
-		timeslay_core::settings::update(&database, change)
+		timeparagon_core::settings::update(&database, change)
 	}
 
 	/// Whether `other` would be stored the same as this. A reload of this
 	/// process's own save can differ in the order of lists kept as sets.
 	pub fn stored_same(&self, other: &Config) -> bool {
-		timeslay_core::settings::same_stored(self, other)
+		timeparagon_core::settings::same_stored(self, other)
 	}
 }
 
 /// How often the settings are checked for changes made elsewhere: by another
-/// TimeSlay process, or by database sync bringing another device's.
+/// TimeParagon process, or by database sync bringing another device's.
 const WATCH_INTERVAL: Duration = Duration::from_millis(300);
 
 /// The settings, each time they change. The first is sent at once, which
@@ -693,13 +695,13 @@ fn spawn_watcher_at(
 	mut changed: impl FnMut(Config) -> bool + Send + 'static,
 ) -> io::Result<()> {
 	std::thread::Builder::new()
-		.name("timeslay-config-watch".into())
+		.name("timeparagon-config-watch".into())
 		.spawn(move || {
 			let mut reader = None;
 			let mut seen = None;
 			loop {
 				if reader.is_none() {
-					reader = timeslay_core::local_changes::Reader::open(&database)
+					reader = timeparagon_core::local_changes::Reader::open(&database)
 						.map_err(|error| log::warn!("could not watch the settings: {error}"))
 						.ok();
 				}
@@ -734,7 +736,7 @@ fn spawn_watcher_at(
 mod tests {
 	fn database() -> (tempfile::TempDir, PathBuf) {
 		let directory = tempfile::tempdir().unwrap();
-		let path = directory.path().join("timeslay.sqlite3");
+		let path = directory.path().join("timeparagon.sqlite3");
 		(directory, path)
 	}
 
@@ -747,7 +749,7 @@ mod tests {
 		let (_directory, path) = database();
 		let baseline = read(&path);
 		// Another process changes something meanwhile.
-		timeslay_core::settings::update(&path, |config: &mut Config| {
+		timeparagon_core::settings::update(&path, |config: &mut Config| {
 			config.views.dock_width = 20.0;
 		})
 		.unwrap();
@@ -771,7 +773,7 @@ mod tests {
 			for _ in 0..4 {
 				scope.spawn(|| {
 					for _ in 0..5 {
-						timeslay_core::settings::update(&path, |config: &mut Config| {
+						timeparagon_core::settings::update(&path, |config: &mut Config| {
 							config.notepad.text.push('x');
 						})
 						.unwrap();
@@ -794,10 +796,13 @@ mod tests {
 		config.save_at(&path, &baseline).unwrap();
 
 		// The phone's smaller config knows none of these.
-		timeslay_core::settings::update(&path, |phone: &mut timeslay_core::config::Config| {
-			phone.calendar.sync_minutes = 5;
-			phone.travel.show = true;
-		})
+		timeparagon_core::settings::update(
+			&path,
+			|phone: &mut timeparagon_core::config::Config| {
+				phone.calendar.sync_minutes = 5;
+				phone.travel.show = true;
+			},
+		)
 		.unwrap();
 
 		let saved = read(&path);
@@ -828,21 +833,21 @@ mod tests {
 	#[test]
 	fn unknown_settings_warn_without_discarding_known_settings() {
 		let (_directory, path) = database();
-		timeslay_core::settings::update(&path, |config: &mut Config| {
+		timeparagon_core::settings::update(&path, |config: &mut Config| {
 			config.appearance.theme = "Ocean".into();
 			config.alarm.sound.volume = 25;
 		})
 		.unwrap();
 		// As a newer version would store them.
-		let mut phone = timeslay_core::settings::load::<serde_json::Value>(&path, |_| {})
+		let mut phone = timeparagon_core::settings::load::<serde_json::Value>(&path, |_| {})
 			.unwrap()
 			.value;
 		phone["future_section"] = serde_json::json!({"setting": true});
 		phone["appearance"]["future_theme_setting"] = 42.into();
-		timeslay_core::settings::save(&path, &serde_json::json!({}), &phone).unwrap();
+		timeparagon_core::settings::save(&path, &serde_json::json!({}), &phone).unwrap();
 
 		let mut ignored = Vec::new();
-		let config = timeslay_core::settings::load::<Config>(&path, |path| ignored.push(path))
+		let config = timeparagon_core::settings::load::<Config>(&path, |path| ignored.push(path))
 			.unwrap()
 			.value;
 		assert_eq!(config.appearance.theme, "Ocean");
@@ -857,7 +862,7 @@ mod tests {
 		changed.window.width = 500.0;
 		changed.save_at(&path, &baseline).unwrap();
 		let mut ignored = Vec::new();
-		timeslay_core::settings::load::<Config>(&path, |path| ignored.push(path)).unwrap();
+		timeparagon_core::settings::load::<Config>(&path, |path| ignored.push(path)).unwrap();
 		assert_eq!(ignored.len(), 2);
 	}
 
@@ -865,7 +870,7 @@ mod tests {
 	fn the_watcher_sends_the_settings_and_then_each_change() {
 		use iced::futures::StreamExt;
 		let (_directory, path) = database();
-		timeslay_core::settings::update(&path, |config: &mut Config| {
+		timeparagon_core::settings::update(&path, |config: &mut Config| {
 			config.alarm.sound.volume = 25
 		})
 		.unwrap();
@@ -896,7 +901,7 @@ mod tests {
 		};
 		wait_for_volume(25);
 		for volume in [40, 60] {
-			timeslay_core::settings::update(&path, |config: &mut Config| {
+			timeparagon_core::settings::update(&path, |config: &mut Config| {
 				config.alarm.sound.volume = volume;
 			})
 			.unwrap();

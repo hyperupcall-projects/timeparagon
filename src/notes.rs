@@ -1,6 +1,6 @@
 //! The Notes screen: Markdown files in the notes directory.
 //!
-//! The files themselves are in `timeslay_core::notes`.
+//! The files themselves are in `timeparagon_core::notes`.
 //! This is what the app is in the middle of doing with them. It is unrelated
 //! to the notepad, which is the single page behind the "Note" tab.
 
@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use iced::Task;
 use iced::widget::text_editor;
-use timeslay_core::notes::{self, Library, Link, LinkKind, Pastel, Saved};
+use timeparagon_core::notes::{self, Library, Link, LinkKind, Pastel, Saved};
 
 use crate::app::{EventMessage, Message, NavigationMessage, Screen, State};
 use crate::blocking;
@@ -639,7 +639,7 @@ pub fn candidates(state: &State) -> Vec<Link> {
 mod tests {
 	use super::*;
 	use crate::app::update as app_update;
-	use timeslay_core::habits::Habit;
+	use timeparagon_core::habits::Habit;
 
 	fn state() -> State {
 		State::blank()
@@ -681,7 +681,7 @@ mod tests {
 		let scheduled = crate::calendar::calendar_tasks::apply(
 			task,
 			&settings,
-			&timeslay_core::task_edit::Change::Day(crate::clock::now().date_naive()),
+			&timeparagon_core::task_edit::Change::Day(crate::clock::now().date_naive()),
 			0,
 		)
 		.unwrap();
@@ -690,7 +690,7 @@ mod tests {
 		let inbox = crate::calendar::calendar_tasks::apply(
 			scheduled,
 			&settings,
-			&timeslay_core::task_edit::Change::Inbox,
+			&timeparagon_core::task_edit::Change::Inbox,
 			0,
 		)
 		.unwrap();

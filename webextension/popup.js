@@ -1,7 +1,7 @@
 /* global browser, chrome */
 "use strict";
 
-const HOST = "com.timeslay.webextension";
+const HOST = "com.timeparagon.webextension";
 const api = globalThis.browser ?? globalThis.chrome;
 
 const $ = (id) => document.getElementById(id);
@@ -125,7 +125,7 @@ function setStatus(kind, title, detail, trace, link) {
 
 function showError(message, trace) {
   lastDebug = [
-    "TimeSlay extension error",
+    "TimeParagon extension error",
     `host: ${HOST}`,
     `page: ${page.url}`,
     `title: ${page.title}`,
@@ -172,7 +172,7 @@ async function addToInbox(event) {
     const response = await sendNative(readForm());
     if (!response) {
       throw new Error(
-        "The native host closed without a reply. Check that the host manifest is installed and that the timeslay binary is built.",
+        "The native host closed without a reply. Check that the host manifest is installed and that the timeparagon binary is built.",
       );
     }
     if (response.ok) {

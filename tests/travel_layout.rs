@@ -5,11 +5,11 @@ use iced::{Element, Size};
 use iced_test::core::Settings;
 use iced_test::{Error, Simulator as Sim};
 
-use timeslay::app::NavigationMessage;
-use timeslay::app::{self, Message, Screen, State};
-use timeslay::calendar::{Store, sample_snapshot};
-use timeslay::config::TravelMode;
-use timeslay::travel::{Action, Found, Leg, PickTarget, Route, RouteKey};
+use timeparagon::app::NavigationMessage;
+use timeparagon::app::{self, Message, Screen, State};
+use timeparagon::calendar::{Store, sample_snapshot};
+use timeparagon::config::TravelMode;
+use timeparagon::travel::{Action, Found, Leg, PickTarget, Route, RouteKey};
 
 const WIDTHS: [f32; 4] = [180.0, 200.0, 260.0, 420.0];
 
@@ -51,7 +51,7 @@ fn messages(ui: Simulator<'_>) -> Vec<Message> {
 	ui.into_messages().collect()
 }
 
-/// Travel is toggled from the calendar menu beside the TimeSlay sources, and
+/// Travel is toggled from the calendar menu beside the TimeParagon sources, and
 /// pressing its switch asks for travel to be shown. The header no longer
 /// carries a Toggle Travel button, whatever the width.
 #[test]
@@ -75,20 +75,23 @@ fn travel_is_toggled_from_the_calendar_menu() {
 		);
 		drop(header);
 
-		// Travel sits in the Calendars tab under the TimeSlay heading, after Sleep.
+		// Travel sits in the Calendars tab under the TimeParagon heading, after Sleep.
 		state.calendar.menu_open = true;
 		let mut ui = Sim::with_size(
 			Settings::default(),
 			state.main_size,
-			timeslay::ui::calendar::view(
+			timeparagon::ui::calendar::view(
 				&state,
-				&timeslay::ui::layout::Metrics::of(state.main_size),
+				&timeparagon::ui::layout::Metrics::of(state.main_size),
 			),
 		);
-		let timeslay_y = ui.find("TimeSlay").unwrap().bounds().y;
+		let timeparagon_y = ui.find("TimeParagon").unwrap().bounds().y;
 		let sleep_y = ui.find("Sleep").unwrap().bounds().y;
 		let travel = ui.find("Travel").expect("Travel row").bounds();
-		assert!(travel.y > timeslay_y, "Travel above TimeSlay at {width}px");
+		assert!(
+			travel.y > timeparagon_y,
+			"Travel above TimeParagon at {width}px"
+		);
 		assert!(travel.y > sleep_y, "Travel above Sleep at {width}px");
 		assert!(travel.x >= 0.0 && travel.x + travel.width <= width);
 
@@ -386,7 +389,7 @@ fn map_picker_opens_from_search_and_requires_a_selection() -> Result<(), Error> 
 		let _ = ui.click("Choose on map")?;
 		assert!(messages(ui).iter().any(|m| matches!(
 			m,
-			Message::Travel(Action::Map(timeslay::travel::map::Action::Open))
+			Message::Travel(Action::Map(timeparagon::travel::map::Action::Open))
 		)));
 
 		// Render native controls without initializing CEF in headless tests.
@@ -396,7 +399,7 @@ fn map_picker_opens_from_search_and_requires_a_selection() -> Result<(), Error> 
 		let _ = ui.click("Confirm")?;
 		assert!(!messages(ui).iter().any(|m| matches!(
 			m,
-			Message::Travel(Action::Map(timeslay::travel::map::Action::Confirm))
+			Message::Travel(Action::Map(timeparagon::travel::map::Action::Confirm))
 		)));
 		state.travel.map.selected = Some(Found {
 			place_id: "cafe".into(),
@@ -409,7 +412,7 @@ fn map_picker_opens_from_search_and_requires_a_selection() -> Result<(), Error> 
 		let _ = ui.click("Confirm")?;
 		assert!(messages(ui).iter().any(|m| matches!(
 			m,
-			Message::Travel(Action::Map(timeslay::travel::map::Action::Confirm))
+			Message::Travel(Action::Map(timeparagon::travel::map::Action::Confirm))
 		)));
 	}
 	Ok(())
@@ -431,7 +434,10 @@ fn map_picker_is_shown_only_in_the_floating_window() {
 
 	let mut panel = render(&state, Size::new(420.0, 900.0));
 	assert!(panel.find("Confirm").is_err(), "not in the panel");
-	let mut editor = at(Size::new(420.0, 900.0), timeslay::ui::editor_window(&state));
+	let mut editor = at(
+		Size::new(420.0, 900.0),
+		timeparagon::ui::editor_window(&state),
+	);
 	assert!(editor.find("Confirm").is_ok(), "in the floating window");
 }
 

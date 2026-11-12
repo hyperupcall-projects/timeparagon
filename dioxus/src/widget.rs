@@ -8,10 +8,10 @@
 #[cfg(any(target_os = "android", test))]
 use chrono::NaiveDate;
 use serde::Serialize;
-use timeslay_core::Color;
-use timeslay_core::calendar::layout::{self, Span};
-use timeslay_core::calendar::{self, Event, time_format};
-use timeslay_core::config::CalendarSettings;
+use timeparagon_core::Color;
+use timeparagon_core::calendar::layout::{self, Span};
+use timeparagon_core::calendar::{self, Event, time_format};
+use timeparagon_core::config::CalendarSettings;
 
 use crate::day::{self, DayModel, TimedEvent, TravelBox};
 
@@ -166,7 +166,7 @@ fn write(
 	if std::fs::read(&path).is_ok_and(|current| current == json) {
 		return false;
 	}
-	use timeslay_core::fsutil::{Kind, write_atomic};
+	use timeparagon_core::fsutil::{Kind, write_atomic};
 	write_atomic(&path, &json, Kind::Cache).is_ok()
 }
 
@@ -197,7 +197,7 @@ pub fn notify() {
 		// Borrow the runtime-owned context; do not delete its global reference.
 		let activity = unsafe { JObject::from_raw(context.context().cast()) };
 		env.with_local_frame(16, |env| -> jni::errors::Result<()> {
-			let action = env.new_string("dev.timeslay.day.widget.DATA_CHANGED")?;
+			let action = env.new_string("dev.kofler.timeparagon.widget.DATA_CHANGED")?;
 			let intent = env.new_object(
 				"android/content/Intent",
 				"(Ljava/lang/String;)V",
@@ -258,12 +258,12 @@ fn refresh() -> bool {
 /// when the app has not been opened, then re-plans them.
 #[cfg(target_os = "android")]
 fn refresh_reminders(
-	config: &timeslay_core::config::Config,
+	config: &timeparagon_core::config::Config,
 	today_snapshot: calendar::Snapshot,
 	today: NaiveDate,
 ) {
 	let mut store = calendar::Store::new(config.calendar.day_start_hour());
-	store.cache_days_in(timeslay_core::task_db::path());
+	store.cache_days_in(timeparagon_core::task_db::path());
 	store.cache_fetched_snapshot(today_snapshot, &[today]);
 	// Early reminders for tomorrow are due before the next morning's sync.
 	if let Some(tomorrow) = today.succ_opt()
@@ -279,7 +279,7 @@ fn refresh_reminders(
 /// paths, and this cannot collide with the WebView activity doing the same.
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_timeslay_day_widget_WidgetRefreshService_nativeRefresh(
+pub extern "system" fn Java_dev_kofler_timeparagon_widget_WidgetRefreshService_nativeRefresh(
 	env: jni::JNIEnv<'_>,
 	_service: jni::objects::JObject<'_>,
 	context: jni::objects::JObject<'_>,
@@ -299,7 +299,7 @@ pub extern "system" fn Java_dev_timeslay_day_widget_WidgetRefreshService_nativeR
 			}
 			std::mem::forget(context);
 			crate::prepare_android_storage();
-			timeslay_core::database_sync::start();
+			timeparagon_core::database_sync::start();
 		});
 		refresh()
 	}));
@@ -310,10 +310,10 @@ pub extern "system" fn Java_dev_timeslay_day_widget_WidgetRefreshService_nativeR
 mod tests {
 	use super::*;
 	use chrono::{DateTime, Duration, Local, TimeZone};
-	use timeslay_core::calendar::{Calendar, Details, Snapshot};
-	use timeslay_core::places::{Place, PlaceSettings, SavedRoute, TravelMode};
-	use timeslay_core::task_db::TaskData;
-	use timeslay_core::timeblocking::Metadata;
+	use timeparagon_core::calendar::{Calendar, Details, Snapshot};
+	use timeparagon_core::places::{Place, PlaceSettings, SavedRoute, TravelMode};
+	use timeparagon_core::task_db::TaskData;
+	use timeparagon_core::timeblocking::Metadata;
 
 	fn date() -> NaiveDate {
 		NaiveDate::from_ymd_opt(2026, 10, 26).unwrap()
@@ -385,7 +385,7 @@ mod tests {
 		let travel = day::travel_boxes(
 			&model,
 			travel,
-			timeslay_core::places::DistanceUnit::Kilometers,
+			timeparagon_core::places::DistanceUnit::Kilometers,
 		);
 		widget_day(&model, &travel, &settings, snapshot.fetched_at)
 	}

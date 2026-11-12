@@ -1,20 +1,20 @@
 //! The mobile editor uses the same alarm document and profiles as desktop.
 use chrono::{Local, NaiveDateTime, TimeZone};
 use dioxus::prelude::*;
-use timeslay_core::{
+use timeparagon_core::{
 	alarms::{self, Alarm, Library, SoundChoice},
 	config::Config,
 	sounds::Tone,
 };
 
 fn load() -> Result<Library, String> {
-	let path = timeslay_core::task_db::path().ok_or("The alarm database is unavailable")?;
+	let path = timeparagon_core::task_db::path().ok_or("The alarm database is unavailable")?;
 	alarms::read(&path).map_err(|e| e.to_string())
 }
 
 // Read just before changing a single alarm, preserving other devices' edits.
 fn change(id: u64, mut replacement: Option<Alarm>, baseline: Option<Alarm>) -> Result<(), String> {
-	let path = timeslay_core::task_db::path().ok_or("The alarm database is unavailable")?;
+	let path = timeparagon_core::task_db::path().ok_or("The alarm database is unavailable")?;
 	let mut library = alarms::read(&path).map_err(|e| e.to_string())?;
 	if let (Some(desired), Some(before)) = (replacement.as_mut(), baseline) {
 		let mut current = library

@@ -1,9 +1,9 @@
 [package]
-name = "timeslay"
+name = "timeparagon"
 version = "0.32.0"
 edition = "2024"
 publish = false
-description = "Slay the day with TimeSlay"
+description = "Master the day with TimeParagon"
 license = "GPL-3.0"
 
 [dependencies]
@@ -33,7 +33,7 @@ iced_layershell = { version = "=0.19.1", default-features = false, features = ["
 winit-common = "=0.31.0-beta.2"
 iced_runtime = "0.14"
 # The renderer-agnostic data layer, shared with the Dioxus app.
-timeslay-core = { path = "core" }
+timeparagon-core = { path = "core" }
 # Direct dependency exposes CEF runtime metadata to build.rs for loader paths.
 cef-dll-sys = { version = "145", default-features = false }
 iced_webview = { package = "iced_webview_v2", path = "vendor/iced_webview_v2", default-features = false, features = ["cef"] }
@@ -76,7 +76,7 @@ pipewire-audio = ["dep:pipewire"]
 wgpu = ["iced/wgpu"]
 
 # Debug builds used to carry full DWARF for everything: 745 of the 914 MiB of a
-# debug `timeslay` binary was debug info, and the tree holds ~250 binaries (one
+# debug `timeparagon` binary was debug info, and the tree holds ~250 binaries (one
 # per test/example target), which is what made `target/` ~80 GiB. Keep file:line
 # for our own crates so backtraces stay useful, but drop type and variable info.
 [profile.dev]
@@ -84,7 +84,7 @@ debug = "line-tables-only"
 
 # Third-party crates are the bulk of the graph and of its DWARF, and we almost
 # never step through them. The `"*"` wildcard does not cover workspace members,
-# so `timeslay`, `timeslay-core`, and `dioxus` keep their debug info.
+# so `timeparagon`, `timeparagon-core`, and `dioxus` keep their debug info.
 [profile.dev.package."*"]
 debug = false
 

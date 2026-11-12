@@ -1,6 +1,6 @@
 display_information:
-  name: TimeSlay
-  description: Add Slack messages to your TimeSlay inbox
+  name: TimeParagon
+  description: Add Slack messages to your TimeParagon inbox
   background_color: "#1f2430"
 
 features:
@@ -9,20 +9,20 @@ features:
     messages_tab_enabled: false
     messages_tab_read_only_enabled: true
   bot_user:
-    display_name: TimeSlay
+    display_name: TimeParagon
     always_online: true
   shortcuts:
     - name: Add to inbox
       type: message
       callback_id: add_to_inbox
-      description: Save this message to your TimeSlay inbox
+      description: Save this message to your TimeParagon inbox
     - name: Add to inbox
       type: global
       callback_id: add_to_inbox_global
-      description: Add a link to your TimeSlay inbox
+      description: Add a link to your TimeParagon inbox
   slash_commands:
     - command: /add-to-inbox
-      description: Add a link to your TimeSlay inbox
+      description: Add a link to your TimeParagon inbox
       usage_hint: "<link> [note]"
       should_escape: false
 

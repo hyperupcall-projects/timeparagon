@@ -8,13 +8,13 @@ import {
   addToInbox,
   decodeNativeMessage,
   encodeNativeMessage,
-} from "../src/timeslay.ts";
+} from "../src/timeparagon.ts";
 
-const directory = mkdtempSync(join(tmpdir(), "timeslay-slack-"));
+const directory = mkdtempSync(join(tmpdir(), "timeparagon-slack-"));
 process.on("exit", () => rmSync(directory, { recursive: true, force: true }));
 
 /**
- * A tiny stand-in for `timeslay webextension`: it reads one framed request,
+ * A tiny stand-in for `timeparagon webextension`: it reads one framed request,
  * records it to FAKE_HOST_OUT, and answers with FAKE_HOST_REPLY.
  */
 const FAKE_HOST = `#!/usr/bin/env node
@@ -107,7 +107,7 @@ test("addToInbox reports a failure reply with its trace", async () => {
   process.env.FAKE_HOST_REPLY = JSON.stringify({
     ok: false,
     error: "Could not read the link",
-    trace: "Steps:\nasking timeslay-window.sock",
+    trace: "Steps:\nasking timeparagon-window.sock",
   });
 
   const result = await addToInbox(
@@ -117,7 +117,7 @@ test("addToInbox reports a failure reply with its trace", async () => {
 
   assert.equal(result.ok, false);
   assert.equal(result.error, "Could not read the link");
-  assert.match(result.trace ?? "", /timeslay-window\.sock/);
+  assert.match(result.trace ?? "", /timeparagon-window\.sock/);
 });
 
 test("addToInbox rejects a reply it cannot decode", async () => {

@@ -133,7 +133,7 @@ impl canvas::Program<Message> for PreviewCanvas {
 			frame.stroke(
 				&Path::line(Point::new(self.gutter, y), Point::new(frame.width(), y)),
 				Stroke {
-					style: Style::Solid(timeslay_core::theme::HOUR_LINE),
+					style: Style::Solid(timeparagon_core::theme::HOUR_LINE),
 					width: 1.0,
 					..Stroke::default()
 				},
@@ -163,7 +163,7 @@ impl canvas::Program<Message> for PreviewCanvas {
 				Point::new(self.gutter, frame.height()),
 			),
 			Stroke {
-				style: Style::Solid(timeslay_core::theme::HOUR_LINE),
+				style: Style::Solid(timeparagon_core::theme::HOUR_LINE),
 				width: 1.0,
 				..Stroke::default()
 			},
@@ -232,7 +232,7 @@ impl canvas::Program<Message> for PreviewCanvas {
 					},
 				);
 			}
-			for (drop, alpha) in timeslay_core::theme::EVENT_DROPS {
+			for (drop, alpha) in timeparagon_core::theme::EVENT_DROPS {
 				frame.fill(
 					&Path::rounded_rectangle(
 						Point::new(rect.x, rect.y + drop),

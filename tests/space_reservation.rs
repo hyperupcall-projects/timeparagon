@@ -1,4 +1,4 @@
-use timeslay::config::Config;
+use timeparagon::config::Config;
 
 #[test]
 fn old_configs_keep_overlays_and_reservations_round_trip_independently() {
@@ -21,8 +21,8 @@ fn old_configs_keep_overlays_and_reservations_round_trip_independently() {
 
 #[test]
 fn radii_and_reservation_shortcut_are_independent_and_persist() {
-	use timeslay::app::SettingsMessage;
-	use timeslay::{
+	use timeparagon::app::SettingsMessage;
+	use timeparagon::{
 		app::{self, Message, State},
 		panel::Action,
 	};
@@ -53,8 +53,8 @@ fn radii_and_reservation_shortcut_are_independent_and_persist() {
 
 #[test]
 fn shortcut_command_toggles_only_panel_reservation() {
-	use timeslay::app::SystemMessage;
-	use timeslay::app::{self, Message, PanelCommand, State};
+	use timeparagon::app::SystemMessage;
+	use timeparagon::app::{self, Message, PanelCommand, State};
 	let mut state = State::blank();
 	let (tx, rx) = std::sync::mpsc::channel();
 	state.panel_command_rx = Some(rx);

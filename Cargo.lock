@@ -8341,7 +8341,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "timeslay"
+name = "timeparagon"
 version = "0.32.0"
 dependencies = [
  "anyhow",
@@ -8371,7 +8371,7 @@ dependencies = [
  "serde_json",
  "smithay-client-toolkit 0.20.0",
  "tempfile",
- "timeslay-core",
+ "timeparagon-core",
  "tiny-skia",
  "toml 1.1.6+spec-1.1.0",
  "ureq 2.12.1",
@@ -8382,7 +8382,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "timeslay-core"
+name = "timeparagon-core"
 version = "0.32.0"
 dependencies = [
  "base64 0.22.1",
@@ -8412,7 +8412,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "timeslay-dioxus"
+name = "timeparagon-dioxus"
 version = "0.32.0"
 dependencies = [
  "chrono",
@@ -8422,7 +8422,7 @@ dependencies = [
  "ndk-context",
  "serde",
  "serde_json",
- "timeslay-core",
+ "timeparagon-core",
  "tokio",
 ]
 

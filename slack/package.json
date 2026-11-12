@@ -1,8 +1,8 @@
 {
-  "name": "timeslay-slack",
+  "name": "timeparagon-slack",
   "version": "0.1.0",
   "private": true,
-  "description": "Add Slack messages to the TimeSlay inbox",
+  "description": "Add Slack messages to the TimeParagon inbox",
   "type": "module",
   "engines": {
     "node": ">=22.18"

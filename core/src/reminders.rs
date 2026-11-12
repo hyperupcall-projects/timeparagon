@@ -13,7 +13,7 @@ use chrono::{DateTime, Duration, Local, NaiveDate};
 use serde::{Deserialize, Serialize};
 
 use crate::calendar::event_options::Method;
-use crate::calendar::sources::TimeSlaySource;
+use crate::calendar::sources::TimeParagonSource;
 use crate::calendar::time_format::{self, TimeFormat};
 use crate::calendar::{self, Event};
 use crate::config::CalendarSettings;
@@ -28,7 +28,7 @@ pub const HORIZON_HOURS: i64 = 36;
 /// that was asleep or a poll that ran late. Older ones are dropped quietly.
 pub const LATE_GRACE_MINUTES: i64 = 5;
 
-/// The kinds of things a reminder can be about, matching the TimeSlay rows of
+/// The kinds of things a reminder can be about, matching the TimeParagon rows of
 /// the calendar list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -91,22 +91,22 @@ impl Category {
 	pub fn color(self, settings: &CalendarSettings) -> crate::Color {
 		match self {
 			Self::Events => settings.event_color(),
-			Self::Tasks => TimeSlaySource::Tasks.color(settings),
-			Self::TimeBlocks => TimeSlaySource::TimeBlocks.color(settings),
-			Self::Habits => TimeSlaySource::Habits.color(settings),
-			Self::Sleep => TimeSlaySource::Sleep.color(settings),
+			Self::Tasks => TimeParagonSource::Tasks.color(settings),
+			Self::TimeBlocks => TimeParagonSource::TimeBlocks.color(settings),
+			Self::Habits => TimeParagonSource::Habits.color(settings),
+			Self::Sleep => TimeParagonSource::Sleep.color(settings),
 			Self::Travel => calendar::colors::TRAVEL,
 		}
 	}
 
-	/// Which kind of reminder an event gets. Anything not made by TimeSlay is
+	/// Which kind of reminder an event gets. Anything not made by TimeParagon is
 	/// an event.
 	pub fn of(event: &Event, app_calendar: &str) -> Self {
-		match TimeSlaySource::of(event, app_calendar) {
-			Some(TimeSlaySource::Tasks) => Self::Tasks,
-			Some(TimeSlaySource::TimeBlocks) => Self::TimeBlocks,
-			Some(TimeSlaySource::Habits) => Self::Habits,
-			Some(TimeSlaySource::Sleep) => Self::Sleep,
+		match TimeParagonSource::of(event, app_calendar) {
+			Some(TimeParagonSource::Tasks) => Self::Tasks,
+			Some(TimeParagonSource::TimeBlocks) => Self::TimeBlocks,
+			Some(TimeParagonSource::Habits) => Self::Habits,
+			Some(TimeParagonSource::Sleep) => Self::Sleep,
 			None => Self::Events,
 		}
 	}
@@ -128,7 +128,7 @@ pub enum Sound {
 	/// One of the device's own notification sounds: a file in the sound
 	/// theme on the desktop, a ringtone URI on Android.
 	Device { name: String, uri: String },
-	/// One of the tones TimeSlay generates.
+	/// One of the tones TimeParagon generates.
 	Tone { tone: Tone },
 	/// The notification is posted without any sound.
 	Silent,
@@ -303,7 +303,7 @@ pub struct Context<'a> {
 	pub settings: &'a ReminderSettings,
 	pub calendar: &'a CalendarSettings,
 	pub places: &'a PlaceSettings,
-	/// The id of TimeSlay's own calendar, which tells time blocks and habits
+	/// The id of TimeParagon's own calendar, which tells time blocks and habits
 	/// apart from ordinary events.
 	pub app_calendar: &'a str,
 	pub time_format: TimeFormat,

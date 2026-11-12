@@ -1,4 +1,4 @@
-//! The browser native-messaging host (`timeslay webextension`) and the
+//! The browser native-messaging host (`timeparagon webextension`) and the
 //! inbox request the Slack app shares with it.
 //!
 //! The browser starts this process for one message and expects one answer on
@@ -7,7 +7,7 @@
 //! stdout: logs go to stderr.
 //!
 //! The host prepares the task (a Gmail link is read for its subject, exactly
-//! as a pasted link is in the app), then hands it to a running TimeSlay
+//! as a pasted link is in the app), then hands it to a running TimeParagon
 //! process over [`crate::ipc`]. If no panel or dock is listening it
 //! writes to Google Tasks itself, so the extension still works when the app is
 //! closed. The same [`Prepared`] request is what the Slack app sends.
@@ -28,7 +28,7 @@ use crate::theme::Catalog;
 use crate::{inbox, ipc};
 
 /// The name the extension and the native host manifest agree on.
-pub const HOST_NAME: &str = "com.timeslay.webextension";
+pub const HOST_NAME: &str = "com.timeparagon.webextension";
 
 /// The command that adds a task.
 pub const COMMAND: &str = "add-to-inbox";
@@ -264,7 +264,7 @@ pub struct Handled {
 /// Runs the native-messaging host for one message.
 pub fn run() -> anyhow::Result<()> {
 	let _ = env_logger::Builder::from_env(
-		env_logger::Env::default().default_filter_or("timeslay=info"),
+		env_logger::Env::default().default_filter_or("timeparagon=info"),
 	)
 	.try_init();
 
@@ -362,14 +362,14 @@ pub fn handle_request(request: Request) -> Reply {
 		}
 	}
 
-	trace.step("no running TimeSlay answered; writing to Google Tasks directly");
+	trace.step("no running TimeParagon answered; writing to Google Tasks directly");
 	match write_task(&settings, &prepared) {
 		Ok(event) => Reply::success(&event, "direct"),
 		Err(error) => Reply::failure(error.clone(), trace.finish(&error)),
 	}
 }
 
-/// Handles a JSON inbox request on a TimeSlay IPC socket. The caller is a
+/// Handles a JSON inbox request on a TimeParagon IPC socket. The caller is a
 /// running UI process, so the returned event can be added to its calendar.
 pub fn handle_ipc(command: &str) -> Handled {
 	let mut trace = Trace::default();
@@ -556,7 +556,7 @@ fn clamp_notes(notes: &str, url: &str) -> String {
 	if notes.chars().count() <= MAX_NOTES {
 		return notes.to_owned();
 	}
-	let marker = "\n\n[truncated by TimeSlay: the message was longer than Google Tasks allows]";
+	let marker = "\n\n[truncated by TimeParagon: the message was longer than Google Tasks allows]";
 	if !url.is_empty()
 		&& let Some(at) = notes.rfind(url)
 	{
@@ -728,7 +728,7 @@ mod tests {
 		let clamped = clamp_notes(&notes, url);
 		assert!(clamped.chars().count() <= MAX_NOTES);
 		assert!(clamped.contains(url));
-		assert!(clamped.contains("truncated by TimeSlay"));
+		assert!(clamped.contains("truncated by TimeParagon"));
 	}
 
 	#[test]

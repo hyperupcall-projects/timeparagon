@@ -1,4 +1,4 @@
-package dev.timeslay.day.widget
+package dev.kofler.timeparagon.widget
 
 import android.app.AlarmManager
 import android.app.PendingIntent
@@ -15,7 +15,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.widget.RemoteViews
-import dev.timeslay.day.R
+import dev.kofler.timeparagon.R
 import java.util.Calendar
 import java.util.Date
 
@@ -97,8 +97,8 @@ class DayWidgetProvider : AppWidgetProvider() {
     }
 
     companion object {
-        const val ACTION_DATA_CHANGED = "dev.timeslay.day.widget.DATA_CHANGED"
-        private const val ACTION_TICK = "dev.timeslay.day.widget.TICK"
+        const val ACTION_DATA_CHANGED = "dev.kofler.timeparagon.widget.DATA_CHANGED"
+        private const val ACTION_TICK = "dev.kofler.timeparagon.widget.TICK"
         private const val PREFS = "day_widget"
         private const val TICK_MILLIS = 5 * 60 * 1000L
         private const val HEADER_AND_FOOTER_DP = 96

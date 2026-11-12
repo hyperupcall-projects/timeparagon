@@ -43,7 +43,7 @@ pub struct Series {
 	pub all_day: bool,
 	/// The series this one continues, as `calendar/series`.
 	pub split_from: Vec<String>,
-	/// A task series' TimeSlay ID and metadata.
+	/// A task series' TimeParagon ID and metadata.
 	pub task: Option<TaskData>,
 }
 

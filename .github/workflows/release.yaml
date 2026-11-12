@@ -15,9 +15,9 @@ jobs:
     environment: Release
     env:
       CARGO_BUILD_JOBS: "2"
-      TIMESLAY_KEYSTORE_BASE64: ${{ secrets.TIMESLAY_KEYSTORE_BASE64 }}
-      TIMESLAY_KEYSTORE_KEYALIAS: ${{ secrets.TIMESLAY_KEYSTORE_KEYALIAS }}
-      TIMESLAY_KEYSTORE_PASSWORD: ${{ secrets.TIMESLAY_KEYSTORE_PASSWORD }}
+      TIMEPARAGON_KEYSTORE_BASE64: ${{ secrets.TIMEPARAGON_KEYSTORE_BASE64 }}
+      TIMEPARAGON_KEYSTORE_KEYALIAS: ${{ secrets.TIMEPARAGON_KEYSTORE_KEYALIAS }}
+      TIMEPARAGON_KEYSTORE_PASSWORD: ${{ secrets.TIMEPARAGON_KEYSTORE_PASSWORD }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -27,7 +27,7 @@ jobs:
           java-version: "21"
       - name: Check signing secrets
         run: |
-          for name in TIMESLAY_KEYSTORE_BASE64 TIMESLAY_KEYSTORE_KEYALIAS TIMESLAY_KEYSTORE_PASSWORD; do
+          for name in TIMEPARAGON_KEYSTORE_BASE64 TIMEPARAGON_KEYSTORE_KEYALIAS TIMEPARAGON_KEYSTORE_PASSWORD; do
             eval "value=\${$name:-}"
             [ -n "$value" ] || { echo "::error::Missing secret $name"; exit 1; }
           done
@@ -49,7 +49,7 @@ jobs:
         run: scripts/build-android.sh --release --abi arm64 --output dist
       - name: Name release asset
         run: |
-          mv dist/timeslay-arm64-v8a-release.apk "dist/timeslay-arm64-v8a-${GITHUB_REF_NAME}.apk"
+          mv dist/timeparagon-arm64-v8a-release.apk "dist/timeparagon-arm64-v8a-${GITHUB_REF_NAME}.apk"
       - uses: actions/upload-artifact@v4
         with:
           name: android
@@ -73,17 +73,17 @@ jobs:
             libpipewire-0.3-dev libspa-0.2-dev libxkbcommon-dev libwayland-dev \
             libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev \
             libasound2t64 libnss3 libgbm1
-      - run: cargo build --release --locked --bin timeslay
+      - run: cargo build --release --locked --bin timeparagon
       - name: Package binary
         run: |
-          name="timeslay-x86_64-linux-${GITHUB_REF_NAME}"
+          name="timeparagon-x86_64-linux-${GITHUB_REF_NAME}"
           cef=$(ls -d target/release/build/cef-dll-sys-*/out/cef_linux_* | head -n 1)
           [ -f "$cef/libcef.so" ] || { echo "::error::CEF runtime not found"; exit 1; }
-          mkdir -p dist "pkg/$name/bin" "pkg/$name/lib/timeslay/cef"
-          # The binary loads CEF from ../lib/timeslay/cef relative to itself.
-          cp target/release/timeslay "pkg/$name/bin/timeslay"
-          cp -aL "$cef/." "pkg/$name/lib/timeslay/cef/"
-          cp target/release/timeslay "dist/$name"
+          mkdir -p dist "pkg/$name/bin" "pkg/$name/lib/timeparagon/cef"
+          # The binary loads CEF from ../lib/timeparagon/cef relative to itself.
+          cp target/release/timeparagon "pkg/$name/bin/timeparagon"
+          cp -aL "$cef/." "pkg/$name/lib/timeparagon/cef/"
+          cp target/release/timeparagon "dist/$name"
           tar -C pkg -czf "dist/$name.tar.gz" "$name"
       - uses: actions/upload-artifact@v4
         with:

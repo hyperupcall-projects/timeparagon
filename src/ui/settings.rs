@@ -972,7 +972,7 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 	));
 
 	// New plain events use regular Google calendars; task lists and the
-	// calendar reserved for TimeSlay's own kinds are excluded.
+	// calendar reserved for TimeParagon's own kinds are excluded.
 	let options: Vec<calendar::Calendar> = state
 		.calendar
 		.calendars
@@ -1641,7 +1641,7 @@ mod tests {
 			let restored: Config = toml::from_str(&saved).unwrap();
 			assert_eq!(restored.appearance.distance_unit, unit);
 			assert_eq!(restored.travel.routes, cached);
-			let shared: timeslay_core::config::Config = toml::from_str(&saved).unwrap();
+			let shared: timeparagon_core::config::Config = toml::from_str(&saved).unwrap();
 			assert_eq!(shared.appearance.distance_unit, unit);
 			assert_eq!(shared.travel.routes, cached);
 		}

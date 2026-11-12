@@ -11,7 +11,7 @@ use crate::app::Message;
 use crate::calendar::colors::on_color;
 use crate::calendar::month_short;
 use crate::habits::{Action, Bucket, Computed, Icons, Kind, Status, Streak};
-use timeslay_core::habits::{self, palette_color};
+use timeparagon_core::habits::{self, palette_color};
 
 const TEXT_SIZE: f32 = 11.0;
 /// Loop's grid colors, which are not in the app's themes.

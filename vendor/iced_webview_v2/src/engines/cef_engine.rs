@@ -315,10 +315,10 @@ impl Cef {
         let args = Args::new();
 
         // CEF 120+ enforces a process singleton per root_cache_path. A shared
-        // directory hands startup to another TimeSlay window (or an old build)
+        // directory hands startup to another TimeParagon window (or an old build)
         // and initialize returns 0. Maps need no persistent browser profile.
         let profile = tempfile::Builder::new()
-            .prefix("timeslay-cef-")
+            .prefix("timeparagon-cef-")
             .tempdir()
             .and_then(|dir| {
                 // CEF requires an absolute path even if TMPDIR is relative.
@@ -388,11 +388,11 @@ impl Cef {
 // Prefer the installed runtime beside the binary; retain the build-tree
 // fallback for cargo run. The installer copies the complete CEF distribution.
 fn cef_distribution_dir() -> Option<std::path::PathBuf> {
-    std::env::var_os("TIMESLAY_CEF_DIR")
+    std::env::var_os("TIMEPARAGON_CEF_DIR")
         .map(std::path::PathBuf::from)
         .or_else(|| {
             std::env::current_exe().ok().and_then(|exe| {
-                let path = exe.parent()?.join("../lib/timeslay/cef");
+                let path = exe.parent()?.join("../lib/timeparagon/cef");
                 path.join("libcef.so").is_file().then_some(path)
             })
         })

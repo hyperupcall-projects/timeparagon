@@ -1,4 +1,4 @@
-//! The command line of the one `timeslay` binary.
+//! The command line of the one `timeparagon` binary.
 //!
 //! The side panel, dock and shortcut daemon share this binary.
 //! With no command it prints the help.
@@ -52,9 +52,9 @@ enum ModeCommand {
 /// The command line, as declared to clap.
 #[derive(Debug, Parser)]
 #[command(
-    name = "timeslay",
+    name = "timeparagon",
     version,
-    about = "TimeSlay: Slay the day with TimeSlay.",
+    about = "TimeParagon: Master the day with TimeParagon.",
     args_conflicts_with_subcommands = true,
     group(ArgGroup::new("mode").args(["check_time_blocks"]))
 )]
@@ -99,7 +99,7 @@ mod tests {
 
 	fn parse_all(list: &[&str]) -> Result<Mode, clap::Error> {
 		parse(
-			std::iter::once("timeslay")
+			std::iter::once("timeparagon")
 				.chain(list.iter().copied())
 				.map(str::to_owned),
 		)
@@ -176,7 +176,7 @@ mod tests {
 			Mode::WebExtension
 		);
 		assert_eq!(
-			parse_all(&["webextension", "timeslay@example.org"]).unwrap(),
+			parse_all(&["webextension", "timeparagon@example.org"]).unwrap(),
 			Mode::WebExtension
 		);
 	}

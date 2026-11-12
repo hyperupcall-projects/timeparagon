@@ -82,7 +82,7 @@ fn choosing_an_event_opens_the_creation_pane_without_saving() {
 #[test]
 fn choosing_a_time_block_starts_the_block_write_instead_of_the_event_form() {
 	let mut state = State::blank();
-	state.config.calendar.app_calendar = Some("timeslay".into());
+	state.config.calendar.app_calendar = Some("timeparagon".into());
 	let start = calendar::at_clock(chrono::NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(), 9, 0);
 	let end = start + chrono::Duration::minutes(45);
 	state.calendar.begin_draft("primary".into(), start, end);
@@ -100,7 +100,7 @@ fn choosing_a_time_block_starts_the_block_write_instead_of_the_event_form() {
 	);
 	let draft = state.calendar.draft.as_ref().unwrap();
 	assert_eq!(draft.kind, calendar::DraftKind::TimeBlock);
-	assert_eq!(draft.calendar_id, "timeslay");
+	assert_eq!(draft.calendar_id, "timeparagon");
 	assert!(draft.saving, "the block write is already in flight");
 	assert!(
 		!draft.editor_open,
@@ -111,16 +111,16 @@ fn choosing_a_time_block_starts_the_block_write_instead_of_the_event_form() {
 #[test]
 fn a_saved_time_block_opens_the_block_panel() {
 	let mut state = State::blank();
-	state.config.calendar.app_calendar = Some("timeslay".into());
+	state.config.calendar.app_calendar = Some("timeparagon".into());
 	let start = calendar::at_clock(chrono::NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(), 9, 0);
 	let end = start + chrono::Duration::minutes(45);
-	let mut draft = calendar::Draft::new("timeslay".into(), start, end);
+	let mut draft = calendar::Draft::new("timeparagon".into(), start, end);
 	draft.kind = calendar::DraftKind::TimeBlock;
 	draft.saving = true;
 	state.calendar.draft = Some(draft);
 	let block = calendar::Event {
 		id: "block-1".into(),
-		calendar_id: "timeslay".into(),
+		calendar_id: "timeparagon".into(),
 		title: "Deep work".into(),
 		start,
 		end,
@@ -2255,7 +2255,7 @@ fn event_open_with_app_calendar() -> State {
 	let mut snapshot = calendar::sample_snapshot();
 	snapshot.calendars.push(calendar::Calendar {
 		id: "app".into(),
-		name: "TimeSlay".into(),
+		name: "TimeParagon".into(),
 		color: calendar::colors::DEFAULT_EVENT,
 		primary: false,
 		selected_by_google: true,
@@ -2269,7 +2269,7 @@ fn event_open_with_app_calendar() -> State {
 }
 
 #[test]
-fn an_event_can_be_staged_onto_another_calendar_but_not_timeslay() {
+fn an_event_can_be_staged_onto_another_calendar_but_not_timeparagon() {
 	let mut state = event_open_with_app_calendar();
 	let original = state.calendar.event("standup").unwrap().calendar_id.clone();
 	let other = state

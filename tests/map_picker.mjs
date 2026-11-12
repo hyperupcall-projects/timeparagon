@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import assert from 'node:assert/strict';
 const html = await readFile(new URL('../assets/map-picker.html', import.meta.url), 'utf8');
-const script = html.match(/<script>([\s\S]*?)<\/script>/)[1].replace('/*TIMESLAY_CONFIG*/null', JSON.stringify({token:'pk.test',query:'coffee',center:[-122.4,37.8],session:7}));
+const script = html.match(/<script>([\s\S]*?)<\/script>/)[1].replace('/*TIMEPARAGON_CONFIG*/null', JSON.stringify({token:'pk.test',query:'coffee',center:[-122.4,37.8],session:7}));
 let map, search, marker, response;
 const status={textContent:''}, doc={title:'',getElementById:()=>status,createElement:()=>({}),head:{append:s=>s.onload()}};
 class Map {
@@ -23,7 +23,7 @@ class Marker {
 const context={document:doc,MapboxSearchBox:Search,mapboxgl:{supported:()=>true,Map,Marker,NavigationControl:class{}},URL,URLSearchParams,fetch:async()=>response};
 vm.runInNewContext(script,context);
 await new Promise(resolve=>setImmediate(resolve));
-const message=()=>JSON.parse(doc.title.slice('timeslay-map:'.length));
+const message=()=>JSON.parse(doc.title.slice('timeparagon-map:'.length));
 const feature={properties:{mapbox_id:'cafe',name:'Cafe',full_address:'1 Main St'},geometry:{coordinates:[-122.4,37.8]}};
 assert.deepEqual(Array.from(map.options.center),[-122.4,37.8]);
 assert.equal(search.value,'coffee');

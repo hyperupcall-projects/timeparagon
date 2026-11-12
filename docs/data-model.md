@@ -1,13 +1,13 @@
 # Data model
 
-This document covers what TimeSlay stores, where each piece lives, how the
+This document covers what TimeParagon stores, where each piece lives, how the
 pieces refer to each other, and the exact shape each one has on disk or on
 Google. The SQLite tables are described column by column in the
 [database schema](./database-schema.md).
 
 ## Where data lives
 
-TimeSlay is local-first, and it has no backend of its own. Data is kept in
+TimeParagon is local-first, and it has no backend of its own. Data is kept in
 whichever store suits it best:
 
 ```mermaid
@@ -18,7 +18,7 @@ flowchart TB
         GP[Google People<br/>contacts, directory]
     end
     subgraph Device["Each device"]
-        DB[(timeslay.sqlite3)]
+        DB[(timeparagon.sqlite3)]
         SEC[secrets.json /<br/>Android Keystore blob]
         NOTES[Notes directory<br/>*.md]
     end
@@ -37,7 +37,7 @@ flowchart TB
 | **Google Calendar** | Events, time blocks, scheduled (dated) tasks, habit occurrences, sleep nights, meeting guests and replies | Google |
 | **Google Tasks** | Undated tasks (inbox, triaged, backlog) | Google |
 | **Google People** | Contacts, contact groups, Workspace directory | Google |
-| **SQLite** `timeslay.sqlite3` | Habits, alarms, notepad, brain dump, projects and life areas, work sessions, [settings](#settings) (calendar choices, colors, places and travel, reminders, sleep schedule, …); caches of everything Google owns; local copies of edits being sent to Google | Turso, for six documents and the synced settings tables |
+| **SQLite** `timeparagon.sqlite3` | Habits, alarms, notepad, brain dump, projects and life areas, work sessions, [settings](#settings) (calendar choices, colors, places and travel, reminders, sleep schedule, …); caches of everything Google owns; local copies of edits being sent to Google | Turso, for six documents and the synced settings tables |
 | **`secrets.json`** | Google tokens, connected Gmail accounts, OpenRouter token | Not shared |
 | **Notes directory** | Markdown notes, one file each | Whatever syncs the folder (Syncthing, say) |
 
@@ -50,19 +50,23 @@ changes cannot be made offline (see
 
 ### File locations
 
-Paths use the XDG directories for app ID `dev.TimeSlay.timeslay`:
+Paths use the XDG directories for app ID `dev.TimeParagon.timeparagon`.
+The project used to be called TimeSlay. On first start the app moves each
+`timeslay` directory to its `timeparagon` name (unless that already exists)
+and renames `timeslay.sqlite3` to `timeparagon.sqlite3`; see
+`config::migrate_legacy_dirs`.
 
 | File | Linux |
 | --- | --- |
-| Database (settings included) | `~/.local/share/timeslay/timeslay.sqlite3` |
-| Settings of older versions | `~/.config/timeslay/config.toml`, imported once and renamed `config.toml.imported` (see [Settings](#settings)) |
-| Turso replica | `~/.local/share/timeslay/turso/replica.db` |
-| Secrets | `~/.local/state/timeslay/secrets.json` (mode `0600`) |
-| IPC sockets | `$XDG_RUNTIME_DIR/timeslay-sidebar.sock`, `timeslay-dock.sock` |
+| Database (settings included) | `~/.local/share/timeparagon/timeparagon.sqlite3` |
+| Settings of older versions | `~/.config/timeparagon/config.toml`, imported once and renamed `config.toml.imported` (see [Settings](#settings)) |
+| Turso replica | `~/.local/share/timeparagon/turso/replica.db` |
+| Secrets | `~/.local/state/timeparagon/secrets.json` (mode `0600`) |
+| IPC sockets | `$XDG_RUNTIME_DIR/timeparagon-sidebar.sock`, `timeparagon-dock.sock` |
 
-On Android the database is at `<files dir>/data/timeslay/timeslay.sqlite3`.
+On Android the database is at `<files dir>/data/timeparagon/timeparagon.sqlite3`.
 Google tokens are encrypted with an AES key held in Android Keystore
-(alias `dev.timeslay.google-tokens.v1`) and stored in the no-backup directory.
+(alias `dev.kofler.timeparagon.google-tokens.v1`) and stored in the no-backup directory.
 The notes folder is chosen with the system folder picker.
 
 Test runs (`config::isolated()`) redirect every one of these paths to a
@@ -111,7 +115,7 @@ Many kinds of ID appear in the data. This table lists them all:
 | Google task "event" ID | `task:` + task ID | `task:dGhpcyBp…` | `calendar::ids::event_id` |
 | Dated task event ID | `tt` + 32 hex | `tt3f9a…` | `calendar_tasks::apply` |
 | Sleep event ID | `51ee9` + `YYYYMMDD` (wake date) | `51ee920261110` | `calendar::sleep::event_id` |
-| **TimeSlay task ID** | integer ≥ 100, < 2⁶² | `2875093487120931` | `task_db::Database::import` |
+| **TimeParagon task ID** | integer ≥ 100, < 2⁶² | `2875093487120931` | `task_db::Database::import` |
 | Block key | `<calendar_id>/<event_id>` | `abc@group…/5ok3…` | `timeblocking::block_key` |
 | Task key | task ID, or `<task id>/<event id>` for an occurrence of a recurring dated task | `2875…` | `timeblocking::task_key` |
 | Habit ID | string | `h1`, random | `habits::Habit::id` |
@@ -147,8 +151,8 @@ Google Tasks lists are shown as **synthetic calendars** whose IDs start with
 shown as calendar sources: `Inbox`, `Triaged` and `Backlog` (or the lists
 configured as `inbox_list`, `triaged_list` and `backlog_list`).
 
-The **app calendar** is the one Google calendar TimeSlay writes its own items
-to. It is named `TimeSlay` and its ID is recorded as the `calendar.app_calendar`
+The **app calendar** is the one Google calendar TimeParagon writes its own items
+to. It is named `TimeParagon` and its ID is recorded as the `calendar.app_calendar`
 setting.
 It holds time blocks, all-day app events, dated tasks, habit occurrences and
 sleep.
@@ -195,7 +199,7 @@ including Google Tasks:
 | `habit_id` | string? | `ttHabit` |
 | `habit_completed_at` | datetime? | `ttCompletedAt` |
 | `sleep` | `sleep::Record`? | `ttKind = "sleep"` + `ttSleep` |
-| `task_data` | `TaskData`? | A task's TimeSlay ID and metadata, see [Tasks](#tasks) |
+| `task_data` | `TaskData`? | A task's TimeParagon ID and metadata, see [Tasks](#tasks) |
 | `task_updated_at` | datetime? | Google Tasks `updated` |
 
 `EventOptions`:
@@ -209,7 +213,7 @@ including Google Tasks:
 
 ### What kind of item an event is
 
-Google only knows about events and tasks. TimeSlay works out its own kinds
+Google only knows about events and tasks. TimeParagon works out its own kinds
 from the metadata (`Event::kind`), checking these rules in order:
 
 | Kind | Rule | Chip |
@@ -224,7 +228,7 @@ from the metadata (`Event::kind`), checking these rules in order:
 
 ### Google extended properties
 
-TimeSlay stores its own data in **private** extended properties
+TimeParagon stores its own data in **private** extended properties
 (`extendedProperties.private`). These are only visible to the account that
 wrote them. All values are strings, and Google limits each one to 1024
 characters.
@@ -243,7 +247,7 @@ characters.
 | `ttSleep` | Sleep | JSON `sleep::Record` |
 | `ttSleepDate` | Sleep | Wake date `YYYY-MM-DD`, used to look the night up with `privateExtendedProperty` |
 
-When TimeSlay patches an event it keeps any extended properties it does not
+When TimeParagon patches an event it keeps any extended properties it does not
 know about.
 
 ---
@@ -254,7 +258,7 @@ A task lives in **Google Tasks** while it has no date, and as a **Google
 Calendar event on the app calendar** once it is scheduled
 (`calendar_tasks.rs`: "Scheduled tasks are Calendar events. Google Tasks holds
 only undated work."). Moving between the two changes the task's Google ID.
-Its TimeSlay ID stays the same.
+Its TimeParagon ID stays the same.
 
 ```mermaid
 stateDiagram-v2
@@ -287,7 +291,7 @@ stateDiagram-v2
 | Dated, timed or in a time block | Timed Calendar event, `ttKind = task` | `ttData*` properties |
 
 Before Google has assigned an ID, a new undated task is shown with the
-placeholder ID `task:tt<32-hex TimeSlay ID>` on a `tasks:local-inbox`,
+placeholder ID `task:tt<32-hex TimeParagon ID>` on a `tasks:local-inbox`,
 `tasks:local-triaged` or `tasks:local-backlog` list. A new dated task is
 placed on `local-calendar` until the app calendar is known.
 
@@ -300,14 +304,14 @@ placed on `local-calendar` until the app calendar is known.
 | Ignored | `true` | `true` | `completed` | `"true"` |
 
 Google has no "ignored" state. An ignored task counts as completed in Google,
-and TimeSlay tells the two apart with the `ignored` flag.
+and TimeParagon tells the two apart with the `ignored` flag.
 
 A task is **overdue** if it is neither completed nor ignored and was due
 before today. It is **inboxed** if it is still waiting to be organized.
 
 ### Task metadata
 
-`task_db::TaskData` is `{ id, metadata }`. `id` is the TimeSlay task ID, and
+`task_db::TaskData` is `{ id, metadata }`. `id` is the TimeParagon task ID, and
 `metadata` is `timeblocking::Metadata`. Unknown fields are rejected
 (`deny_unknown_fields`), so an older build never overwrites data written by a
 newer one.
@@ -325,7 +329,7 @@ newer one.
 | `projects` | `u64[]` | `[]` | [Project](#life-areas-goals-objectives-and-projects) IDs |
 | `labels` | string[] | `[]` | Free-form labels |
 | `location` | `u64`? | — | [Place](#places-and-travel) ID |
-| `created_at` | datetime (UTC)? | — | Set only for tasks created in TimeSlay |
+| `created_at` | datetime (UTC)? | — | Set only for tasks created in TimeParagon |
 | `repeat_source` | `i64`? | — | No longer written. Read so older tasks still load |
 
 Fields that are empty or `None` are left out when serializing.
@@ -372,7 +376,7 @@ with no footer.
 #### Local cache
 
 SQLite caches every task's metadata in `tasks` and maps each Google identity
-it has had to its TimeSlay ID in `task_aliases`. The full last-known task
+it has had to its TimeParagon ID in `task_aliases`. The full last-known task
 `Event`s are kept in `google_task_records`. See [Tasks](./database-schema.md#tasks).
 
 ### Task edits
@@ -479,7 +483,7 @@ minutes, for changes made elsewhere. It covers the next eight weeks. It is
 tested against an in-memory Google (`reconcile::fake`) that models instance
 IDs, exceptions and both kinds of split.
 
-`timeslay --check-time-blocks` prints what it would change and any task that
+`timeparagon --check-time-blocks` prints what it would change and any task that
 repeats on its own inside a block, without changing anything.
 
 Work done in a block is recorded in [work sessions](#work-sessions-distractions-and-pomodoro).
@@ -500,7 +504,7 @@ device writes the same event:
 | Field | Meaning |
 | --- | --- |
 | `wake_date` | The night's identity. It does not change when the times are edited |
-| `automatic` | Planned by TimeSlay rather than entered by hand |
+| `automatic` | Planned by TimeParagon rather than entered by hand |
 | `estimated_start`, `estimated_end` | The time is still a plan, not a measurement |
 
 The planner uses `sleep_schedule`, seven bedtime/wake-up clock pairs indexed
@@ -515,7 +519,7 @@ night and future matching weekdays. A single night becomes a recorded exception.
 Weekday changes update the Settings values and persist a dated change in
 `sleep_schedule_changes`, preserving the schedule before the selected night.
 The title (`Sleep · 8h`) and description are regenerated when times change.
-Sleep is shown as its own source, `timeslay:sleep`.
+Sleep is shown as its own source, `timeparagon:sleep`.
 
 ---
 
@@ -706,7 +710,7 @@ Recorded in time-block focus mode. Stored as the `shared.task_work` document
 }
 ```
 
-- `task_key` is `timeblocking::task_key`: the TimeSlay task ID, or
+- `task_key` is `timeblocking::task_key`: the TimeParagon task ID, or
   `<id>/<event id>` for one occurrence of a recurring dated task. Using it
   means the work history survives the task moving between Tasks and Calendar.
 - The active session is the most recent one with `stopped_at = null`.
@@ -818,7 +822,7 @@ returned, unmodified, for each signed-in account:
 `which` is `"Primary"` (the calendar's sign-in) or `{"Extra": "<email>"}` (an
 account connected in Settings). The cache contains no credentials. When an
 account is signed out, its entry is removed. Because the raw JSON is kept,
-edits can round-trip fields TimeSlay does not display.
+edits can round-trip fields TimeParagon does not display.
 
 ---
 
@@ -889,7 +893,7 @@ table rows from both files are kept.
 To try an import first, on copies:
 
 ```sh
-cargo run -p timeslay-core --example import_settings -- copy.sqlite3 copy-config.toml
+cargo run -p timeparagon-core --example import_settings -- copy.sqlite3 copy-config.toml
 ```
 
 ## Secrets
@@ -906,7 +910,7 @@ reading it is an error, so nothing can overwrite it.
 
 The Slack companion app (`slack/`) keeps its own files,
 `.slack-installations.json` and `.slack-app-tokens.json` (mode `0600`). To
-add a message to the inbox, it runs `timeslay webextension`, the same
+add a message to the inbox, it runs `timeparagon webextension`, the same
 native-messaging host the browser extension uses. That host forwards the
 request to the running app over its IPC socket.
 
@@ -918,7 +922,7 @@ request to the running app over its IPC socket.
   cache, except while an edit is being sent (the item is locked) and shortly
   after: the `google_entities` overlay wins until a fetch that started after
   Google confirmed the edit.
-- **Task IDs never change.** Google IDs do. Use the TimeSlay ID, or a
+- **Task IDs never change.** Google IDs do. Use the TimeParagon ID, or a
   `task_key` / block key, for anything that must survive a move.
 - **Never overwrite data you could not parse.** This applies to documents,
   task footers, `ttData` and secrets from newer builds: the
@@ -931,7 +935,7 @@ request to the running app over its IPC socket.
 - **Write documents through `task_db`/`shared_data`.** Direct SQL skips the
   stale-view merge. It is still journaled for sync, but it can overwrite a
   concurrent remote change.
-- **The app calendar is identified by name** (`TimeSlay`) until its ID is
+- **The app calendar is identified by name** (`TimeParagon`) until its ID is
   recorded, so a fresh device can recognize it.
 - **References between settings tables are not enforced.** Two devices can
   delete a place and link an event to it at the same moment, so code reading

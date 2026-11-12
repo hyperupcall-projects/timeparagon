@@ -9,3 +9,4 @@
 
 /.migration-backups/
 trace*.txt
+scripts/__pycache__/

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "TimeSlay — Add to inbox",
+  "name": "TimeParagon — Add to inbox",
   "version": "0.1.0",
-  "description": "Send the page you are looking at to your TimeSlay inbox.",
+  "description": "Send the page you are looking at to your TimeParagon inbox.",
   "permissions": ["activeTab", "tabs", "nativeMessaging"],
   "action": {
     "default_title": "Add to inbox",
@@ -22,7 +22,7 @@
   },
   "browser_specific_settings": {
     "gecko": {
-      "id": "timeslay@example.org",
+      "id": "timeparagon@example.org",
       "strict_min_version": "109.0"
     }
   },

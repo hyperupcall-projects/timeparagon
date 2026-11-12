@@ -2,13 +2,13 @@
 # Runs the Rust tests with the clock on the days daylight saving changes, in a
 # zone that has them. A date-dependent test otherwise only fails twice a year.
 #
-# Needs libfaketime. Set TIMESLAY_FAKETIME_LIB to its libfaketimeMT.so.1 if it
+# Needs libfaketime. Set TIMEPARAGON_FAKETIME_LIB to its libfaketimeMT.so.1 if it
 # is not in the system's library directory.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-library=${TIMESLAY_FAKETIME_LIB:-$(find /usr/lib -name 'libfaketimeMT.so.1' -print -quit)}
+library=${TIMEPARAGON_FAKETIME_LIB:-$(find /usr/lib -name 'libfaketimeMT.so.1' -print -quit)}
 if [[ ! -e $library ]]; then
     echo "libfaketime not found; install the faketime package" >&2
     exit 1

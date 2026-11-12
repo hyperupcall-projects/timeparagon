@@ -64,7 +64,7 @@ export class Installations {
 export function authorizeInstallation(store: Installations): Authorize<boolean> {
   return async ({ teamId, isEnterpriseInstall }) => {
     const entry = !isEnterpriseInstall && teamId && store.get(teamId);
-    if (!entry) throw new Error("Slack workspace is not connected to TimeSlay.");
+    if (!entry) throw new Error("Slack workspace is not connected to TimeParagon.");
     return { ...entry };
   };
 }

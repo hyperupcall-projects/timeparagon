@@ -1,7 +1,7 @@
 //! Cheap change detection for the local database.
 //!
 //! The apps poll the database every couple of seconds for edits made by other
-//! TimeSlay processes, the Turso worker and writes to Google. Reading and
+//! TimeParagon processes, the Turso worker and writes to Google. Reading and
 //! parsing every document on every poll is what made that poll expensive, so
 //! triggers bump a counter whenever a watched table changes, and a poll reads
 //! the counters first. Only the parts whose counter moved are read again.
@@ -43,7 +43,7 @@ pub struct Counters {
 	pub sleep: i64,
 }
 
-const CREATE: &str = "CREATE TABLE IF NOT EXISTS timeslay_change_counters(name TEXT PRIMARY KEY, value INTEGER NOT NULL);";
+const CREATE: &str = "CREATE TABLE IF NOT EXISTS timeparagon_change_counters(name TEXT PRIMARY KEY, value INTEGER NOT NULL);";
 
 /// A trigger body that adds one to the counter `name` (an SQL expression).
 fn bump(name: &str) -> String {
@@ -51,8 +51,8 @@ fn bump(name: &str) -> String {
 	// outer statement's conflict policy replaces the trigger's own, so the
 	// row is created with an explicit existence check instead.
 	format!(
-		"INSERT INTO timeslay_change_counters SELECT {name},0 WHERE NOT EXISTS (SELECT 1 FROM timeslay_change_counters WHERE name={name}); \
-         UPDATE timeslay_change_counters SET value=value+1 WHERE name={name};"
+		"INSERT INTO timeparagon_change_counters SELECT {name},0 WHERE NOT EXISTS (SELECT 1 FROM timeparagon_change_counters WHERE name={name}); \
+         UPDATE timeparagon_change_counters SET value=value+1 WHERE name={name};"
 	)
 }
 
@@ -60,7 +60,7 @@ fn bump(name: &str) -> String {
 fn watch(db: &Connection, table: &str, counter: &str) -> rusqlite::Result<()> {
 	for operation in ["INSERT", "UPDATE", "DELETE"] {
 		db.execute_batch(&format!(
-            "CREATE TRIGGER IF NOT EXISTS timeslay_change_{table}_{op} AFTER {operation} ON {table} BEGIN {body} END;",
+            "CREATE TRIGGER IF NOT EXISTS timeparagon_change_{table}_{op} AFTER {operation} ON {table} BEGIN {body} END;",
             op = operation.to_ascii_lowercase(),
             body = bump(&format!("'{counter}'")),
         ))?;
@@ -86,7 +86,7 @@ pub(crate) fn install(db: &Connection) -> rusqlite::Result<()> {
 	] {
 		let name = format!("'doc:'||{key}");
 		db.execute_batch(&format!(
-            "CREATE TRIGGER IF NOT EXISTS timeslay_change_documents_{op} AFTER {operation} ON documents BEGIN {body} END;",
+            "CREATE TRIGGER IF NOT EXISTS timeparagon_change_documents_{op} AFTER {operation} ON documents BEGIN {body} END;",
             op = operation.to_ascii_lowercase(),
             body = bump(&name),
         ))?;
@@ -112,7 +112,7 @@ pub(crate) fn read_from(db: &Connection) -> rusqlite::Result<Counters> {
 	let value = |name: &str| -> rusqlite::Result<i64> {
 		Ok(db
 			.query_row(
-				"SELECT value FROM timeslay_change_counters WHERE name=?1",
+				"SELECT value FROM timeparagon_change_counters WHERE name=?1",
 				[name],
 				|row| row.get(0),
 			)
@@ -155,7 +155,7 @@ mod tests {
 	#[test]
 	fn each_watched_change_moves_only_its_own_counter() {
 		let dir = tempfile::tempdir().unwrap();
-		let path = dir.path().join("timeslay.sqlite3");
+		let path = dir.path().join("timeparagon.sqlite3");
 		let start = read(&path).unwrap();
 
 		crate::task_db::write_document_json(&path, crate::task_db::keys::HABITS, "{}").unwrap();

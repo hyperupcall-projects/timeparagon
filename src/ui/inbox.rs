@@ -1094,13 +1094,13 @@ mod tests {
 			state.calendar.events[0]
 				.details
 				.task_data
-				.get_or_insert_with(|| timeslay_core::task_db::TaskData {
+				.get_or_insert_with(|| timeparagon_core::task_db::TaskData {
 					id: 100,
 					metadata: Default::default(),
 				})
 				.metadata
 				.deadline = Some(
-				timeslay_core::calendar::deadline::parse_input(&format!(
+				timeparagon_core::calendar::deadline::parse_input(&format!(
 					"{}",
 					state.calendar.events[0].start.date_naive()
 				))

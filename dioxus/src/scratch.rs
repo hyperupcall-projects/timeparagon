@@ -7,7 +7,7 @@ use std::time::Duration;
 use chrono::NaiveDate;
 use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
-use timeslay_core::config::{self, Config};
+use timeparagon_core::config::{self, Config};
 
 /// How long typing must pause before the file is written.
 const SAVE_AFTER: Duration = Duration::from_millis(800);
