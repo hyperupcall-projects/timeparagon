@@ -3433,3 +3433,71 @@ textarea {
         left: 100%;
     }
 }
+
+/* Calendar notices are opened from a thumb-sized control beside the grid. */
+.warning-button {
+    position: fixed;
+    left: calc(18px + env(safe-area-inset-left, 0px));
+    bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+    z-index: 8;
+    width: 48px;
+    height: 48px;
+    border: 1px solid var(--edge);
+    border-radius: 50%;
+    background: var(--warning-soft);
+    color: var(--on-warning-soft);
+    box-shadow: var(--shadow-floating);
+    font-size: 24px;
+    cursor: pointer;
+}
+
+.warning-count {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    min-width: 20px;
+    border-radius: 12px;
+    background: var(--danger-soft);
+    color: var(--on-danger-soft);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.warning-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 7;
+}
+
+.warning-panel {
+    position: fixed;
+    left: calc(18px + env(safe-area-inset-left, 0px));
+    bottom: calc(78px + env(safe-area-inset-bottom, 0px));
+    z-index: 8;
+    width: min(380px, calc(100vw - 36px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)));
+    max-height: calc(100dvh - 110px - env(safe-area-inset-bottom, 0px));
+    display: flex;
+    flex-direction: column;
+    padding: 14px;
+    border: 1px solid var(--edge);
+    border-radius: var(--radius-control);
+    background: var(--card);
+    color: var(--on-card);
+    box-shadow: var(--shadow-floating);
+}
+
+.warning-heading,
+.warning-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.warning-heading h2 { margin: 0; font-size: 16px; }
+.warning-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.warning-item { padding: 12px 0; border-bottom: 1px solid var(--edge); }
+.warning-item h3 { margin: 0; font-size: 14px; }
+.warning-item p { margin: 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.warning-actions { padding-top: 12px; }

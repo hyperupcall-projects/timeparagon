@@ -23,6 +23,7 @@ mod search;
 mod setup;
 mod sleep;
 mod style;
+mod warnings;
 #[cfg(any(target_os = "android", test))]
 mod widget;
 
@@ -833,51 +834,20 @@ fn Main() -> Element {
 			}
 		}
 	};
-	let banner_connect_settings = settings.clone();
-	let banner = fetch_error.as_ref().map(|error| {
-		let error = error.clone();
-		let banner_connect_error = connect_error().map(|connect_error| {
-			rsx! { span { class: "banner-detail", "{connect_error}" } }
-		});
-		rsx! {
-			div { class: "banner error",
-				span { class: "banner-text", "Sync failed: {error}" }
-				{banner_connect_error}
-				div { class: "spacer" }
-				button {
-					class: "btn small",
-					onclick: move |_| {
-						let next = revision() + 1;
-						revision.set(next);
-					},
-					"Retry"
-				}
-				button {
-					class: "btn small",
-					onclick: move |_| {
-						begin_connect(
-							banner_connect_settings.clone(),
-							connecting,
-							connect_error,
-							signed_in,
-							revision,
-						);
-					},
-					if connecting() { "Connecting…" } else { "Connect Google" }
-				}
-			}
+	let warning_connect_settings = settings.clone();
+	let warning_center = rsx! {
+		warnings::WarningCenter {
+			sync_error: fetch_error.clone(),
+			connect_error: connect_error(),
+			notice: model.as_ref().and_then(|model| model.notice.clone()),
+			pending,
+			connecting: connecting(),
+			on_retry: move |_| revision.set(revision() + 1),
+			on_connect: move |_| begin_connect(
+				warning_connect_settings.clone(), connecting, connect_error, signed_in, revision,
+			),
 		}
-	});
-
-	let notice = model.as_ref().and_then(|model| {
-		model.notice.as_ref().map(|notice| {
-			rsx! {
-				div { class: "banner warn",
-					span { class: "banner-text", "{notice}" }
-				}
-			}
-		})
-	});
+	};
 
 	let body: Element = match &model {
 		Some(model) => {
@@ -1651,7 +1621,7 @@ fn Main() -> Element {
 		document::Style { {style::STYLESHEET.as_str()} }
 		div { class: "app",
 			{topbar}
-			{banner}
+			{warning_center}
 			{sleep_banner}
 			{sleep_strip}
 			if page() == Page::Habits {
@@ -1672,7 +1642,6 @@ fn Main() -> Element {
 				{range_page}
 			} else {
 				{day_header}
-				{notice}
 				{body}
 			}
 			if model.is_some() && page() != Page::Habits {

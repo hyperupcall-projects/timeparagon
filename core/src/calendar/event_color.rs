@@ -120,7 +120,7 @@ pub(crate) fn read(url: &str, token: &str, value: &mut Value) -> Result<(), Goog
 	if !url.starts_with(api::EVENTS) || !url.contains("/events") {
 		return Ok(());
 	}
-	let items: Vec<&Value> = match value["items"].as_array() {
+	let items: Vec<&Value> = match value.get("items").and_then(Value::as_array) {
 		Some(items) => items.iter().collect(),
 		None => vec![value],
 	};
@@ -143,7 +143,11 @@ pub(crate) fn read(url: &str, token: &str, value: &mut Value) -> Result<(), Goog
 			.and_then(|l| l["backgroundColor"].as_str())
 			.map(str::to_owned);
 		// Native labels are authoritative; don't keep an outdated private RGB.
-		if let Some(private) = item["extendedProperties"]["private"].as_object_mut() {
+		if let Some(private) = item
+			.get_mut("extendedProperties")
+			.and_then(|properties| properties.get_mut("private"))
+			.and_then(Value::as_object_mut)
+		{
 			private.remove("ttColor");
 		}
 		if item.get("eventLabelId").is_some() {
@@ -158,7 +162,7 @@ pub(crate) fn read(url: &str, token: &str, value: &mut Value) -> Result<(), Goog
 			}
 		}
 	};
-	if let Some(items) = value["items"].as_array_mut() {
+	if let Some(items) = value.get_mut("items").and_then(Value::as_array_mut) {
 		for item in items {
 			resolve(item);
 		}
@@ -172,6 +176,19 @@ pub(crate) fn read(url: &str, token: &str, value: &mut Value) -> Result<(), Goog
 mod tests {
 	use super::*;
 	use std::sync::{Arc, Mutex};
+
+	#[test]
+	fn reading_colors_does_not_add_null_fields() {
+		for original in [
+			json!({"kind":"calendar#events", "nextSyncToken":"next"}),
+			json!({"id":"event", "summary":"No custom color"}),
+			json!({"items":[{"id":"event"}]}),
+		] {
+			let mut value = original.clone();
+			read(&format!("{}/work/events", api::EVENTS), "token", &mut value).unwrap();
+			assert_eq!(value, original);
+		}
+	}
 
 	#[test]
 	fn custom_color_reuses_a_native_label_and_preserves_event_metadata() {

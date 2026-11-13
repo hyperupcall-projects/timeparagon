@@ -2919,6 +2919,23 @@ pub(super) fn parse_sleep(value: serde_json::Value, calendar_id: &str) -> Result
 
 #[cfg(test)]
 mod tests {
+	#[test]
+	fn empty_event_pages_remain_valid_after_color_resolution() {
+		// Google omits items when a calendar has no events or no changes.
+		// Mutable JSON indexing used to insert items:null during color lookup.
+		for page in [
+			serde_json::json!({"kind":"calendar#events", "nextSyncToken":"next"}),
+			serde_json::json!({"items":[], "nextSyncToken":"next"}),
+		] {
+			with_transport(Box::new(move |_, _, _| Ok(page.to_string())), || {
+				let events: EventList = get(&format!("{EVENTS}/work/events"), "token").unwrap();
+				assert!(events.items.is_empty());
+				assert!(events.default_reminders.is_empty());
+				assert_eq!(events.next_sync_token.as_deref(), Some("next"));
+			});
+		}
+	}
+
 	fn mapped_task() -> (tempfile::TempDir, std::path::PathBuf, super::Event) {
 		let dir = tempfile::tempdir().unwrap();
 		let path = dir.path().join("timeparagon.sqlite3");
