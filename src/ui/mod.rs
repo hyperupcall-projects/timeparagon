@@ -196,7 +196,11 @@ pub fn editor_window(state: &State) -> Element<'_, Message> {
 	};
 	task_drop::host(iced::widget::stack![
 		framed,
-		resize_handle::far_edge_layer(ResizeEdge::Overlay, sidebar.side)
+		resize_handle::handle(
+			ResizeEdge::Overlay,
+			sidebar.side,
+			resize_handle::Place::FromFar(0.0),
+		)
 	])
 }
 
@@ -481,11 +485,14 @@ pub fn view(state: &State) -> Element<'_, Message> {
 		// The handle straddles the panel's inner edge, without spilling past
 		// the window when the margin is too thin to hold half of it.
 		let edge = margin + state.calendar_width();
-		let from_anchor =
-			(edge - resize_handle::WIDTH / 2.0).min(edge + margin - resize_handle::WIDTH);
+		let grab = (edge - resize_handle::WIDTH / 2.0).min(edge + margin - resize_handle::WIDTH);
 		iced::widget::stack![
 			framed,
-			resize_handle::layer(state.panel_edge(), sidebar.side, from_anchor)
+			resize_handle::handle(
+				state.panel_edge(),
+				sidebar.side,
+				resize_handle::Place::FromAnchor(grab),
+			)
 		]
 		.into()
 	} else {

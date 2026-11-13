@@ -1,4 +1,4 @@
-//! A thin strip over a window edge that can be dragged to resize it.
+//! Window-sized layers holding a strip that can be dragged to resize a box.
 //!
 //! The pointer stays with the strip for the whole drag, even once it is past
 //! the window's edge, because Wayland keeps a pressed pointer with the surface
@@ -6,7 +6,6 @@
 //! is anchored to, which stays put while the window itself changes size.
 use iced::advanced::widget::{Tree, tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, renderer};
-use iced::widget::{Space, row};
 use iced::{Element, Length, Point, Rectangle, Renderer, Size, Theme, mouse};
 
 use crate::app::{Message, ResizeEdge, SettingsMessage};
@@ -15,35 +14,25 @@ use crate::panel::Side;
 /// How wide the grabbable strip is.
 pub(super) const WIDTH: f32 = 6.0;
 
-/// A layer for a window's stack, holding a handle `from_anchor` pixels from
-/// the window's anchored edge and leaving everything else to the layers below.
-pub(super) fn layer<'a>(edge: ResizeEdge, side: Side, from_anchor: f32) -> Element<'a, Message> {
-	let handle = Element::new(Handle { edge, side });
-	let gap = Space::new().width(Length::Fixed(from_anchor.max(0.0)));
-	let rest = Space::new().width(Length::Fill);
-	match side {
-		Side::Left => row![gap, handle, rest],
-		Side::Right => row![rest, handle, gap],
-	}
-	.height(Length::Fill)
-	.into()
+/// Where the handle sits, as a distance from one side of the window.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum Place {
+	/// From the edge the window is anchored to.
+	FromAnchor(f32),
+	/// From the far edge.
+	FromFar(f32),
 }
 
-/// A layer with the handle against the window's far edge.
-pub(super) fn far_edge_layer<'a>(edge: ResizeEdge, side: Side) -> Element<'a, Message> {
-	let handle = Element::new(Handle { edge, side });
-	let rest = Space::new().width(Length::Fill);
-	match side {
-		Side::Left => row![rest, handle],
-		Side::Right => row![handle, rest],
-	}
-	.height(Length::Fill)
-	.into()
+/// A layer with a drag handle at `place`, leaving the rest of the window to
+/// the layers below. The pointer turns into a resize arrow over it.
+pub(super) fn handle<'a>(edge: ResizeEdge, side: Side, place: Place) -> Element<'a, Message> {
+	Element::new(EdgeLayer { edge, side, place })
 }
 
-struct Handle {
+struct EdgeLayer {
 	edge: ResizeEdge,
 	side: Side,
+	place: Place,
 }
 
 #[derive(Default)]
@@ -51,17 +40,34 @@ struct Grab {
 	dragging: bool,
 }
 
-impl Handle {
+impl EdgeLayer {
 	/// How far `point` is from the window edge on the screen-edge side.
-	fn distance_from_anchor(&self, point: Point, window: &Rectangle) -> f32 {
+	fn distance_from_anchor(&self, point: Point, window: Rectangle) -> f32 {
 		match self.side {
 			Side::Left => point.x - window.x,
 			Side::Right => window.x + window.width - point.x,
 		}
 	}
+
+	fn grab_bounds(&self, window: Rectangle) -> Rectangle {
+		let (inset, from_far) = match self.place {
+			Place::FromAnchor(inset) => (inset, false),
+			Place::FromFar(inset) => (inset, true),
+		};
+		let x = if (self.side == Side::Left) != from_far {
+			window.x + inset
+		} else {
+			window.x + window.width - inset - WIDTH
+		};
+		Rectangle {
+			x,
+			width: WIDTH,
+			..window
+		}
+	}
 }
 
-impl Widget<Message, Theme, Renderer> for Handle {
+impl Widget<Message, Theme, Renderer> for EdgeLayer {
 	fn tag(&self) -> tree::Tag {
 		tree::Tag::of::<Grab>()
 	}
@@ -71,11 +77,11 @@ impl Widget<Message, Theme, Renderer> for Handle {
 	}
 
 	fn size(&self) -> Size<Length> {
-		Size::new(Length::Fixed(WIDTH), Length::Fill)
+		Size::new(Length::Fill, Length::Fill)
 	}
 
 	fn layout(&mut self, _: &mut Tree, _: &Renderer, limits: &layout::Limits) -> layout::Node {
-		layout::Node::new(limits.resolve(Length::Fixed(WIDTH), Length::Fill, Size::ZERO))
+		layout::Node::new(limits.resolve(Length::Fill, Length::Fill, Size::ZERO))
 	}
 
 	fn update(
@@ -87,16 +93,18 @@ impl Widget<Message, Theme, Renderer> for Handle {
 		_: &Renderer,
 		_: &mut dyn Clipboard,
 		shell: &mut Shell<'_, Message>,
-		viewport: &Rectangle,
+		_: &Rectangle,
 	) {
+		let edge = self.edge;
+		let window = layout.bounds();
 		let grab = tree.state.downcast_mut::<Grab>();
 		match event {
 			iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
-				if let Some(point) = cursor.position_over(layout.bounds()) {
+				if let Some(point) = cursor.position_over(self.grab_bounds(window)) {
 					grab.dragging = true;
 					shell.publish(Message::Settings(SettingsMessage::PaneResizeStarted(
-						self.edge,
-						self.distance_from_anchor(point, viewport),
+						edge,
+						self.distance_from_anchor(point, window),
 					)));
 					shell.capture_event();
 					shell.request_redraw();
@@ -104,7 +112,7 @@ impl Widget<Message, Theme, Renderer> for Handle {
 			}
 			iced::Event::Mouse(mouse::Event::CursorMoved { position }) if grab.dragging => {
 				shell.publish(Message::Settings(SettingsMessage::PaneResizeMoved(
-					self.distance_from_anchor(*position, viewport),
+					self.distance_from_anchor(*position, window),
 				)));
 				shell.capture_event();
 			}
@@ -114,11 +122,6 @@ impl Widget<Message, Theme, Renderer> for Handle {
 				grab.dragging = false;
 				shell.publish(Message::Settings(SettingsMessage::PaneResizeEnded));
 				shell.capture_event();
-				shell.request_redraw();
-			}
-			iced::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
-				// Redraw so the highlight follows the pointer in and out.
-				shell.request_redraw();
 			}
 			_ => {}
 		}
@@ -126,31 +129,14 @@ impl Widget<Message, Theme, Renderer> for Handle {
 
 	fn draw(
 		&self,
-		tree: &Tree,
-		renderer: &mut Renderer,
-		theme: &Theme,
+		_: &Tree,
+		_: &mut Renderer,
+		_: &Theme,
 		_: &renderer::Style,
-		layout: Layout<'_>,
-		cursor: mouse::Cursor,
+		_: Layout<'_>,
+		_: mouse::Cursor,
 		_: &Rectangle,
 	) {
-		let bounds = layout.bounds();
-		if !tree.state.downcast_ref::<Grab>().dragging && !cursor.is_over(bounds) {
-			return;
-		}
-		let line = 2.0;
-		<Renderer as renderer::Renderer>::fill_quad(
-			renderer,
-			renderer::Quad {
-				bounds: Rectangle {
-					x: bounds.center_x() - line / 2.0,
-					width: line,
-					..bounds
-				},
-				..Default::default()
-			},
-			theme.palette().primary,
-		);
 	}
 
 	fn mouse_interaction(
@@ -161,7 +147,9 @@ impl Widget<Message, Theme, Renderer> for Handle {
 		_: &Rectangle,
 		_: &Renderer,
 	) -> mouse::Interaction {
-		if tree.state.downcast_ref::<Grab>().dragging || cursor.is_over(layout.bounds()) {
+		if tree.state.downcast_ref::<Grab>().dragging
+			|| cursor.is_over(self.grab_bounds(layout.bounds()))
+		{
 			mouse::Interaction::ResizingHorizontally
 		} else {
 			mouse::Interaction::None
