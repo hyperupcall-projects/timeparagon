@@ -1897,6 +1897,41 @@ fn the_new_event_ends_snap_to_the_quarter_hour() {
 }
 
 #[test]
+fn pending_grid_items_show_the_prohibited_cursor_and_ignore_clicks() {
+	for time_block in [false, true] {
+		let mut canvas = canvas_with_one_block();
+		canvas.blocks[0].time_block = time_block;
+		canvas.blocks[0].pending = true;
+		let bounds = Rectangle::with_size(Size::new(600.0, 1440.0));
+		let rect = canvas.block_rect(&canvas.blocks[0], bounds.width);
+		// Cover the resize edges, label, and both time-block actions.
+		for (x, y) in [(0.2, 0.01), (0.2, 0.5), (0.2, 0.99), (0.8, 0.1), (0.8, 0.9)] {
+			let point = Point::new(rect.x + rect.width * x, rect.y + rect.height * y);
+			assert_eq!(
+				canvas::Program::mouse_interaction(
+					&canvas,
+					&DrawState::default(),
+					bounds,
+					mouse::Cursor::Available(point),
+				),
+				mouse::Interaction::NotAllowed,
+			);
+			assert!(click_at(canvas_clone(&canvas), point).is_empty());
+		}
+		canvas.blocks[0].pending = false;
+		assert_ne!(
+			canvas::Program::mouse_interaction(
+				&canvas,
+				&DrawState::default(),
+				bounds,
+				mouse::Cursor::Available(rect.center()),
+			),
+			mouse::Interaction::NotAllowed,
+		);
+	}
+}
+
+#[test]
 fn a_pending_chip_is_lighter_than_a_final_one() {
 	let color = Color::from_rgb8(0xDC, 0x21, 0x27);
 	let lighter = lighten(color);

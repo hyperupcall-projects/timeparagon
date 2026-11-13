@@ -269,7 +269,7 @@ fn schedule_grid(
 							{
 								let opened = event.clone();
 								rsx! {
-									button { class: "all-day-chip", "data-sending": event.details.sending, style: "background:{crate::css_color(event.display_color(settings, &model.calendars))};color:{crate::css_color(calendar::colors::on_color(event.display_color(settings, &model.calendars)))};",
+									button { class: "all-day-chip", "data-sending": event.details.sending, disabled: event.details.sending, style: "background:{crate::css_color(event.display_color(settings, &model.calendars))};color:{crate::css_color(calendar::colors::on_color(event.display_color(settings, &model.calendars)))};",
 										onclick: move |_| on_open.call(opened.clone()), "{event.title}"
 									}
 								}
@@ -300,7 +300,7 @@ fn schedule_grid(
 									let mut shown = timed.clone();
 									shown.time_block = count == 1 && is_block;
 									rsx! {
-										button { key: "{timed.event.id}", class: if is_block { "grid-event block" } else { "grid-event" }, "data-sending": timed.event.details.sending,
+										button { key: "{timed.event.id}", class: if is_block { "grid-event block" } else { "grid-event" }, "data-sending": timed.event.details.sending, disabled: timed.event.details.sending,
 											style: "{crate::event_style(&shown)}",
 											title: "{timed.title}\n{crate::event_when(&timed.event, time_format)}",
 											onclick: move |_| { if is_block { on_block.call(opened.clone()); } else { on_open.call(opened.clone()); } },

@@ -538,7 +538,11 @@ fn task_card(
 			"data-sending": task.details.sending,
 			role: "button",
 			tabindex: "0",
-			onclick: move |_| editing.set(Some(opened.clone())),
+			onclick: move |_| {
+				if !opened.details.sending {
+					editing.set(Some(opened.clone()));
+				}
+			},
 			div { class: "plan-card-title", "{task.title}" }
 			{fields.into_iter()}
 		}

@@ -3198,11 +3198,13 @@ textarea {
   outline: 2px solid var(--pending-border);
   outline-offset: -2px;
   font-style: italic;
-  pointer-events: none;
+  /* Keep the locked item hit-testable so its cursor can be displayed. */
+  cursor: not-allowed !important;
 }
 
 [data-sending="true"] * {
   font-style: italic;
+  pointer-events: none;
 }
 
 /* ------------------------------------------------------------------ sleep */

@@ -112,6 +112,7 @@ pub fn AgendaDays(
 										key: "{row.event.id}",
 										class: "editor-item editor-pick",
 										"data-sending": row.event.details.sending,
+										disabled: row.event.details.sending,
 										onclick: move |_| on_open.call(event.clone()),
 										span { class: "day-dot", style: "background: {dot};" }
 										span { class: if done { "editor-item-name task-title done" } else { "editor-item-name" },

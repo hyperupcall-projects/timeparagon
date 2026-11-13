@@ -594,6 +594,11 @@ impl canvas::Program<Message> for DayCanvas {
 		}
 
 		if let Some(point) = cursor.position_in(bounds) {
+			if let Some(index) = self.hit(Some(point), bounds.width)
+				&& self.blocks[index].pending
+			{
+				return mouse::Interaction::NotAllowed;
+			}
 			for block in self.blocks.iter().filter(|block| block.time_block) {
 				let (_, focus, plan) = block_actions(self.block_rect(block, bounds.width));
 				if focus.contains(point) || plan.contains(point) {

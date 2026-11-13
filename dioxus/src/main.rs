@@ -1989,6 +1989,7 @@ fn all_day_chip(
 		button {
 			class: "all-day-chip",
 			"data-sending": event.details.sending,
+			disabled: event.details.sending,
 			style: "{style}",
 			title: "{title}",
 			onclick: move |_| editing.set(Some(opened.clone())),
@@ -2203,6 +2204,7 @@ fn timed_event_view(
 				key: "{id}",
 				class: "grid-event block",
 				"data-sending": timed.event.details.sending,
+				disabled: timed.event.details.sending,
 				style: "{style}",
 				title: "{tooltip}",
 				onclick: move |_| open.set(Some(id.clone())),
@@ -2243,6 +2245,7 @@ fn timed_event_view(
 				key: "{id}",
 				class: "grid-event",
 				"data-sending": timed.event.details.sending,
+				disabled: timed.event.details.sending,
 				style: "{style}",
 				title: "{tooltip}",
 				onclick: move |_| editing.set(Some(opened.clone())),
@@ -2290,6 +2293,7 @@ fn block_task_buttons(timed: &TimedEvent, on_open: EventHandler<Event>) -> Vec<E
                     key: "{task.event.id}",
                     class: "{class}",
                     "data-sending": task.event.details.sending,
+                    disabled: task.event.details.sending,
                     style: "top:{row_top:.1}px;left:calc({left:.4}% + {inset}px + {width} + {gap}px);width:{width};",
                     onclick: move |_| on_open.call(opened.clone()),
                     "{icon} {title} · {minutes}m"
