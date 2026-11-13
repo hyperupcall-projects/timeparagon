@@ -18,8 +18,8 @@
 #   --prefix DIR   Install the binary under DIR/bin (default: ~/.local)
 #   --no-build     Use an existing target/debug/timeparagon instead of
 #                  building it
-#   --no-enable    Install the systemd units but do not enable them or start
-#                  the shortcut daemon or Slack bridge
+#   --no-enable    Do not enable units or start inactive services; services
+#                  stopped for this upgrade are still restored
 #   --help         Show this message
 
 set -eu
@@ -116,6 +116,48 @@ if [ -z "$cef_runtime" ] || [ ! -f "$cef_runtime/libcef.so" ]; then
     exit 1
 fi
 
+# --- Stop the current installation before changing its runtime --------------
+# Stop services first so Restart=on-failure cannot race the upgrade. Remember
+# active services even with --no-enable (which suppresses new activation).
+active_units=""
+current_units="timeparagon.service timeparagon-shortcuts.service timeparagon-database-sync.service timeparagon-slack.service"
+if command -v systemctl >/dev/null 2>&1; then
+    for unit in $current_units; do
+        if systemctl --user is-active --quiet "$unit"; then
+            active_units="$active_units $unit"
+            systemctl --user stop "$unit"
+        fi
+    done
+fi
+
+# CEF children use the same executable, but may change their process name.
+# Match executable paths in argv instead of the truncated Linux comm field.
+# Include development launches as well as the installed sidebar/dock/daemon.
+process_pattern=$(printf '%s\n' "$binary" "$built" "$bin_dir/timeparagon-database-sync" \
+    "$repo_root/target/debug/examples/sync_database" \
+    "$bin_dir/timeslay" "$bin_dir/time-slay" "$bin_dir/timeslay-database-sync" \
+    | sed 's/[][\\.^$*+?(){}|]/\\&/g' | paste -sd '|')
+process_pattern="^($process_pattern)([[:space:]]|$)"
+process_user=$(id -u)
+command -v pgrep >/dev/null 2>&1 && command -v pkill >/dev/null 2>&1 || {
+    echo "install.sh: pgrep and pkill are required to stop running app processes" >&2
+    exit 1
+}
+stop_app_processes() {
+    pkill -TERM -u "$process_user" -f "$process_pattern" 2>/dev/null || true
+    tries=0
+    while pgrep -u "$process_user" -f "$process_pattern" >/dev/null 2>&1; do
+        if [ "$tries" -eq 50 ]; then
+            pkill -KILL -u "$process_user" -f "$process_pattern" 2>/dev/null || true
+        elif [ "$tries" -ge 70 ]; then
+            echo "install.sh: app processes are still running; refusing to replace the runtime" >&2
+            exit 1
+        fi
+        sleep 0.1
+        tries=$((tries + 1))
+    done
+}
+
 # --- Remove the old TimeSlay installation ----------------------------------
 # TimeParagon used to be called TimeSlay (and before that, time-slay). Stop
 # what that installed, carry its data over and remove the rest. Data is moved
@@ -133,15 +175,8 @@ for unit in $legacy_units; do
     fi
 done
 
-# A panel or dock started by hand would keep writing to the old directories.
-if command -v pkill >/dev/null 2>&1 && pkill -x 'timeslay|time-slay' 2>/dev/null; then
-    say "Stopped running TimeSlay processes."
-    tries=0
-    while pgrep -x 'timeslay|time-slay' >/dev/null 2>&1 && [ "$tries" -lt 50 ]; do
-        sleep 0.1
-        tries=$((tries + 1))
-    done
-fi
+# Wait for manual launches and Chromium children as well as service processes.
+stop_app_processes
 
 # The app moves these itself on first start too; doing it here means the
 # Slack bridge finds its credentials when it is restarted below.
@@ -222,7 +257,9 @@ if command -v kwriteconfig6 >/dev/null 2>&1 && grep -qxF "[$legacy_rule]" "$rule
 fi
 
 mkdir -p "$prefix/lib/timeparagon/cef"
-cp -aL "$cef_runtime/." "$prefix/lib/timeparagon/cef/"
+# Never truncate libraries mapped by a running sidebar. Unlink each old
+# destination first so existing mappings keep their original backing inode.
+cp -aL --remove-destination "$cef_runtime/." "$prefix/lib/timeparagon/cef/"
 
 # --- Install the binaries --------------------------------------------------
 mkdir -p "$bin_dir"
@@ -260,12 +297,6 @@ chmod 0644 "$unit_dir/timeparagon-shortcuts.service"
 say "Installed unit:    $unit_dir/timeparagon-shortcuts.service"
 
 # --- Install the Slack runtime and preserve credentials across upgrades ----
-# Stop an installed bridge before replacing its code/dependencies or tokens.
-if command -v systemctl >/dev/null 2>&1; then
-    if systemctl --user is-active --quiet timeparagon-slack.service; then
-        systemctl --user stop timeparagon-slack.service
-    fi
-fi
 mkdir -p "$slack_dir/src" "$slack_config"
 chmod 0700 "$slack_config"
 install -m 0644 "$repo_root/slack/package.json" "$slack_dir/package.json"
@@ -391,6 +422,21 @@ if [ "$enable" -eq 1 ]; then
         say "  systemctl --user enable timeparagon.service timeparagon-shortcuts.service timeparagon-slack.service"
         say "  systemctl --user start timeparagon-shortcuts.service timeparagon-slack.service"
     fi
+fi
+
+# Restore services that the upgrade stopped, including the visible sidebar.
+# The default enable flow above has already restarted these three services.
+if [ -n "$active_units" ]; then
+    systemctl --user daemon-reload
+    for unit in $active_units; do
+        if [ "$enable" -eq 1 ]; then
+            case "$unit" in
+                timeparagon-shortcuts.service|timeparagon-slack.service) continue ;;
+                timeparagon-database-sync.service) [ "$sync_installed" -eq 0 ] || continue ;;
+            esac
+        fi
+        systemctl --user restart "$unit"
+    done
 fi
 
 # --- PATH hint -------------------------------------------------------------

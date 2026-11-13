@@ -121,6 +121,69 @@ class InstallTest(unittest.TestCase):
         self.run_script("uninstall.sh", "--purge")
         self.assertFalse(self.slack_config.exists())
 
+    def lifecycle_stubs(self, active=False, stuck=False):
+        tools = self.root / "tools"
+        (tools / "systemctl").write_text(
+            '#!/bin/sh\n'
+            'printf "systemctl %s\\n" "$*" >> "$INSTALL_TEST_LOG"\n'
+            'case " $* " in *" is-active "*) '
+            + ('case "$*" in *timeparagon.service|*timeparagon-shortcuts.service) exit 0;; esac; ' if active else '')
+            + 'exit 1;; esac\nexit 0\n')
+        (tools / "pgrep").write_text(
+            '#!/bin/sh\n'
+            'printf "pgrep %s\\n" "$*" >> "$INSTALL_TEST_LOG"\n'
+            'test -f "$INSTALL_TEST_LOG.running"\n')
+        (tools / "pkill").write_text(
+            '#!/bin/sh\n'
+            'printf "pkill %s\\n" "$*" >> "$INSTALL_TEST_LOG"\n'
+            + ('' if stuck else 'case "$*" in -KILL*) rm -f "$INSTALL_TEST_LOG.running";; esac\n')
+            + 'exit 0\n')
+        (tools / "sleep").write_text('#!/bin/sh\nexit 0\n')
+        (tools / "sleep").chmod(0o755)
+        real_cp = shutil.which("cp")
+        (tools / "cp").write_text(
+            '#!/bin/sh\n'
+            'printf "copy runtime\\n" >> "$INSTALL_TEST_LOG"\n'
+            f'exec "{real_cp}" "$@"\n')
+        (tools / "cp").chmod(0o755)
+        Path(str(self.log) + ".running").touch()
+
+    def test_upgrade_stops_children_before_copy_and_restores_active_services(self):
+        self.lifecycle_stubs(active=True)
+        self.run_script("install.sh", "--no-build", "--no-enable")
+        commands = self.log.read_text()
+        self.assertLess(commands.index("systemctl --user stop timeparagon.service"),
+                        commands.index("pkill -TERM"))
+        self.assertLess(commands.index("pkill -KILL"), commands.index("copy runtime"))
+        self.assertLess(commands.index("copy runtime"),
+                        commands.index("systemctl --user restart timeparagon.service"))
+        self.assertIn("systemctl --user restart timeparagon-shortcuts.service", commands)
+        self.assertNotIn("systemctl --user restart timeparagon-slack.service", commands)
+        self.assertNotIn("systemctl --user enable ", commands)
+        # One final pgrep confirms even stubborn children exited before copying.
+        self.assertLess(commands.rindex("pgrep "), commands.index("copy runtime"))
+
+    def test_upgrade_refuses_to_copy_while_processes_remain(self):
+        self.lifecycle_stubs(stuck=True)
+        with self.assertRaises(subprocess.CalledProcessError) as failure:
+            self.run_script("install.sh", "--no-build")
+        self.assertIn("refusing to replace the runtime", failure.exception.stderr)
+        self.assertNotIn("copy runtime", self.log.read_text())
+        self.assertFalse((self.prefix / "lib/timeparagon/cef/libcef.so").exists())
+
+    def test_upgrade_preserves_loaded_chromium_library(self):
+        self.run_script("install.sh", "--no-build")
+        installed = self.prefix / "lib/timeparagon/cef/libcef.so"
+        source = self.repo / "target/debug/build/cef-dll-sys-fixture/out/cef_linux_x86_64/libcef.so"
+        # An open descriptor refers to the same inode a running app maps.
+        with installed.open("rb") as loaded:
+            original_inode = os.fstat(loaded.fileno()).st_ino
+            source.write_text("new-chromium")
+            self.run_script("install.sh", "--no-build")
+            self.assertEqual(loaded.read(), b"chromium-fixture")
+            self.assertNotEqual(installed.stat().st_ino, original_inode)
+            self.assertEqual(installed.read_text(), "new-chromium")
+
     def test_upgrade_from_timeslay(self):
         """An install over TimeSlay moves its data and removes what it installed."""
         old_slack = self.config / "timeslay/slack"
@@ -168,7 +231,8 @@ class InstallTest(unittest.TestCase):
         self.assertNotIn("timeslay", env_file.lower())
         commands = self.log.read_text()
         self.assertIn("systemctl --user disable --now timeslay.service", commands)
-        self.assertIn("pkill -x timeslay|time-slay", commands)
+        self.assertIn("pkill -TERM -u ", commands)
+        self.assertIn(str(self.prefix / "bin/timeslay"), commands)
         self.assertNotIn("[TimeSlay Sidebar]", (self.config / "kwinrulesrc").read_text())
         self.assertIn(f"webextension {self.prefix / 'bin/timeparagon'}", commands)
 
