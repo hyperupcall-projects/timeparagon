@@ -915,7 +915,6 @@ pub fn preview_view<'a>(
 		.draft
 		.as_ref()
 		.and_then(|draft| draft.error.as_ref())
-		.or(state.calendar.error.as_ref())
 	{
 		body = body.push(text(error).size(label).style(text::danger));
 	}

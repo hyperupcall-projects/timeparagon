@@ -11,6 +11,7 @@ pub mod calendar;
 pub mod controls;
 mod description;
 mod drop_preview;
+pub(crate) mod error_dialog;
 pub mod flash;
 pub mod habits;
 mod habits_charts;
@@ -460,16 +461,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
 	if state.task_creation_window {
 		return content.into();
 	}
-	let content: Element<'_, Message> = match &state.config_error {
-		Some(error) => column![
-			container(text(error).size(13).style(text::danger))
-				.width(Fill)
-				.padding([4, 8]),
-			content,
-		]
-		.into(),
-		None => content.into(),
-	};
+	let content = content.into();
 	let body = window_frame(
 		state,
 		content,

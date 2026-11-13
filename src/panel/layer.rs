@@ -289,6 +289,7 @@ fn update_app(panel: &mut Panel, message: app::Message) -> Task<Message> {
 	} else {
 		app::update(&mut panel.app, message)
 	};
+	app::errors::capture(&mut panel.app);
 	let hide = if panel.commands.is_some() && was_open && panel.app.inbox.draft.is_none() {
 		panel
 			.id

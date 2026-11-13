@@ -297,9 +297,6 @@ pub(crate) fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'
 	.spacing(metrics.spacing)
 	.width(Fill);
 	let mut fields = fields;
-	if let Some(error) = &state.calendar.error {
-		fields = fields.push(text(error).style(text::danger));
-	}
 	if let Some(error) = state.inbox.draft.as_ref().and_then(|d| d.error.as_ref()) {
 		fields = fields.push(text(error).style(text::danger));
 	}
@@ -334,9 +331,6 @@ pub(super) fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<
 	};
 	let weekly = state.weekly();
 	let metrics = *metrics;
-	// A block is written as soon as its type is chosen, so a failure has to be
-	// reported on the popup itself rather than on the details pane it skips.
-	let error = state.calendar.error.clone();
 	let focused_kind = state.draft_kind_focus;
 	let overlay = responsive(move |size| {
 		let control_height = metrics.label() * 1.3 + 12.0;
@@ -386,14 +380,7 @@ pub(super) fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<
 		.width(Fill)
 		.into();
 
-		let mut body = column![title, kinds].spacing(metrics.spacing);
-		if let Some(error) = &error {
-			body = body.push(
-				text(error.clone())
-					.size(metrics.label() - 1.0)
-					.style(text::danger),
-			);
-		}
+		let body = column![title, kinds].spacing(metrics.spacing);
 		let card = mouse_area(
 			container(crate::ui::controls::scrollable(body).height(Fill))
 				.padding(metrics.padding)
@@ -409,12 +396,8 @@ pub(super) fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<
 			+ (metrics.label() + 2.0) * 1.3
 			+ 12.0 + 3.0 * control_height
 			+ metrics.spacing
-			+ 12.0 + if error.is_some() {
-			metrics.spacing + 60.0
-		} else {
-			0.0
-		})
-		.min((size.height - 16.0).max(1.0));
+			+ 12.0)
+			.min((size.height - 16.0).max(1.0));
 		let anchor = CREATE_ANCHOR.with(|a| a.get());
 		let root = ROOT_BOUNDS.with(|r| r.get());
 		let anchor = Rectangle {

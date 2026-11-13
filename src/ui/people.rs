@@ -70,9 +70,6 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 			.width(Fill),
 		);
 	}
-	if let Some(error) = &state.accounts.error {
-		head = head.push(text(error).size(metrics.label()).style(text::danger));
-	}
 
 	let mut list = column![].spacing(metrics.spacing * 2.0).width(Fill);
 	if store.books.is_empty() {
@@ -319,9 +316,6 @@ fn problem_line<'a>(
 			)
 			.on_press_maybe((!waiting).then_some(message)),
 		);
-		if primary && let Some(error) = &state.calendar.error {
-			line = line.push(text(error).size(metrics.label()).style(text::danger));
-		}
 	}
 	line.into()
 }

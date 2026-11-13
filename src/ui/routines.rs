@@ -818,12 +818,6 @@ fn flow_view<'a>(state: &'a State, flow: &'a Flow, metrics: &Metrics) -> Element
 			.size(metrics.label() + 1.0)
 			.wrapping(text::Wrapping::WordOrGlyph),
 	);
-	for error in [&state.routines.error, &state.calendar.error]
-		.into_iter()
-		.flatten()
-	{
-		top = top.push(text(error).size(metrics.label()).style(text::danger));
-	}
 
 	let content = match step {
 		Step::Review => review(state, flow, metrics),

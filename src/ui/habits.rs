@@ -110,13 +110,6 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 	}
 
 	let mut body = column![toolbar].spacing(metrics.spacing).width(Fill);
-	if let Some(error) = &store.error {
-		body = body.push(
-			text(error.clone())
-				.size(metrics.label())
-				.style(text::danger),
-		);
-	}
 
 	let visible = store.visible();
 	if visible.is_empty() {
@@ -701,16 +694,6 @@ fn habit_page<'a>(state: &'a State, habit: &'a Habit, metrics: &Metrics) -> Elem
 	// A habit to avoid has nothing to schedule.
 	if habit.kind != Kind::No {
 		cards = cards.push(events_card(state, habit, metrics));
-	}
-	if let Some(error) = &store.error {
-		cards = cards.push(
-			container(
-				text(error.clone())
-					.size(metrics.label())
-					.style(text::danger),
-			)
-			.padding(8),
-		);
 	}
 
 	let page = column![

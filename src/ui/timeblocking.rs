@@ -1156,9 +1156,6 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 		super::controls::section_heading("Planned Tasks", Some(tasks.len()), 16.0),
 	]
 	.spacing(10);
-	if let Some(error) = &state.calendar.error {
-		body = body.push(text(error).style(text::danger));
-	}
 	if tb::block_repeats(block) {
 		body = body.push(repeat_choice(state, metrics));
 	}
@@ -1600,9 +1597,6 @@ pub fn backlog<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
 			.width(Fill),
 	]
 	.spacing(8);
-	if let Some(error) = &state.calendar.error {
-		body = body.push(text(error).style(text::danger));
-	}
 	if tasks.is_empty() {
 		body = body.push(text(format!("No tasks on the {list_name} list")).style(text::secondary));
 	} else if shown.is_empty() {

@@ -104,12 +104,6 @@ fn list_view<'a>(state: &'a State, metrics: &Metrics, list: List) -> Element<'a,
 		);
 	}
 
-	for error in [&state.inbox.error, &state.calendar.error]
-		.into_iter()
-		.flatten()
-	{
-		body = body.push(text(error).size(metrics.label()).style(text::danger));
-	}
 	if !invitations.is_empty() {
 		body = body.push(
 			text("Invitations")
@@ -889,7 +883,7 @@ fn form<'a>(state: &'a State, draft: &'a Draft, metrics: &Metrics) -> Element<'a
 		}
 		body = body.push(chip);
 	}
-	if let Some(error) = draft.error.as_ref().or(state.calendar.error.as_ref()) {
+	if let Some(error) = draft.error.as_ref() {
 		body = body.push(text(error).size(metrics.label()).style(text::danger));
 	}
 

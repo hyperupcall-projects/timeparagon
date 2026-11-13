@@ -85,9 +85,6 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 		]
 		.spacing(2);
 		let mut body = column![header, pomodoro(state, narrow)].spacing(8);
-		if let Some(error) = &state.calendar.error {
-			body = body.push(text(error).size(12).style(text::danger));
-		}
 		body = body.push(task_list(state, block, metrics, narrow, short));
 		body = body.push(distractions(state, block));
 		let block_id = block.id.clone();

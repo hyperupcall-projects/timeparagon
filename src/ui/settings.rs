@@ -119,7 +119,6 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
                 button(text("Apply").size(metrics.label())).on_press(Message::Settings(SettingsMessage::NotesDirectoryApply)),
             ].spacing(metrics.spacing),
             text("To see the same notes on mobile, sync this folder and choose its copy there. Colors and connections use database sync.").size(metrics.label()),
-            text(state.notes.error.as_deref().unwrap_or("")).size(metrics.label()),
         ].spacing(metrics.spacing).into(), metrics),
         section("Appearance", appearance(state, metrics), metrics),
         section("Dock", dock(state, metrics), metrics),
@@ -887,14 +886,6 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
 	section = section.push(action);
 
-	if let Some(error) = &state.calendar.error {
-		section = section.push(
-			text(error.clone())
-				.size(metrics.label())
-				.style(text::danger),
-		);
-	}
-
 	let resync_label = if state.calendar.is_busy() {
 		"Syncing…"
 	} else {
@@ -1168,14 +1159,6 @@ fn integrations<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
 		add = add.on_press(Message::Accounts(accounts::Action::Add));
 	}
 	section = section.push(add);
-
-	if let Some(error) = &accounts.error {
-		section = section.push(
-			text(error.as_str())
-				.size(metrics.label())
-				.style(text::danger),
-		);
-	}
 
 	indent(section.into(), metrics)
 }

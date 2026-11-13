@@ -108,7 +108,7 @@ fn list_page<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 	.wrap()
 	.vertical_spacing(metrics.spacing);
 
-	let mut body = column![
+	let body = column![
 		super::controls::page_heading(
 			"Notes",
 			"Markdown notes synced across your devices",
@@ -121,9 +121,6 @@ fn list_page<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 			.size(size),
 	]
 	.spacing(metrics.spacing);
-	if let Some(error) = &store.error {
-		body = body.push(text(error.clone()).size(size).style(text::danger));
-	}
 
 	let metrics = *metrics;
 	body.push(
@@ -281,9 +278,6 @@ fn editor_page<'a>(state: &'a State, note: &'a Note, metrics: &Metrics) -> Eleme
 	]
 	.spacing(metrics.spacing)
 	.width(Fill);
-	if let Some(error) = &store.error {
-		footer = footer.push(text(error.clone()).size(size).style(text::danger));
-	}
 	footer = footer.push(if store.confirm_delete {
 		Element::from(
 			column![

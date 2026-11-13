@@ -20,6 +20,7 @@ use crate::config::{self, Config};
 use crate::theme::Catalog;
 use crate::{alarm, alarms, blocking, notify, panel, theme, timeblocking, ui};
 
+pub(crate) mod errors;
 mod on_calendar;
 mod on_event;
 mod on_event_draft;
@@ -432,9 +433,9 @@ pub struct State {
 	save_queued: bool,
 	/// Last disk snapshot, including our own writes, to ignore save echoes.
 	disk_config: Config,
-	/// Why settings are not reaching the disk, shown above the app until a
-	/// good config can be read or written.
+	/// Why settings are not reaching the disk.
 	pub config_error: Option<String>,
+	pub(crate) errors: errors::Errors,
 
 	/// The notepad's text as the editor widget holds it.
 	///
@@ -468,6 +469,7 @@ pub struct State {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum Message {
+	CloseError,
 	Picker(crate::ui::controls::Action),
 	TimeBlocking(crate::timeblocking::Action),
 	BrainDump(crate::brain_dump::Action),
@@ -986,6 +988,7 @@ impl State {
 			save_queued: false,
 			disk_config: config.clone(),
 			config_error: None,
+			errors: errors::Errors::default(),
 			catalog,
 			system_theme: iced::theme::Mode::None,
 			config,
@@ -1366,6 +1369,7 @@ fn boot_state() -> State {
 
 	state.alarms.keep_in(database.clone());
 	state.habits.keep_in(database);
+	errors::capture(&mut state);
 
 	state
 }
@@ -1455,6 +1459,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 	}
 	let activities = state.current_activities();
 	state.activity.observe(activities, Instant::now());
+	errors::capture(state);
 	Task::batch([task, routine, editor, travel, fetch])
 }
 
@@ -1542,6 +1547,10 @@ pub(crate) fn shows_details(screen: Screen) -> bool {
 
 pub(crate) fn dispatch(state: &mut State, message: Message) -> Task<Message> {
 	match message {
+		Message::CloseError => {
+			state.errors.close();
+			Task::none()
+		}
 		Message::TimeBlocking(action) => crate::timeblocking::update(state, action),
 		Message::BrainDump(action) => crate::brain_dump::update(state, action),
 		Message::Routines(action) => crate::routines::update(state, action),
@@ -1581,6 +1590,10 @@ pub(crate) fn dispatch(state: &mut State, message: Message) -> Task<Message> {
 }
 
 pub fn view(state: &State, window: window::Id) -> Element<'_, Message> {
+	ui::error_dialog::host(state, window_view(state, window))
+}
+
+fn window_view(state: &State, window: window::Id) -> Element<'_, Message> {
 	if state
 		.flash
 		.as_ref()
@@ -1857,6 +1870,12 @@ fn map_key(event: keyboard::Event) -> Message {
 }
 
 fn on_key(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> Task<Message> {
+	if state.errors.is_open() {
+		if key == Key::Named(keyboard::key::Named::Escape) {
+			state.errors.close();
+		}
+		return Task::none();
+	}
 	if state.description_popup.is_some() {
 		return if key == keyboard::Key::Named(keyboard::key::Named::Escape) {
 			update(state, Message::Event(EventMessage::DescriptionClose))
@@ -2368,6 +2387,10 @@ fn open_flash(state: &mut State, settings: config::Flash) -> Task<Message> {
 
 /// Silences the alarm and takes the flash off the screen.
 fn dismiss(state: &mut State) -> Task<Message> {
+	if state.errors.is_open() {
+		state.errors.close();
+		return Task::none();
+	}
 	state.alarm_active = false;
 	state.audio.stop();
 

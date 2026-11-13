@@ -257,9 +257,6 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
 			]
 			.spacing(metrics.spacing),
 		);
-		if let Some(error) = &state.habits.error {
-			content = content.push(text(error).size(metrics.label()).style(text::danger));
-		}
 	}
 	if let Some(dismiss) = dismiss_bar(state, metrics) {
 		content = content.push(dismiss);

@@ -109,8 +109,8 @@ pub fn event_editor<'a>(
 
 	if draft.loading {
 		let mut loading = column![text("Loading recurrence…").size(metrics.label())].spacing(6);
-		if let Some(error) = &state.calendar.error {
-			loading = loading.push(text(error).style(text::danger)).push(
+		if state.calendar.error.is_some() {
+			loading = loading.push(
 				crate::ui::controls::quiet_button("Retry")
 					.on_press(Message::Event(EventMessage::EventOpened(event.id.clone()))),
 			);
@@ -410,9 +410,6 @@ pub fn event_editor<'a>(
 			Message::EventEdit(EventEditMessage::EventEditOptions(v))
 		}));
 		body = body.push(form_section("Meeting", meeting, metrics));
-	}
-	if let Some(error) = &state.calendar.error {
-		body = body.push(text(error).size(metrics.label()).style(text::danger));
 	}
 
 	if state.calendar.open_event.as_deref() != Some(event.id.as_str()) {
@@ -917,9 +914,6 @@ pub(super) fn sleep_editor<'a>(
         ),
     ].spacing(metrics.spacing).width(Fill);
 	body = body.push(actual_sleep(state, draft, record, &preview, metrics));
-	if let Some(error) = &state.calendar.error {
-		body = body.push(text(error).style(text::danger));
-	}
 	let mut save = crate::ui::controls::action_button(
 		text(if draft.saving {
 			"Saving…"
