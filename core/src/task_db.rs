@@ -35,10 +35,10 @@ pub struct TaskData {
 /// The schema this build sets up, kept in SQLite's `user_version`.
 ///
 /// Schema changes are applied transactionally by [`Database::set_up`].
-pub const SCHEMA_VERSION: i64 = 7;
+pub const SCHEMA_VERSION: i64 = 8;
 
 /// Older schemas [`Database::set_up`] can bring up to date.
-const UPGRADABLE: std::ops::RangeInclusive<i64> = 2..=6;
+const UPGRADABLE: std::ops::RangeInclusive<i64> = 2..=7;
 
 fn schema_version(db: &Connection) -> Result<i64, String> {
 	db.query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -118,6 +118,8 @@ impl Database {
 		crate::local_changes::install(&tx).map_err(|e| e.to_string())?;
 		// Schema 7 adds the synced metadata table for Markdown notes.
 		crate::settings::schema::create_data(&tx).map_err(|e| e.to_string())?;
+		// Schema 8: incremental Google sync used to create these on first use.
+		crate::calendar::api::incremental::install_schema(&tx).map_err(|e| e.to_string())?;
 		Self::remove_write_queue(&tx).map_err(|e| e.to_string())?;
 		tx.commit().map_err(|e| e.to_string())?;
 
@@ -467,7 +469,7 @@ mod tests {
 		drop(db);
 		let mut db = Database::open(&path).unwrap();
 		let connection = db.connection();
-		assert_eq!(schema_version(connection).unwrap(), 7);
+		assert_eq!(schema_version(connection).unwrap(), SCHEMA_VERSION);
 		connection
 			.execute("INSERT INTO notes(id) VALUES('n1')", [])
 			.unwrap();
@@ -482,6 +484,128 @@ mod tests {
 		assert_eq!(
 			crate::local_changes::read_from(connection).unwrap().notes,
 			1
+		);
+	}
+
+	#[test]
+	fn schema_7_installs_lazy_tables_and_triggers_on_open() {
+		let directory = tempfile::tempdir().unwrap();
+		let path = directory.path().join("db.sqlite3");
+		drop(Database::open(&path).unwrap());
+		let db = Connection::open(&path).unwrap();
+		let objects = |db: &Connection| -> Vec<(String, String, Option<String>)> {
+			db.prepare("SELECT type,name,sql FROM sqlite_master ORDER BY type,name")
+				.unwrap()
+				.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+				.unwrap()
+				.collect::<Result<_, _>>()
+				.unwrap()
+		};
+		let fresh_schema = objects(&db);
+		// A version 7 device that has never used incremental sync or stored
+		// sleep. Keep notes, which version 7 already created.
+		db.execute_batch(
+			"DROP TABLE google_sync_meta; DROP TABLE google_sync_calendars;
+            DROP TABLE google_sync_windows; DROP TABLE google_sync_events;
+            DROP TABLE google_sync_task_lists; DROP TABLE google_sync_tasks;
+            DROP TABLE sleep_nights; PRAGMA user_version=7;",
+		)
+		.unwrap();
+		drop(db);
+		let mut database = Database::open(&path).unwrap();
+		let db = database.connection();
+		assert_eq!(schema_version(db).unwrap(), SCHEMA_VERSION);
+		assert_eq!(objects(db), fresh_schema);
+		db.execute(
+			"INSERT INTO sleep_nights VALUES('app','n','2030-11-04','a','b','{}')",
+			[],
+		)
+		.unwrap();
+		assert_eq!(crate::local_changes::read_from(db).unwrap().sleep, 1);
+		let edits: i64 = db
+			.query_row(
+				"SELECT count(*) FROM timeparagon_sync_edits WHERE document='sleep_nights:[\"app\",\"n\"]'",
+				[],
+				|row| row.get(0),
+			)
+			.unwrap();
+		assert_eq!(edits, 1);
+	}
+
+	#[test]
+	fn schema_7_keeps_existing_lazy_data_and_reopening_is_a_noop() {
+		let directory = tempfile::tempdir().unwrap();
+		let path = directory.path().join("db.sqlite3");
+		drop(Database::open(&path).unwrap());
+		let db = Connection::open(&path).unwrap();
+		db.execute_batch(
+			"INSERT INTO google_sync_meta VALUES('account','me');
+            INSERT INTO google_sync_calendars VALUES('app','token');
+            INSERT INTO google_sync_windows VALUES('a','b');
+            INSERT INTO google_sync_events VALUES('app','event',NULL,'a','b',0,'{}');
+            INSERT INTO google_sync_task_lists VALUES('list','watermark');
+            INSERT INTO google_sync_tasks VALUES('list','task','{}');
+            INSERT INTO sleep_nights VALUES('app','night','2030-11-04','a','b','{}');
+            INSERT INTO notes VALUES('note','rose','[]');
+            INSERT INTO documents VALUES('unknown','preserve me');
+            PRAGMA user_version=7;",
+		)
+		.unwrap();
+		drop(db);
+		let before = crate::database_migration::inspect(&path).unwrap();
+		let history = crate::database_sync::history(&path).unwrap();
+		for _ in 0..2 {
+			let mut database = Database::open(&path).unwrap();
+			assert_eq!(
+				schema_version(database.connection()).unwrap(),
+				SCHEMA_VERSION
+			);
+			assert_eq!(crate::database_migration::inspect(&path).unwrap(), before);
+			assert_eq!(crate::database_sync::history(&path).unwrap(), history);
+			let db = database.connection();
+			let token: String = db
+				.query_row("SELECT sync_token FROM google_sync_calendars", [], |r| {
+					r.get(0)
+				})
+				.unwrap();
+			assert_eq!(token, "token");
+			let color: String = db
+				.query_row("SELECT color FROM notes", [], |r| r.get(0))
+				.unwrap();
+			assert_eq!(color, "rose");
+		}
+	}
+
+	#[test]
+	fn schema_8_failure_rolls_back_and_can_be_retried() {
+		let directory = tempfile::tempdir().unwrap();
+		let path = directory.path().join("db.sqlite3");
+		drop(Database::open(&path).unwrap());
+		let db = Connection::open(&path).unwrap();
+		// A conflicting object makes index creation fail after setup has
+		// already tried to create another table. Neither change may stick.
+		db.execute_batch(
+			"DROP TABLE google_sync_meta; DROP TABLE google_sync_events;
+            CREATE VIEW google_sync_events AS SELECT 1;
+            PRAGMA user_version=7;",
+		)
+		.unwrap();
+		assert!(Database::open(&path).is_err());
+		assert_eq!(schema_version(&db).unwrap(), 7);
+		let created: bool = db
+			.query_row(
+				"SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='google_sync_meta')",
+				[],
+				|r| r.get(0),
+			)
+			.unwrap();
+		assert!(!created);
+		db.execute_batch("DROP VIEW google_sync_events").unwrap();
+		drop(db);
+		let mut database = Database::open(&path).unwrap();
+		assert_eq!(
+			schema_version(database.connection()).unwrap(),
+			SCHEMA_VERSION
 		);
 	}
 

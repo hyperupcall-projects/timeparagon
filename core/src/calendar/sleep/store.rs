@@ -10,9 +10,9 @@
 //! Google. Every change is journaled for them, so a row is only written when
 //! it actually differs: an unchanged sync costs no sync traffic.
 //!
-//! The table is created on first use and when database sync starts, so older
-//! builds can still open the file, and their sync ignores these rows. Like
-//! the event cache, a failure here costs a re-sync, never the night itself.
+//! The versioned database setup creates the table and its change and sync
+//! triggers. Like the event cache, a failure here costs a re-sync, never the
+//! night itself.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -27,12 +27,6 @@ use crate::task_db::Database;
 /// A UTC timestamp in one fixed format, so stored times compare as text.
 fn stamp(at: DateTime<Utc>) -> String {
 	at.to_rfc3339_opts(SecondsFormat::Secs, true)
-}
-
-fn open(path: &Path) -> Result<Database, String> {
-	let mut database = Database::open(path)?;
-	crate::settings::schema::create_data(database.connection()).map_err(|e| e.to_string())?;
-	Ok(database)
 }
 
 fn parse(text: &str) -> Option<Event> {
@@ -95,7 +89,7 @@ pub(in crate::calendar) fn replace(
 	to: DateTime<Utc>,
 	nights: &[Event],
 ) -> Result<(), String> {
-	let mut database = open(path)?;
+	let mut database = Database::open(path)?;
 	let tx = database
 		.connection()
 		.transaction_with_behavior(TransactionBehavior::Immediate)
@@ -137,7 +131,7 @@ pub(in crate::calendar) fn replace(
 
 /// Stores one night as Google now has it.
 pub(in crate::calendar) fn put(path: &Path, night: &Event) -> Result<(), String> {
-	let mut database = open(path)?;
+	let mut database = Database::open(path)?;
 	let tx = database
 		.connection()
 		.transaction_with_behavior(TransactionBehavior::Immediate)
@@ -149,7 +143,7 @@ pub(in crate::calendar) fn put(path: &Path, night: &Event) -> Result<(), String>
 /// Forgets an event deleted from Google. Anything that is not a night
 /// matches no row, so this is safe to call for every deletion.
 pub(in crate::calendar) fn remove(path: &Path, calendar_id: &str, id: &str) -> Result<(), String> {
-	open(path)?
+	Database::open(path)?
 		.connection()
 		.execute(
 			"DELETE FROM sleep_nights WHERE calendar_id=?1 AND id=?2",
@@ -244,7 +238,11 @@ mod tests {
 	}
 
 	fn all(path: &Path) -> Vec<Event> {
-		let mut nights = overlapping(open(path).unwrap().connection(), ever().0, ever().1);
+		let mut nights = overlapping(
+			Database::open(path).unwrap().connection(),
+			ever().0,
+			ever().1,
+		);
 		nights.sort_by_key(|n| n.start);
 		nights
 	}
@@ -294,7 +292,7 @@ mod tests {
 		let scratch = crate::calendar::day_cache::Scratch::new("sleep-store-journal");
 		let path = scratch.path();
 		// Opening a database file sets it up, and enrolls it for sync.
-		open(path).unwrap();
+		Database::open(path).unwrap();
 		let journaled = || {
 			crate::database_sync::history(path)
 				.unwrap()
@@ -347,7 +345,7 @@ mod tests {
 		put(path, &night("app", "fresh", 6, 9)).unwrap();
 		let mut events = vec![night("app", "stale", 6, 8), night("other", "y", 6, 8)];
 		merge_into(
-			open(path).unwrap().connection(),
+			Database::open(path).unwrap().connection(),
 			ever().0,
 			ever().1,
 			&mut events,

@@ -259,7 +259,7 @@ impl Harness {
 	}
 
 	fn tasks(&self, list: &str) -> Vec<String> {
-		let mut database = open(&self.path).unwrap();
+		let mut database = Database::open(&self.path).unwrap();
 		stored_tasks(database.connection(), list)
 			.unwrap()
 			.into_iter()

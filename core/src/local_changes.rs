@@ -70,8 +70,8 @@ fn watch(db: &Connection, table: &str, counter: &str) -> rusqlite::Result<()> {
 	Ok(())
 }
 
-/// The triggers on the synced data tables, which are created outside the
-/// versioned schema (see `settings::schema::create_data`), so these are too.
+/// The triggers on the synced data tables, installed during versioned setup
+/// and sync enrollment (see `settings::schema::create_data`).
 /// Idempotent, and expects the tables to exist.
 pub(crate) fn install_data(db: &Connection) -> rusqlite::Result<()> {
 	db.execute_batch(CREATE)?;

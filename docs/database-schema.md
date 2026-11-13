@@ -38,10 +38,11 @@ The schema version is stored in `PRAGMA user_version`.
 | `user_version` | Meaning |
 | --- | --- |
 | `0` | New file. `Database::open` creates the schema. |
-| `2`, `3`, `4`, `5`, `6` | Upgraded to 7 on open: see below. |
+| `2`, `3`, `4`, `5`, `6`, `7` | Upgraded to 8 on open: see below. |
 | `6` | Like 5, with the app's tables, indexes and triggers prefixed `timeparagon_` instead of `timeslay_`, and the built-in calendar sources' IDs prefixed `timeparagon:` instead of `timeslay:`. |
-| `7` | Current (`task_db::SCHEMA_VERSION`). Adds the synced `notes` metadata table. |
-| anything else | Refused: `Unsupported database schema N; expected 7`. |
+| `7` | Adds the synced `notes` metadata table. |
+| `8` | Current (`task_db::SCHEMA_VERSION`). Creates the incremental Google sync cache during upgrade and reinstalls synced data tables and triggers. |
+| anything else | Refused: `Unsupported database schema N; expected 8`. |
 
 Builds from before version 5 refuse a version 5 file, so every TimeParagon
 process on a device (panel, dock, shortcut daemon, browser host) has to be
@@ -53,6 +54,14 @@ Every statement in setup is idempotent (`CREATE … IF NOT EXISTS`,
 processes setting up at once, or a crash halfway through, cause no harm. Once a
 file is stamped with the current version, setup is skipped, because the apps
 open the database many times a minute.
+
+**7 → 8** creates the six `google_sync_*` tables and the
+`google_sync_events_series` index, which were previously created only when
+incremental sync ran. It also ensures `sleep_nights`, `notes` and their change
+and sync triggers exist. Existing cache rows, tokens, note metadata and sleep
+records are preserved; opening the database no longer depends on visiting a
+feature to initialize these tables. Builds expecting schema 7 refuse schema 8,
+so upgrade the device's app processes together.
 
 **4 → 5** creates the [settings tables](#settings), their journal triggers and
 change counters, and an index on `timeparagon_sync_edits(clock)`. Then, for the
@@ -69,9 +78,8 @@ the upgrade are lost; make them again.
 An unversioned file whose `tasks` table does not have exactly two columns is
 refused with `Unversioned task databases are no longer supported`.
 
-Apart from that, there are no in-place migrations. Large changes are made by one-off scripts
-in `scripts/` (for example, `migrate-calendar-tasks.py`), which back up the
-file first. `database_migration::backup` makes a verified copy:
+Schema migrations run automatically on open. Some historical data conversions
+used one-off scripts in `scripts/`, which back up the file first. `database_migration::backup` makes a verified copy:
 it uses SQLite's backup API (which includes WAL contents), writes a SHA-256
 manifest and runs an integrity check before publishing the backup.
 
@@ -327,6 +335,23 @@ tasks. Unlike calendar events, tasks are not bound to a month, so they are
 kept here. A full refresh replaces the whole table in one transaction
 (and sets `calendar_task_snapshot`). Local edits update rows as they are made,
 and a write Google refuses puts the previous row back.
+
+### Incremental Google sync cache
+
+Schema 8 creates these device-local tables before Google sync runs:
+
+| Table | Contents |
+| --- | --- |
+| `google_sync_meta` | Account identity (`key`, `value`) |
+| `google_sync_calendars` | Calendar IDs and their sync tokens |
+| `google_sync_windows` | Covered time ranges (`start_at`, `end_at`) |
+| `google_sync_events` | Events keyed by calendar and event ID, with series, start/end times, pinned status and event JSON |
+| `google_sync_task_lists` | Task list IDs and their update watermarks |
+| `google_sync_tasks` | Task JSON keyed by list and task ID |
+
+`google_sync_events_series` indexes `(calendar_id, series)` for refreshing
+recurring occurrences. These tables are not replicated. Full sync clears their
+rows and rebuilds the cache from Google.
 
 ---
 

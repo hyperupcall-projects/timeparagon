@@ -47,8 +47,7 @@ use crate::task_db::Database;
 /// same changes twice, and the later one could store the older token.
 static SYNCING: Mutex<()> = Mutex::new(());
 
-/// Kept with the tables, created on first use so older builds can still open
-/// the database.
+/// Installed transactionally by the versioned database setup (schema 8).
 const CREATE: &str = "
     CREATE TABLE IF NOT EXISTS google_sync_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS google_sync_calendars (calendar_id TEXT PRIMARY KEY, sync_token TEXT NOT NULL);
@@ -108,7 +107,7 @@ pub fn enabled() -> bool {
 pub fn reset() -> Result<(), String> {
 	let path = crate::task_db::path().ok_or("Cannot locate the local database")?;
 	let _syncing = SYNCING.lock().map_err(|_| "Sync is unavailable")?;
-	let mut database = open(&path)?;
+	let mut database = Database::open(&path)?;
 	clear(database.connection()).map_err(|e| e.to_string())
 }
 
@@ -125,7 +124,7 @@ pub(super) fn forget_task(task_id: &str) {
 	let Some(path) = crate::task_db::path() else {
 		return;
 	};
-	if let Ok(mut database) = open(&path)
+	if let Ok(mut database) = Database::open(&path)
 		&& let Err(error) = database
 			.connection()
 			.execute("DELETE FROM google_sync_tasks WHERE task_id=?1", [task_id])
@@ -134,13 +133,8 @@ pub(super) fn forget_task(task_id: &str) {
 	}
 }
 
-fn open(path: &Path) -> Result<Database, String> {
-	let mut database = Database::open(path)?;
-	database
-		.connection()
-		.execute_batch(CREATE)
-		.map_err(|e| e.to_string())?;
-	Ok(database)
+pub(crate) fn install_schema(db: &Connection) -> rusqlite::Result<()> {
+	db.execute_batch(CREATE)
 }
 
 /// A UTC instant in one fixed format, so stored times compare as text.
@@ -768,7 +762,7 @@ fn task_snapshot(
 	lists: &[(String, String)],
 	app_calendar: Option<&str>,
 ) -> Result<FetchedTasks, GoogleError> {
-	let mut database = open(path)?;
+	let mut database = Database::open(path)?;
 	let mut calendars = Vec::new();
 	let mut events = Vec::new();
 	for (name, list) in lists {
@@ -1026,7 +1020,7 @@ fn sync(
 	let resolved = resolve_app_calendar(access_token, &mut calendars, app_calendar);
 	let app_calendar = resolved.as_deref();
 
-	let mut database = open(path)?;
+	let mut database = Database::open(path)?;
 	let (covered, tokens, watermarks) = {
 		let connection = database.connection();
 		check_account(connection, &calendars)?;
