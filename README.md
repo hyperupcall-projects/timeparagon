@@ -67,7 +67,7 @@ Of course, there's also week, 2-week, and month views:
 			- Supports [Todoist keywords](https://www.todoist.com/help/todoist/features/use-task-quick-add-in-todoist-va4Lhpzz).
 			- Supports pasting Gmail URLs
 		- By speaking.
-		- By taking, uploading, or pasting pictures (TODO).
+		- By uploading, pasting, or taking a picture.
 		- From the browser extension, when on a web page
 		- From the Slack app, for a specific message
 	- Inbox section for new tasks that have yet to be triaged.
@@ -77,25 +77,12 @@ Of course, there's also week, 2-week, and month views:
 	- Schedule tasks:
 		- Manually assign tasks to a day, time, or time blocks.
 		- _Automatically project tasks from a non-temporal, grouped and ordered list of tasks to the day's available time blocks (TODO)._
-		- "Do immediately" etc. No need to categorize other than project (TODO?).
 	- Handle long-running or multi-step/subtasks (TODO).
 		- Plan to do one task, but turns out, I have to do something smaller, and defer the original task. Easily do that.
 		- Tasks that may be done over multiple days/time blocks (TODO).
 		- When recording during time block, already have multiple recorded sessions. Can cancel which removes task from todo, but keeps history (TODO).
 		- But, also keep track of subtasks (TODO?).
 		- Waiting for reply email (waiting-for tag), once reply, put back in to-do but if not, wait until date to do so. or AI to detect.
-- **Manage habits:**
-	- Like a regular calendar event, but colored differently and managed differently (UPDATE?).
-	- Distinguish between habits to do, and ones to avoid.
-	- Allow adding data to habits
-	- Allow connecting habit to specific objectives like weight loss (TODO).
-	- For habits that can be done anytime during the week, "float" them in the day/week view (TODO)
-	- Show habits configurable amount of days before they are due so they can be scheduled before they are due (TODO)
-- **Routines:** guided rituals, one step at a time ([details](./docs/routines.md)).
-	- Daily plan: choose the day's tasks, size them against your free time, timebox them, and set a highlight.
-	- Daily refresh: go through unfinished, the inbox and today's tasks card by card, and schedule, park, triage or close each one.
-	- Daily, weekly and monthly reflections with the period's highlights and statistics: tasks done, focus time, meetings, habits, ratings.
-	- Weekly and monthly plans with objectives, carried over when they are not met.
 - **Track and direct your life:**
 	- Organize goals, objectives, and projects under a life area, each with a Markdown vision.
 	- **Set goals:**
@@ -105,17 +92,26 @@ Of course, there's also week, 2-week, and month views:
 		- Connected to a goal, specifying specifically how it will be achieved, usually like SMART goals, or OKRs.
 		- Give them a start and due date, or pick "by end of week/month/quarter/year".
 		- Measure them by a number with check-ins (e.g. 90 kg → 80 kg), by milestones, or by the strength of their habits.
+		- Pin them, see when they are due in timeline (???).
 		- See whether each is on track, behind or overdue.
-	- Connect habits and projects to objectives.
-	- **Focus:** pin this week's objectives, and see what needs attention and what is due soon.
-	- **Timeline:** objectives by when they are due.
-	- **Weekly review:** rate your satisfaction with each life area, check in on objectives, choose next week's focus, and reflect.
-	- **Balance:** see satisfaction across life areas over time.
-	- **Manage projects:** (TODO)
-		- Groups related events, tasks, notes, autolaunchers, objectives, and goals.
-		- View as list, kanban, or calendar (TODO).
-		- During events and tasks associated with a project, easily launch and position the apps/windows necesssary to do the work. (TODO)
-		- Allow voice recording ideas related to project, and AI process into summary that might be general idea, or actual task (TODO).
+  - **Manage and track habits:**
+  	- Like a regular calendar event, but colored differently and supports data tracking.
+  	- Distinguish between habits that should be done, or avoided.
+  	- Allow adding data to habits.
+  	- Allow connecting habit to specific objectives like weight loss.
+  - **Built-in routines:**
+    - Purpuse-built UIs for planning, reflection, and reorienting.
+    - Plan the day, week, or month; connect planned tasks to daily, weekly, and monthly objectives.
+    - Reflect on the day, week or month; view highlights and statistics like tasks done, focus time, mettings, and habits.
+    - Reorient on the day's tasks, recognize what got done, and what's left. Triage, assign, or sort the unfinished, inbox, and today's tasks.
+    - Grounding (meditation), Briefing (new email, slack) (TODO)
+  - **Focus:**
+    - See what the focus of the day/week/month is (TODO).
+- **Manage projects:** (TODO)
+	- Groups related events, tasks, notes, autolaunchers, objectives, and goals.
+	- View as list, kanban, or calendar (TODO).
+	- During events and tasks associated with a project, easily launch and position the apps/windows necesssary to do the work. (TODO)
+	- Allow voice recording ideas related to project, and AI process into summary that might be general idea, or actual task (TODO).
 - **Notes:**
 	- Associate notes with any entity.
 	- Stored locally for syncing with [Syncthing](https://syncthing.net).
