@@ -35,10 +35,10 @@ pub struct TaskData {
 /// The schema this build sets up, kept in SQLite's `user_version`.
 ///
 /// Schema changes are applied transactionally by [`Database::set_up`].
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 
 /// Older schemas [`Database::set_up`] can bring up to date.
-const UPGRADABLE: std::ops::RangeInclusive<i64> = 2..=5;
+const UPGRADABLE: std::ops::RangeInclusive<i64> = 2..=6;
 
 fn schema_version(db: &Connection) -> Result<i64, String> {
 	db.query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -116,6 +116,7 @@ impl Database {
 		tx.execute_batch(crate::settings::schema::CREATE)
 			.map_err(|e| e.to_string())?;
 		crate::local_changes::install(&tx).map_err(|e| e.to_string())?;
+		// Schema 7 adds the synced metadata table for Markdown notes.
 		crate::settings::schema::create_data(&tx).map_err(|e| e.to_string())?;
 		Self::remove_write_queue(&tx).map_err(|e| e.to_string())?;
 		tx.commit().map_err(|e| e.to_string())?;
@@ -455,6 +456,35 @@ mod tests {
 		event.details = Default::default();
 		event
 	}
+	#[test]
+	fn schema_6_adds_notes_metadata_and_sync_triggers() {
+		let directory = tempfile::tempdir().unwrap();
+		let path = directory.path().join("db.sqlite3");
+		drop(Database::open(&path).unwrap());
+		let db = Connection::open(&path).unwrap();
+		db.execute_batch("DROP TABLE notes; PRAGMA user_version=6;")
+			.unwrap();
+		drop(db);
+		let mut db = Database::open(&path).unwrap();
+		let connection = db.connection();
+		assert_eq!(schema_version(connection).unwrap(), 7);
+		connection
+			.execute("INSERT INTO notes(id) VALUES('n1')", [])
+			.unwrap();
+		let pending: i64 = connection
+			.query_row(
+				"SELECT count(*) FROM timeparagon_sync_edits WHERE document='notes:[\"n1\"]'",
+				[],
+				|r| r.get(0),
+			)
+			.unwrap();
+		assert_eq!(pending, 1);
+		assert_eq!(
+			crate::local_changes::read_from(connection).unwrap().notes,
+			1
+		);
+	}
+
 	#[test]
 	fn documents_round_trip_and_bad_contents_are_an_error() {
 		let path = path("documents");

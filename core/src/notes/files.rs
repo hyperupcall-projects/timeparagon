@@ -1,20 +1,8 @@
 //! How a note is kept on disk: `<title>.md`, holding the note's Markdown.
 //!
-//! A note with a color other than the default, or with connections, starts
-//! with front matter, which other Markdown editors show as properties:
-//!
-//! ```text
-//! ---
-//! color: rose
-//! links:
-//!   - {"kind":"habit","id":"h1","title":"Read"}
-//! ---
-//! The note itself.
-//! ```
-//!
-//! Each connection is a JSON object, which is also valid YAML. Connections
-//! another editor rewrote as YAML mappings (`- kind: habit` and so on) are read
-//! too. Front matter lines this app does not know are kept and written back.
+//! Front matter contains a stable note `id`. Color and connections live in
+//! the database. The legacy metadata parser is retained for migration; all other
+//! front matter is discarded.
 
 use std::collections::HashSet;
 use std::fs;
@@ -136,6 +124,7 @@ pub(super) fn read(directory: &Path) -> io::Result<Library> {
 	Ok(Library {
 		notes,
 		removed: Vec::new(),
+		removed_ids: Vec::new(),
 	})
 }
 
@@ -243,12 +232,20 @@ fn parse_front_matter(front: &str, note: &mut Note) {
 		let first = lines[0].trim_end_matches(['\r', '\n']);
 		let value = first.split_once(':').map_or("", |(_, value)| value);
 		let understood = match key {
-			Some("color") => Pastel::ALL
-				.into_iter()
-				.find(|color| color.name().eq_ignore_ascii_case(&unquote(value)))
-				.map(|color| note.color = color)
-				.is_some(),
+			Some("id") => {
+				note.id = unquote(value);
+				true
+			}
+			Some("color") => {
+				note.migrate = true;
+				Pastel::ALL
+					.into_iter()
+					.find(|color| color.name().eq_ignore_ascii_case(&unquote(value)))
+					.map(|color| note.color = color)
+					.is_some()
+			}
 			Some("links") => {
+				note.migrate = true;
 				let parsed = parse_links(value, &lines[1..]);
 				if parsed.is_none() {
 					log::warn!(
@@ -261,20 +258,15 @@ fn parse_front_matter(front: &str, note: &mut Note) {
 			_ => false,
 		};
 		if !understood {
-			for line in lines {
-				note.extra.push_str(line);
-			}
+			note.cleanup = true;
 		}
-	}
-	if !note.extra.is_empty() && !note.extra.ends_with('\n') {
-		note.extra.push('\n');
 	}
 }
 
 pub(super) fn parse(name: &str, text: &str, modified_ms: i64) -> Note {
 	let (front, body) = split_front_matter(text);
 	let mut note = Note {
-		id: format!("file:{name}"),
+		id: String::new(),
 		title: markdown_stem(name).unwrap_or(name).to_owned(),
 		body: body.to_owned(),
 		color: Pastel::default(),
@@ -282,7 +274,8 @@ pub(super) fn parse(name: &str, text: &str, modified_ms: i64) -> Note {
 		modified_ms,
 		revision: 0,
 		file: Some(name.to_owned()),
-		extra: String::new(),
+		cleanup: false,
+		migrate: false,
 	};
 	if let Some(front) = front {
 		parse_front_matter(front, &mut note);
@@ -292,28 +285,11 @@ pub(super) fn parse(name: &str, text: &str, modified_ms: i64) -> Note {
 
 /// The file's contents for a note.
 pub(super) fn render(note: &Note) -> String {
-	let mut front = String::new();
-	if note.color != Pastel::default() {
-		front.push_str(&format!("color: {}\n", note.color.name().to_lowercase()));
-	}
-	if !note.links.is_empty() {
-		front.push_str("links:\n");
-		for link in &note.links {
-			let json = serde_json::to_string(link).unwrap_or_default();
-			front.push_str(&format!("  - {json}\n"));
-		}
-	}
-	front.push_str(&note.extra);
-	if !front.is_empty() && !front.ends_with('\n') {
-		front.push('\n');
-	}
-	// A note that itself starts with a `---` line gets empty front matter, so
-	// it is not read back as front matter.
-	if front.is_empty() && split_front_matter(&note.body).0.is_none() {
-		note.body.clone()
-	} else {
-		format!("---\n{front}---\n{}", note.body)
-	}
+	format!(
+		"---\nid: {}\n---\n{}",
+		serde_json::to_string(&note.id).expect("note ID"),
+		note.body
+	)
 }
 
 pub(super) fn write(library: &Library, directory: &Path) -> io::Result<Saved> {

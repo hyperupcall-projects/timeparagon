@@ -41,6 +41,8 @@ pub struct Counters {
 	pub config: i64,
 	/// Moves whenever a stored night of sleep changes.
 	pub sleep: i64,
+	/// Moves whenever note metadata changes, including changes from sync.
+	pub notes: i64,
 }
 
 const CREATE: &str = "CREATE TABLE IF NOT EXISTS timeparagon_change_counters(name TEXT PRIMARY KEY, value INTEGER NOT NULL);";
@@ -73,7 +75,8 @@ fn watch(db: &Connection, table: &str, counter: &str) -> rusqlite::Result<()> {
 /// Idempotent, and expects the tables to exist.
 pub(crate) fn install_data(db: &Connection) -> rusqlite::Result<()> {
 	db.execute_batch(CREATE)?;
-	watch(db, crate::settings::schema::SLEEP_NIGHTS.name, SLEEP)
+	watch(db, crate::settings::schema::SLEEP_NIGHTS.name, SLEEP)?;
+	watch(db, crate::settings::schema::NOTES.name, "notes")
 }
 
 /// Creates the counter table and the triggers that maintain it. Idempotent.
@@ -131,6 +134,7 @@ pub(crate) fn read_from(db: &Connection) -> rusqlite::Result<Counters> {
 		overlay: value(OVERLAY)? + value(&document(crate::calendar::operations::SERIES_EDITS))?,
 		config,
 		sleep: value(SLEEP)?,
+		notes: value("notes")?,
 	})
 }
 

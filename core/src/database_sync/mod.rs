@@ -1389,6 +1389,63 @@ mod tests {
 		assert_eq!(night(&phone), None);
 	}
 	#[test]
+	fn note_metadata_replicates_updates_and_deletions() {
+		let (_a, desktop) = db();
+		let (_b, phone) = db();
+		let mut server = HashMap::new();
+		let read = |path: &Path| -> Option<(String, serde_json::Value)> {
+			open(path)
+				.unwrap()
+				.query_row("SELECT color,links FROM notes WHERE id='n1'", [], |r| {
+					Ok((
+						r.get(0)?,
+						serde_json::from_str(&r.get::<_, String>(1)?).unwrap(),
+					))
+				})
+				.optional()
+				.unwrap()
+		};
+		open(&desktop).unwrap().execute_batch(
+            "INSERT INTO notes VALUES('n1','rose','[{\"kind\":\"habit\",\"id\":\"h1\",\"title\":\"Read\"}]');").unwrap();
+		send(&desktop, &mut server);
+		apply(
+			&phone,
+			&server.values().cloned().collect::<Vec<_>>(),
+			None,
+			now(),
+		)
+		.unwrap();
+		assert_eq!(read(&phone), read(&desktop));
+		assert!(edits(&open(&phone).unwrap(), true).unwrap().is_empty());
+		open(&phone)
+			.unwrap()
+			.execute_batch("UPDATE notes SET color='mint',links='[]' WHERE id='n1';")
+			.unwrap();
+		send(&phone, &mut server);
+		apply(
+			&desktop,
+			&server.values().cloned().collect::<Vec<_>>(),
+			None,
+			now(),
+		)
+		.unwrap();
+		assert_eq!(read(&desktop), Some(("mint".into(), serde_json::json!([]))));
+		open(&desktop)
+			.unwrap()
+			.execute_batch("DELETE FROM notes WHERE id='n1';")
+			.unwrap();
+		send(&desktop, &mut server);
+		apply(
+			&phone,
+			&server.values().cloned().collect::<Vec<_>>(),
+			None,
+			now(),
+		)
+		.unwrap();
+		assert_eq!(read(&phone), None);
+	}
+
+	#[test]
 	fn settings_rows_merge_column_by_column_between_devices() {
 		use crate::config::Config;
 		use crate::settings::{load, update};

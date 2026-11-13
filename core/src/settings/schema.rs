@@ -227,14 +227,28 @@ pub(crate) const SLEEP_NIGHTS: Table = Table {
 	noun: "sleep",
 };
 
+/// Metadata for Markdown notes, keyed by the ID in their front matter.
+pub(crate) const NOTES: Table = Table {
+	name: "notes",
+	key: &["id"],
+	columns: &[
+		column("id", Text),
+		column("color", Text),
+		column("links", Json),
+	],
+	synced: true,
+	noun: "note",
+};
+
 /// Synced tables of app data rather than preferences: database sync
 /// replicates their rows like the settings tables', but they are not part of
 /// `Config`, so nothing that reads or saves settings looks at them.
-pub(crate) const DATA_TABLES: [&Table; 1] = [&SLEEP_NIGHTS];
+pub(crate) const DATA_TABLES: [&Table; 2] = [&SLEEP_NIGHTS, &NOTES];
 
 /// Creates [`DATA_TABLES`]. Idempotent, and run on first use and whenever
-/// database sync starts, so no schema version change was needed to add them.
+/// database sync starts. Schema 7 also creates these during database upgrade.
 pub(crate) const CREATE_DATA: &str = "
+    CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY, color TEXT NOT NULL DEFAULT 'butter', links TEXT NOT NULL DEFAULT '[]');
     CREATE TABLE IF NOT EXISTS sleep_nights (calendar_id TEXT NOT NULL, id TEXT NOT NULL, wake_date TEXT NOT NULL, start_at TEXT NOT NULL, end_at TEXT NOT NULL, event TEXT NOT NULL, PRIMARY KEY (calendar_id, id));";
 
 /// Creates [`DATA_TABLES`] and the change counters' triggers on them.

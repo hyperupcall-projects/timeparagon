@@ -118,7 +118,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
                 button(text("Choose folder").size(metrics.label())).on_press(Message::Settings(SettingsMessage::NotesDirectoryBrowse)),
                 button(text("Apply").size(metrics.label())).on_press(Message::Settings(SettingsMessage::NotesDirectoryApply)),
             ].spacing(metrics.spacing),
-            text("To see the same notes on mobile, sync this folder and choose its copy there. Notes do not use database sync.").size(metrics.label()),
+            text("To see the same notes on mobile, sync this folder and choose its copy there. Colors and connections use database sync.").size(metrics.label()),
             text(state.notes.error.as_deref().unwrap_or("")).size(metrics.label()),
         ].spacing(metrics.spacing).into(), metrics),
         section("Appearance", appearance(state, metrics), metrics),

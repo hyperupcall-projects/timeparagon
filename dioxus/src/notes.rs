@@ -256,7 +256,7 @@ pub fn NotesSettings(
 				}
 			}, "Apply" }
 		}
-		p { class: "hint", "Sync this folder with your desktop notes folder to see the same Markdown notes on both devices. Notes do not use database sync." }
+		p { class: "hint", "Sync this folder with your desktop notes folder to see the same Markdown notes on both devices. Colors and connections use database sync." }
 		if let Some(error) = problem() { p { class: "error-text", role: "alert", "{error}" } }
 	}
 }

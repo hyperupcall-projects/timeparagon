@@ -567,7 +567,7 @@ pub fn SetupFlow(on_finish: EventHandler<()>) -> Element {
 			p {
 				"Use "
 				b { "Syncthing" }
-				" to keep that folder in step with the notes folder on your computer; notes do not travel through database sync."
+				" to keep that folder in step with the notes folder on your computer; note text stays in this folder, while colors and connections use database sync."
 			}
 			p { class: "hint",
 				"Create and share the folder in Syncthing first, then choose it here with Choose folder."

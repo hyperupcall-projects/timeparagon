@@ -1,15 +1,14 @@
 //! Markdown notes, one `.md` file per note in the directory set by
 //! `notes.directory` setting, which each device has its own of.
 //!
-//! A note's file name is its title. Its color and connections, when it has
-//! any, are kept in front matter at the top of the file (see [`files`]), so
-//! the directory reads well in any other Markdown editor. Nothing about notes
-//! is kept in the database.
+//! A note's file name is its title. Front matter holds its stable ID; color
+//! and connections are stored in the database and replicated by database sync.
 
 #[cfg(target_os = "android")]
 pub mod android;
 mod files;
 pub mod markdown;
+mod store;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -118,8 +117,7 @@ impl Link {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Note {
-	/// The stable ID used by the editor while the app runs. It is not saved:
-	/// a note read from disk is identified by its file name.
+	/// The stable ID saved in Markdown front matter and used as the database key.
 	pub id: String,
 	pub title: String,
 	#[serde(default)]
@@ -137,10 +135,12 @@ pub struct Note {
 	/// The file it was last read from or saved to, within the directory.
 	#[serde(skip)]
 	pub file: Option<String>,
-	/// Front matter lines this app does not use, such as tags added in
-	/// another editor. They are written back as they were.
+	/// Front matter has unused fields to remove when the file is rewritten.
 	#[serde(skip)]
-	pub extra: String,
+	pub(crate) cleanup: bool,
+	/// The Markdown reader found legacy metadata that needs importing.
+	#[serde(skip)]
+	pub(crate) migrate: bool,
 }
 
 impl Note {
@@ -158,10 +158,7 @@ impl Note {
 
 	/// Nothing the user would miss: an abandoned "New note".
 	pub fn is_blank(&self) -> bool {
-		self.title.trim().is_empty()
-			&& self.body.trim().is_empty()
-			&& self.links.is_empty()
-			&& self.extra.trim().is_empty()
+		self.title.trim().is_empty() && self.body.trim().is_empty() && self.links.is_empty()
 	}
 
 	/// Whether what is saved of the two is the same.
@@ -170,7 +167,6 @@ impl Note {
 			&& self.body == other.body
 			&& self.color == other.color
 			&& self.links == other.links
-			&& self.extra == other.extra
 	}
 }
 
@@ -232,6 +228,9 @@ pub struct Library {
 	/// Files of deleted notes, removed by the next save.
 	#[serde(skip)]
 	pub removed: Vec<String>,
+	/// IDs whose metadata is removed after their files are successfully deleted.
+	#[serde(skip)]
+	pub removed_ids: Vec<String>,
 }
 
 impl Library {
@@ -249,6 +248,18 @@ impl Library {
 
 	/// [`Self::load`], with the error.
 	pub fn read(directory: &Path) -> std::io::Result<Self> {
+		let mut database = crate::task_db::open().map_err(std::io::Error::other)?;
+		store::read(directory, database.connection())
+	}
+
+	/// Saves metadata before writing files, so a failed database write never
+	/// strips the only copy of legacy front matter.
+	pub fn save(&self, directory: &Path) -> std::io::Result<Saved> {
+		let mut database = crate::task_db::open().map_err(std::io::Error::other)?;
+		store::save(self, directory, database.connection())
+	}
+
+	fn read_files(directory: &Path) -> std::io::Result<Self> {
 		#[cfg(target_os = "android")]
 		if android::is_tree(directory) {
 			return android::read(directory);
@@ -256,10 +267,7 @@ impl Library {
 		files::read(directory)
 	}
 
-	/// Writes every note to its file, renaming the files of retitled notes and
-	/// removing those of deleted ones. Files this library does not know about,
-	/// such as ones made in another editor since it was read, are left alone.
-	pub fn save(&self, directory: &Path) -> std::io::Result<Saved> {
+	fn write_files(&self, directory: &Path) -> std::io::Result<Saved> {
 		#[cfg(target_os = "android")]
 		if android::is_tree(directory) {
 			return android::save(self, directory);
@@ -275,21 +283,19 @@ impl Library {
 			}
 		}
 		self.removed.retain(|file| !saved.removed.contains(file));
+		if self.removed.is_empty() {
+			self.removed_ids.clear();
+		}
 	}
 
-	/// Carries what is only known in memory (ids, revisions, and the title as
+	/// Carries what is only known in memory (revisions and the title as
 	/// typed rather than as the file name has it) from `previous` over to this
-	/// freshly read copy, matching notes by file.
+	/// freshly read copy, matching notes by stable ID.
 	pub fn adopt_identities(&mut self, previous: &Self) {
 		for note in &mut self.notes {
-			let Some(old) = previous
-				.notes
-				.iter()
-				.find(|old| old.file.is_some() && old.file == note.file)
-			else {
+			let Some(old) = previous.notes.iter().find(|old| old.id == note.id) else {
 				continue;
 			};
-			note.id = old.id.clone();
 			note.revision = old.revision;
 			if files::file_stem(&old.title) == note.title {
 				note.title = old.title.clone();
@@ -316,7 +322,8 @@ impl Library {
 			modified_ms: crate::clock::now().timestamp_millis(),
 			revision: 1,
 			file: None,
-			extra: String::new(),
+			cleanup: false,
+			migrate: false,
 		});
 		id
 	}
@@ -337,7 +344,9 @@ impl Library {
 		let Some(index) = self.notes.iter().position(|note| note.id == id) else {
 			return;
 		};
-		if let Some(file) = self.notes.remove(index).file {
+		let note = self.notes.remove(index);
+		self.removed_ids.push(note.id);
+		if let Some(file) = note.file {
 			self.removed.push(file);
 		}
 	}
@@ -384,13 +393,26 @@ impl Library {
 }
 
 /// A cheap summary of the directory's Markdown files (their names, sizes and
-/// modification times), so a poll only rereads the notes when it changes.
+/// modification times) and database metadata counter, for polling changes.
 pub fn fingerprint(directory: &Path) -> u64 {
-	#[cfg(target_os = "android")]
-	if android::is_tree(directory) {
-		return android::fingerprint(directory);
-	}
-	files::fingerprint(directory)
+	use std::hash::{Hash, Hasher};
+	let mut hash = std::collections::hash_map::DefaultHasher::new();
+	let files = {
+		#[cfg(target_os = "android")]
+		if android::is_tree(directory) {
+			android::fingerprint(directory)
+		} else {
+			files::fingerprint(directory)
+		}
+		#[cfg(not(target_os = "android"))]
+		files::fingerprint(directory)
+	};
+	files.hash(&mut hash);
+	crate::task_db::path()
+		.and_then(|path| crate::local_changes::read(&path).ok())
+		.map(|counters| counters.notes)
+		.hash(&mut hash);
+	hash.finish()
 }
 
 #[cfg(test)]
@@ -466,12 +488,12 @@ mod tests {
 
 		assert_eq!(names(directory.path()), ["Plain.md", "Rich.md"]);
 		let plain_text = std::fs::read_to_string(directory.path().join("Plain.md")).unwrap();
-		assert_eq!(plain_text, "# Hello\n\nworld\n");
-		let rich_text = std::fs::read_to_string(directory.path().join("Rich.md")).unwrap();
 		assert_eq!(
-			rich_text,
-			"---\ncolor: rose\nlinks:\n  - {\"kind\":\"habit\",\"id\":\"h1\",\"title\":\"Read\"}\n---\ntext"
+			plain_text,
+			format!("---\nid: \"{plain}\"\n---\n# Hello\n\nworld\n")
 		);
+		let rich_text = std::fs::read_to_string(directory.path().join("Rich.md")).unwrap();
+		assert_eq!(rich_text, format!("---\nid: \"{rich}\"\n---\ntext"));
 
 		let mut read = Library::load(directory.path());
 		read.adopt_identities(&library);
@@ -525,7 +547,7 @@ mod tests {
 	}
 
 	#[test]
-	fn front_matter_from_another_editor_is_kept() {
+	fn unused_front_matter_is_removed() {
 		let directory = tempfile::tempdir().unwrap();
 		std::fs::write(
             directory.path().join("Mixed.md"),
@@ -541,7 +563,7 @@ mod tests {
 		library.edit(&id, |note| note.body = "changed\n".into());
 		save(&mut library, directory.path());
 		let text = std::fs::read_to_string(directory.path().join("Mixed.md")).unwrap();
-		assert!(text.contains("tags:\n  - life\n"), "{text}");
+		assert_eq!(text, format!("---\nid: \"{id}\"\n---\nchanged\n"));
 		assert!(text.ends_with("---\nchanged\n"), "{text}");
 	}
 
@@ -556,7 +578,6 @@ mod tests {
 		save(&mut library, directory.path());
 		let read = Library::load(directory.path());
 		assert_eq!(read.notes[0].body, "---\nnot: front matter\n---\nend");
-		assert!(read.notes[0].extra.is_empty());
 	}
 
 	#[test]

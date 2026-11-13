@@ -900,7 +900,7 @@ mod tests {
 		assert_eq!(store.library.notes.len(), 2);
 		assert_eq!(
 			std::fs::read_to_string(folder.path().join("Draft.md")).unwrap(),
-			"pending"
+			format!("---\nid: \"{id}\"\n---\npending")
 		);
 		assert!(store.error.is_none());
 	}
@@ -920,7 +920,7 @@ mod tests {
 		store.configure(Some(new.path().into())).unwrap();
 		assert_eq!(
 			std::fs::read_to_string(old.path().join("Old.md")).unwrap(),
-			"last edit"
+			format!("---\nid: \"{id}\"\n---\nlast edit")
 		);
 		assert_eq!(store.library.notes.len(), 1);
 		assert_eq!(store.library.notes[0].title, "New");
@@ -941,12 +941,16 @@ mod tests {
 		let id = state.notes.library.notes[0].id.clone();
 		act(&mut state, Action::Open(id.clone()));
 
-		std::fs::write(path.join("A.md"), "new").unwrap();
+		std::fs::write(path.join("A.md"), format!("---\nid: \"{id}\"\n---\nnew")).unwrap();
 		state.notes.reload_shared();
 		assert_eq!(state.notes.editor.text().trim_end(), "new");
 		assert_eq!(state.notes.open.as_deref(), Some(id.as_str()));
 
-		std::fs::remove_file(path.join("A.md")).unwrap();
+		std::fs::rename(path.join("A.md"), path.join("Renamed.md")).unwrap();
+		state.notes.reload_shared();
+		assert_eq!(state.notes.open.as_deref(), Some(id.as_str()));
+		assert_eq!(state.notes.library.note(&id).unwrap().title, "Renamed");
+		std::fs::remove_file(path.join("Renamed.md")).unwrap();
 		state.notes.reload_shared();
 		assert!(state.notes.open.is_none());
 	}
@@ -964,16 +968,21 @@ mod tests {
 			&mut state,
 			Action::Edited(text_editor::Action::Edit(text_editor::Edit::Insert('x'))),
 		);
+		// Match the save worker: these edits belong to the snapshot being saved.
+		state.notes.cache_stale = false;
 		let saved = state.notes.library.save(&path).unwrap();
 		act(&mut state, Action::Saved(Ok(saved)));
+		let id = state.notes.open.clone().unwrap();
 		assert_eq!(
 			std::fs::read_to_string(path.join("Plans.md"))
 				.unwrap()
 				.trim_end(),
-			"x"
+			format!("---\nid: \"{id}\"\n---\nx")
 		);
 
 		act(&mut state, Action::TitleChanged("Better plans".into()));
+		// Match the save worker: these edits belong to the snapshot being saved.
+		state.notes.cache_stale = false;
 		let saved = state.notes.library.save(&path).unwrap();
 		act(&mut state, Action::Saved(Ok(saved)));
 		assert!(!path.join("Plans.md").exists());

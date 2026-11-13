@@ -30,13 +30,17 @@ The setting is empty by default, and notes are not saved until it is set.
 - Characters that cannot be in a file name (`/ \ : * ? " < > |`) become `-`. An
   untitled note is `Untitled.md`. Notes with the same title are told apart as
   `Title 2.md`, `Title 3.md` and so on.
-- A note's color (unless it is the default) and its connections are kept in
-  front matter at the top of the file, which other Markdown editors such as
-  Obsidian show as properties. Other front matter, such as tags, is kept.
+- Front matter contains a stable `id`, so renaming a file in another editor
+  preserves its identity. Colors and connections are stored in the database's
+  `notes` table. All other front matter, including unused properties, is removed.
+- Existing notes are migrated automatically when loaded: their color and
+  connections are committed to the database before those properties are removed
+  from the file. Notes without IDs receive one.
 - Files changed, added, renamed or removed outside the app show up within a
   couple of seconds. Other files in the directory are left alone.
-- Notes are not stored in the database or synced through Turso. To share them
-  between devices, sync the directory itself (with Syncthing, say).
+- Note text stays in Markdown. To share notes between devices, sync the
+  directory itself (with Syncthing, say) and enable database sync for colors and
+  connections. Metadata follows each note's ID across folders and devices.
 - A new, empty note is dropped when closed.
 
 ## Editing
@@ -75,7 +79,9 @@ a note is always dark, on every theme.
 
 ## Deleting and conflicts
 
-- Deleting a note asks for confirmation, then deletes its file.
+- Deleting a note asks for confirmation, then deletes its file and database
+  metadata. Metadata for files removed outside the app is retained, so a file
+  temporarily absent during folder sync does not lose its connections.
 - An edit made in the app while the file was changed elsewhere overwrites that
   change.
 - Notes are available in both the desktop and Android apps. Saving does not

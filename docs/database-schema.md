@@ -38,9 +38,10 @@ The schema version is stored in `PRAGMA user_version`.
 | `user_version` | Meaning |
 | --- | --- |
 | `0` | New file. `Database::open` creates the schema. |
-| `2`, `3`, `4`, `5` | Upgraded to 6 on open: see below. |
-| `6` | Current (`task_db::SCHEMA_VERSION`). Like 5, with the app's tables, indexes and triggers prefixed `timeparagon_` instead of `timeslay_`, and the built-in calendar sources' IDs prefixed `timeparagon:` instead of `timeslay:`. |
-| anything else | Refused: `Unsupported database schema N; expected 6`. |
+| `2`, `3`, `4`, `5`, `6` | Upgraded to 7 on open: see below. |
+| `6` | Like 5, with the app's tables, indexes and triggers prefixed `timeparagon_` instead of `timeslay_`, and the built-in calendar sources' IDs prefixed `timeparagon:` instead of `timeslay:`. |
+| `7` | Current (`task_db::SCHEMA_VERSION`). Adds the synced `notes` metadata table. |
+| anything else | Refused: `Unsupported database schema N; expected 7`. |
 
 Builds from before version 5 refuse a version 5 file, so every TimeParagon
 process on a device (panel, dock, shortcut daemon, browser host) has to be
@@ -853,3 +854,25 @@ There are also small programs in `core/examples/`:
 | `database_history.rs` | Export every journaled version, including superseded values and deletions |
 | `sync_preflight.rs` | Check a sync server without changing it |
 | `sync_database.rs` | Enroll and sync without opening a window (`--watch` to keep running) |
+
+## Notes metadata
+
+```sql
+CREATE TABLE notes (
+    id TEXT PRIMARY KEY,
+    color TEXT NOT NULL DEFAULT 'butter',
+    links TEXT NOT NULL DEFAULT '[]'
+);
+```
+
+One row per Markdown note, keyed by the stable `id` in its front matter.
+`color` is a pastel name; `links` is a JSON array of connections (`kind`, `id`,
+`title`, optional `day`). Rows are replicated through the database sync journal.
+Titles and text stay in the Markdown files; filenames and folder paths are not
+stored in this table. The notes folder remains a device setting.
+
+Opening a notes folder imports legacy `color` and `links` front matter, adds
+missing IDs, and rewrites the migrated files after committing their metadata.
+Existing database metadata takes precedence on repeat imports. All unused front
+matter is removed, leaving only `id`. Explicit note deletion removes the row; an externally
+missing file leaves metadata intact to tolerate delays in folder sync.

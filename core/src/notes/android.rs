@@ -90,6 +90,7 @@ pub(super) fn read(directory: &Path) -> io::Result<Library> {
 			.map(|doc| files::parse(&doc.name, &doc.text, doc.modified))
 			.collect(),
 		removed: Vec::new(),
+		removed_ids: Vec::new(),
 	})
 }
 pub(super) fn fingerprint(directory: &Path) -> u64 {

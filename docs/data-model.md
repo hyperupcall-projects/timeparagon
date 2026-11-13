@@ -37,7 +37,7 @@ flowchart TB
 | **Google Calendar** | Events, time blocks, scheduled (dated) tasks, habit occurrences, sleep nights, meeting guests and replies | Google |
 | **Google Tasks** | Undated tasks (inbox, triaged, backlog) | Google |
 | **Google People** | Contacts, contact groups, Workspace directory | Google |
-| **SQLite** `timeparagon.sqlite3` | Habits, alarms, notepad, brain dump, projects and life areas, work sessions, [settings](#settings) (calendar choices, colors, places and travel, reminders, sleep schedule, …); caches of everything Google owns; local copies of edits being sent to Google | Turso, for six documents and the synced settings tables |
+| **SQLite** `timeparagon.sqlite3` | Habits, alarms, notepad, brain dump, projects and life areas, work sessions, note colors and connections, [settings](#settings) (calendar choices, colors, places and travel, reminders, sleep schedule, …); caches of everything Google owns; local copies of edits being sent to Google | Turso, for six documents and synced settings and data tables |
 | **`secrets.json`** | Google tokens, connected Gmail accounts, OpenRouter token | Not shared |
 | **Notes directory** | Markdown notes, one file each | Whatever syncs the folder (Syncthing, say) |
 
@@ -123,7 +123,7 @@ Many kinds of ID appear in the data. This table lists them all:
 | Habit section ID | string | | `habits::Section::id` |
 | Alarm ID | random `u64` | | `alarms::new_id` |
 | Project / life area / goal / objective / place ID | `u64` | Personal area is always `1` | `config`, `places` |
-| Note | its file name (`<title>.md`) | `Groceries.md` | `notes::files` |
+| Note | its front matter `id` and database primary key | `local-6601e8a5ac899-2` | `notes::files`, `notes::store` |
 | Contact | People API resource name | `people/c123…` | Google |
 | Edited item (`google_entities.id`) | `<calendar_id>\n<event_id>` | | `operations::key` |
 | Sync edit | 32 random hex chars, or `snapshot-` + 32 hex | | `database_sync` |
@@ -850,27 +850,30 @@ See [Reminders](./reminders.md).
 
 ## Notes
 
-Notes are **not in the database**. Each note is `<title>.md` in the folder set
-by the device setting `notes.directory`:
+Each note is `<title>.md` in the folder set by the device setting
+`notes.directory`. Its front matter contains a stable ID:
 
 ```markdown
 ---
-color: rose
-links:
-  - {"kind":"habit","id":"h1","title":"Read"}
-  - {"kind":"event","id":"5ok3…","title":"Standup","day":"2026-11-09"}
-tags: [kept, as-is]
+id: "local-6601e8a5ac899-2"
 ---
 The note itself, in Markdown.
 ```
 
-| Front matter | Meaning |
-| --- | --- |
-| `color` | `butter` (default, omitted), `peach`, `rose`, `lilac`, `lavender`, `sky`, `aqua`, `mint` |
-| `links` | Connections: `{kind, id, title, day?}`. `kind` is `event`, `time_block`, `task` or `habit`. The title and day are saved so the link still displays when that day is not loaded. A habit link targets the habit itself, not its events |
-| anything else | Kept and written back unchanged |
+The database's `notes` table stores one metadata row per ID:
 
-The file name is the note's identity. Characters not allowed in file names
+| Column | Meaning |
+| --- | --- |
+| `id` | Stable identity matching the Markdown front matter, preserved across renames |
+| `color` | `butter` (default), `peach`, `rose`, `lilac`, `lavender`, `sky`, `aqua`, `mint` |
+| `links` | JSON connections: `{kind, id, title, day?}`. `kind` is `event`, `time_block`, `task` or `habit`. The title and day keep the link readable when that day is not loaded. A habit link targets the habit itself, not its events |
+
+Metadata is shared through database sync; text is shared by syncing the folder.
+Existing files have their color and connections imported automatically when
+loaded, before those properties are removed from front matter. All unused
+front matter is discarded; only `id` remains.
+
+The file name supplies the note's title. Characters not allowed in file names
 become `-`, duplicate titles become `Title 2.md`, and an untitled note is
 `Untitled.md`. See [Notes](./notes.md).
 
