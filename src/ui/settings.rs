@@ -124,7 +124,6 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         section("Appearance", appearance(state, metrics), metrics),
         section("Dock", dock(state, metrics), metrics),
         section("Side panel", panel(state, metrics), metrics),
-        section("Overlays", overlays(state, metrics), metrics),
         section("Keyboard shortcuts", shortcuts(state, metrics), metrics),
         section(
             "Calendar view order",
@@ -472,49 +471,8 @@ fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 			state,
 			metrics
 		),
-		subsection("Day", metrics),
-		layout_number(
-			"Calendar day width (px)",
-			LayoutField::CalendarWidth,
-			state,
-			metrics
-		),
 		subsection("Week", metrics),
-		layout_number(
-			"Calendar week width (px)",
-			LayoutField::CalendarWeekWidth,
-			state,
-			metrics
-		),
 		week_view(state, metrics),
-		subsection("Month", metrics),
-		layout_number(
-			"Calendar month width (px)",
-			LayoutField::CalendarMonthWidth,
-			state,
-			metrics
-		),
-	]
-	.spacing(metrics.spacing)
-	.into()
-}
-
-fn overlays<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-	column![
-		subsection("Event/Habit/Task overlay", metrics),
-		layout_number(
-			"Event/Habit/Task details width (px)",
-			LayoutField::DetailWidth,
-			state,
-			metrics
-		),
-		subsection("Time block overlay", metrics),
-		layout_number(
-			"Time block panel width (px)",
-			LayoutField::TimeBlockWidth,
-			state,
-			metrics
-		),
 	]
 	.spacing(metrics.spacing)
 	.into()
@@ -1481,7 +1439,7 @@ mod tests {
 	}
 
 	#[test]
-	fn dock_hour_lines_and_overlay_widths_live_in_their_sections() {
+	fn dock_hour_lines_live_in_the_dock_section() {
 		use crate::app;
 		use iced_test::{Simulator, core::Settings};
 
@@ -1498,16 +1456,6 @@ mod tests {
 
 		let mut ui = Simulator::with_size(Settings::default(), size, appearance(&state, &metrics));
 		assert!(ui.find(iced::widget::Id::from("dock-hour-lines")).is_err());
-
-		let mut ui = Simulator::with_size(Settings::default(), size, overlays(&state, &metrics));
-		for label in [
-			"Event/Habit/Task overlay",
-			"Event/Habit/Task details width (px)",
-			"Time block overlay",
-			"Time block panel width (px)",
-		] {
-			assert!(ui.find(label).is_ok(), "missing {label}");
-		}
 	}
 
 	#[test]
