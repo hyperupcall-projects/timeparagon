@@ -3,6 +3,11 @@
 The mobile application is built around the day view, with the Habits tab as its
 own screen and the rest of the app in sheets over it:
 
+- In Day and Multi-day, hold a timed event or time block to select it. Drag
+  its body to move it with its duration intact (including between visible days),
+  or drag the circular top/bottom handles to change just the start/end. Times
+  snap to five minutes; tap elsewhere to dismiss the handles. A gesture changes
+  only that occurrence; use the editor to change a repeating series.
 - Adding tasks (with the desktop's quick-add keywords), events and time blocks.
 - Notes, with Markdown, colors and connections, kept as Markdown files in the
   notes directory chosen on each device.

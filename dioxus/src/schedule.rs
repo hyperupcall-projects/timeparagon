@@ -108,6 +108,12 @@ pub fn Planner(
 		settings.first_day_of_week,
 	);
 	let heading = calendar::month_heading(calendar::first_of_month(selected));
+	let gesture_context = loaded
+		.read()
+		.as_ref()
+		.and_then(|result| result.as_ref().ok())
+		.filter(|(requested, _)| *requested == dates)
+		.map(|(_, snapshot)| day::EditContext::new(&config.read(), snapshot));
 	let snapshot = loaded
 		.read()
 		.as_ref()
@@ -229,6 +235,9 @@ pub fn Planner(
 				}
 			}
 			if !full_month && !agenda_mode {
+				if let Some(context) = gesture_context {
+					crate::calendar_gestures::Gestures { context, on_saved: move |_| revision.set(revision() + 1) }
+				}
 				if let Some(snapshot) = snapshot {
 					{schedule_grid(&snapshot, &dates, &settings, time_format, shown_count, on_open, on_block, (!search.is_active()).then(|| config.read().clone()).as_ref())}
 				}
@@ -289,6 +298,9 @@ fn schedule_grid(
 					}
 					for (index, model) in models.iter().enumerate() {
 						div { key: "{model.day}", class: "grid planner-day-grid", aria_label: model.day.to_string(),
+							"data-calendar-day": model.day.to_string(),
+							"data-hour-start": model.hour_start,
+							"data-clock": if time_format == TimeFormat::TwelveHour { "12" } else { "24" },
 							for row in 0..48 {
 								div { class: if row % 2 == 0 { "hour-line" } else { "hour-line half-hour" }, style: "top:{row as f32 * HOUR_HEIGHT / 2.0}px;" }
 							}
@@ -302,6 +314,14 @@ fn schedule_grid(
 									rsx! {
 										button { key: "{timed.event.id}", class: if is_block { "grid-event block" } else { "grid-event" }, "data-sending": timed.event.details.sending, disabled: timed.event.details.sending,
 											style: "{crate::event_style(&shown)}",
+											"data-calendar-event": timed.event.id.clone(),
+											"data-event-calendar": timed.event.calendar_id.clone(),
+											"data-draggable": crate::calendar_gestures::can_drag(&timed.event).to_string(),
+											"data-start-min": timed.start_min,
+											"data-end-min": timed.end_min,
+											"data-duration": (timed.event.end - timed.event.start).num_minutes(),
+											"data-before-start": timed.event.start.timestamp(),
+											"data-before-end": timed.event.end.timestamp(),
 											title: "{timed.title}\n{crate::event_when(&timed.event, time_format)}",
 											onclick: move |_| { if is_block { on_block.call(opened.clone()); } else { on_open.call(opened.clone()); } },
 											{crate::event_label(timed, crate::event_height(timed), time_format)}
