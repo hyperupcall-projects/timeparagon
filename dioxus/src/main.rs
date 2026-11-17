@@ -8,6 +8,7 @@
 
 mod agenda;
 mod alarms;
+mod calendar_gestures;
 mod create;
 mod day;
 mod editor;
@@ -884,6 +885,12 @@ fn Main() -> Element {
 						}
 					}
 					{timeline(model, &travel, &settings, time_format, selected_block, editing, sleep_timer)}
+					if let Some(snapshot) = &snapshot {
+						calendar_gestures::Gestures {
+							context: EditContext::new(&config.read(), snapshot),
+							on_saved: move |_| revision.set(revision() + 1),
+						}
+					}
 				}
 			}
 		}
@@ -2100,6 +2107,9 @@ fn timeline(
 					div { class: "timeline", style: "height: {grid_height}px;",
 						div { class: "gutter", style: "height: {grid_height}px;", {hours.into_iter()} }
 						div { class: "grid", style: "height: {grid_height}px;",
+							"data-calendar-day": model.day.to_string(),
+							"data-hour-start": model.hour_start,
+							"data-clock": if time_format == TimeFormat::TwelveHour { "12" } else { "24" },
 							{lines.into_iter()}
 							{events.into_iter()}
 							{block_tasks.into_iter()}
@@ -2213,6 +2223,14 @@ fn timed_event_view(
 				key: "{id}",
 				class: "grid-event block",
 				"data-sending": timed.event.details.sending,
+				"data-calendar-event": timed.event.id.clone(),
+				"data-event-calendar": timed.event.calendar_id.clone(),
+				"data-draggable": calendar_gestures::can_drag(&timed.event).to_string(),
+				"data-start-min": timed.start_min,
+				"data-end-min": timed.end_min,
+				"data-duration": (timed.event.end - timed.event.start).num_minutes(),
+				"data-before-start": timed.event.start.timestamp(),
+				"data-before-end": timed.event.end.timestamp(),
 				disabled: timed.event.details.sending,
 				style: "{style}",
 				title: "{tooltip}",
@@ -2233,6 +2251,14 @@ fn timed_event_view(
 				key: "{id}",
 				class: "grid-event sleep",
 				"data-sending": timed.event.details.sending,
+				"data-calendar-event": timed.event.id.clone(),
+				"data-event-calendar": timed.event.calendar_id.clone(),
+				"data-draggable": calendar_gestures::can_drag(&timed.event).to_string(),
+				"data-start-min": timed.start_min,
+				"data-end-min": timed.end_min,
+				"data-duration": (timed.event.end - timed.event.start).num_minutes(),
+				"data-before-start": timed.event.start.timestamp(),
+				"data-before-end": timed.event.end.timestamp(),
 				style: "{style}",
 				title: "{tooltip}",
 				button {
@@ -2254,6 +2280,14 @@ fn timed_event_view(
 				key: "{id}",
 				class: "grid-event",
 				"data-sending": timed.event.details.sending,
+				"data-calendar-event": timed.event.id.clone(),
+				"data-event-calendar": timed.event.calendar_id.clone(),
+				"data-draggable": calendar_gestures::can_drag(&timed.event).to_string(),
+				"data-start-min": timed.start_min,
+				"data-end-min": timed.end_min,
+				"data-duration": (timed.event.end - timed.event.start).num_minutes(),
+				"data-before-start": timed.event.start.timestamp(),
+				"data-before-end": timed.event.end.timestamp(),
 				disabled: timed.event.details.sending,
 				style: "{style}",
 				title: "{tooltip}",

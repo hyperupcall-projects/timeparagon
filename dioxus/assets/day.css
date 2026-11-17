@@ -3503,3 +3503,69 @@ textarea {
 .warning-item h3 { margin: 0; font-size: 14px; }
 .warning-item p { margin: 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .warning-actions { padding-top: 12px; }
+
+/* Long press lifts a copy above the grid, with Calendar-style edge knobs. */
+.grid-event[data-draggable="true"] {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+}
+.grid-event.gesture-source { opacity: 0.3; }
+.grid-event.calendar-selection {
+    z-index: 30;
+    overflow: visible;
+    outline: 2px solid var(--accent, #4285f4);
+    box-shadow: 0 6px 18px #0005;
+    cursor: grabbing;
+    touch-action: none;
+}
+.calendar-selection > :not(.calendar-resize):not(.calendar-drag-time) { pointer-events: none; }
+.calendar-resize {
+    position: absolute;
+    width: 44px;
+    height: 44px;
+    z-index: 2;
+    cursor: ns-resize;
+    touch-action: none;
+}
+.calendar-resize::after {
+    content: "";
+    position: absolute;
+    top: 15px;
+    left: 15px;
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--accent, #4285f4);
+    background: var(--card);
+    border-radius: 50%;
+    box-shadow: 0 1px 4px #0004;
+}
+.calendar-resize.start { top: -22px; left: -10px; }
+.calendar-resize.end { bottom: -22px; right: -10px; }
+.calendar-drag-time {
+    position: absolute;
+    left: 0;
+    bottom: calc(100% + 16px);
+    border-radius: 6px;
+    background: var(--card);
+    color: var(--text);
+    box-shadow: 0 2px 8px #0004;
+    padding: 4px 8px;
+    font-size: 12px;
+    white-space: nowrap;
+    pointer-events: none;
+}
+.calendar-selection.saving { opacity: 0.7; pointer-events: none; }
+.calendar-gesture-error {
+    position: fixed;
+    bottom: 80px;
+    left: 16px;
+    right: 16px;
+    z-index: 100;
+    padding: 12px;
+    border-radius: 10px;
+    background: var(--card);
+    color: var(--text);
+    box-shadow: 0 4px 16px #0005;
+}
+.calendar-drag-time.below { bottom: auto; top: calc(100% + 16px); }
