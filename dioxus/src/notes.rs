@@ -277,9 +277,29 @@ pub fn target_of(event: &Event, settings: &CalendarSettings) -> Option<Link> {
 	let day = event.start.date_naive();
 	Some(Link {
 		kind,
-		id: event.id.clone(),
+		// A task is known by its task ID, as on the desktop, so a note
+		// connected there shows here too.
+		id: task_id(event).unwrap_or_else(|| event.id.clone()),
 		title: event.title.clone(),
 		day: (day != tb::UNDATED).then_some(day),
+	})
+}
+
+fn task_id(event: &Event) -> Option<String> {
+	event
+		.details
+		.task_data
+		.as_ref()
+		.map(|data| data.id.to_string())
+}
+
+/// The connection this app used to make to a task, by its calendar event ID,
+/// which still shows the notes connected that way.
+pub fn former_target_of(event: &Event, settings: &CalendarSettings) -> Option<Link> {
+	let target = target_of(event, settings)?;
+	(target.id != event.id).then(|| Link {
+		id: event.id.clone(),
+		..target
 	})
 }
 
@@ -712,7 +732,12 @@ fn inline(key: usize, run: Inline) -> Element {
 
 /// The Notes section of an editor: what is connected to this item.
 #[component]
-pub fn LinkedNotes(target: Link) -> Element {
+pub fn LinkedNotes(
+	target: Link,
+	/// Another connection to the same item whose notes show here too.
+	#[props(default)]
+	former: Option<Link>,
+) -> Element {
 	let Some(NoteOpening(mut opening)) = try_use_context::<NoteOpening>() else {
 		return rsx! {};
 	};
@@ -721,10 +746,22 @@ pub fn LinkedNotes(target: Link) -> Element {
 	};
 	let mut library = store.library;
 	let new_target = target.clone();
-	let rows: Vec<Element> = library
+	let mut linked = library
 		.read()
 		.linked(&target)
 		.into_iter()
+		.cloned()
+		.collect::<Vec<_>>();
+	if let Some(former) = &former {
+		for note in library.read().linked(former) {
+			if !linked.iter().any(|own| own.id == note.id) {
+				linked.push(note.clone());
+			}
+		}
+		linked.sort_by_key(|note| std::cmp::Reverse(note.modified_ms));
+	}
+	let rows: Vec<Element> = linked
+		.iter()
 		.map(|note| {
 			let id = note.id.clone();
 			let style = pastel_css(note.color);
@@ -791,6 +828,65 @@ mod tests {
 		let link = target_of(&event("e", "Standup"), &CalendarSettings::default()).unwrap();
 		assert_eq!(link.kind, LinkKind::Event);
 		assert_eq!(link.day, NaiveDate::from_ymd_opt(2026, 11, 4));
+	}
+
+	#[test]
+	fn a_task_is_known_by_its_task_id_as_on_the_desktop() {
+		let settings = CalendarSettings::default();
+		let mut task = event("task:a", "Write report");
+		task.details.task_data = Some(timeparagon_core::task_db::TaskData {
+			id: 7,
+			metadata: Default::default(),
+		});
+		let link = target_of(&task, &settings).unwrap();
+		assert_eq!((link.kind, link.id.as_str()), (LinkKind::Task, "7"));
+		// Notes connected by its event ID before still show.
+		assert_eq!(former_target_of(&task, &settings).unwrap().id, "task:a");
+		assert_eq!(former_target_of(&event("e", "Standup"), &settings), None);
+	}
+
+	#[test]
+	fn a_note_card_shows_for_its_time_block_and_former_task_connection() {
+		let mut library = Library::default();
+		let block = Link {
+			kind: LinkKind::TimeBlock,
+			id: "b".into(),
+			title: "Deep work".into(),
+			day: None,
+		};
+		library.create("Block plan", vec![block.clone()]);
+		let former = Link {
+			kind: LinkKind::Task,
+			id: "task:a".into(),
+			title: "Write report".into(),
+			day: None,
+		};
+		library.create("Old task note", vec![former.clone()]);
+		let render = |target: Link, former: Option<Link>| {
+			let library = library.clone();
+			let mut dom = VirtualDom::new_with_props(
+				move |props: (Link, Option<Link>)| {
+					let store = use_context_provider(NotesStore::new);
+					let mut notes = store.library;
+					let library = library.clone();
+					use_hook(move || notes.set(library));
+					use_context_provider(|| NoteOpening(Signal::new(None)));
+					rsx! { LinkedNotes { target: props.0, former: props.1 } }
+				},
+				(target, former),
+			);
+			dom.rebuild_in_place();
+			dioxus_ssr::render(&dom)
+		};
+		let html = render(block, None);
+		assert!(html.contains("Block plan"), "{html}");
+		assert!(!html.contains("Old task note"), "{html}");
+		let task = Link {
+			id: "7".into(),
+			..former.clone()
+		};
+		assert!(!render(task.clone(), None).contains("Old task note"));
+		assert!(render(task, Some(former)).contains("Old task note"));
 	}
 
 	#[test]

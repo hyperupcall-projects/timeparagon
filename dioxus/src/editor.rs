@@ -565,7 +565,10 @@ fn TaskEditor(
 					}
 				}
 				if let Some(target) = crate::notes::target_of(&event, &context.settings) {
-					crate::notes::LinkedNotes { target }
+					crate::notes::LinkedNotes {
+						target,
+						former: crate::notes::former_target_of(&event, &context.settings),
+					}
 				}
 			}
 			FormSection { title: "Organization",
@@ -1269,7 +1272,10 @@ fn EventEditor(
 					}
 				}
 				if let Some(target) = crate::notes::target_of(&source_event, &context.settings) {
-					crate::notes::LinkedNotes { target }
+					crate::notes::LinkedNotes {
+						target,
+						former: crate::notes::former_target_of(&source_event, &context.settings),
+					}
 				}
 				if habit && !new {
 					Field { label: "Completion",

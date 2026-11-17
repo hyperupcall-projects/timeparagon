@@ -498,8 +498,17 @@ fn Main() -> Element {
 				.cached_snapshot()
 				.filter(|snapshot| snapshot.day == day)
 		});
-		let found =
-			known.and_then(|snapshot| snapshot.events.into_iter().find(|event| event.id == id));
+		// A note connects to a task by its task ID rather than its event's.
+		let found = known.and_then(|snapshot| {
+			snapshot.events.into_iter().find(|event| {
+				event.id == id
+					|| event
+						.details
+						.task_data
+						.as_ref()
+						.is_some_and(|data| data.id.to_string() == id)
+			})
+		});
 		if let Some(event) = found {
 			pending_open.set(None);
 			editing.set(Some(event));
@@ -2351,6 +2360,7 @@ fn time_block_modal(
 			day::capacity_label(block.capacity_minutes)
 		)
 	};
+	let note_target = notes::target_of(&block.event, &context.settings);
 	let task_word = if block.tasks.len() == 1 {
 		"task"
 	} else {
@@ -2401,6 +2411,9 @@ fn time_block_modal(
 						div { class: "capacity",
 							div { class: "{fill_class}", style: "width: {pct}%;" }
 						}
+					}
+					if let Some(target) = note_target {
+						notes::LinkedNotes { target }
 					}
 					div { class: "assigned-head",
 						span { class: "section-title", "Assigned tasks" }
