@@ -1,0 +1,23 @@
+import org.gradle.api.artifacts.repositories.MavenArtifactRepository
+
+// Dioxus regenerates the Android Gradle project on every build. Configure its
+// repositories before dependency resolution instead of patching generated files.
+// Mirror documented at https://docs.cloud.google.com/docs/buildpacks/java
+def mirrorCentral = { repositories ->
+    repositories.withType(MavenArtifactRepository).configureEach { repository ->
+        if (repository.url.host in ['repo.maven.apache.org', 'repo1.maven.org']) {
+            repository.setUrl('https://maven-central.storage-download.googleapis.com/maven2/')
+        }
+    }
+}
+
+beforeSettings { settings ->
+    mirrorCentral(settings.pluginManagement.repositories)
+    mirrorCentral(settings.dependencyResolutionManagement.repositories)
+}
+
+beforeProject { project ->
+    // The Kotlin and Android Gradle plugins use the buildscript classpath.
+    mirrorCentral(project.buildscript.repositories)
+    mirrorCentral(project.repositories)
+}

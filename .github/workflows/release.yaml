@@ -42,6 +42,13 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-android-gradle-${{ hashFiles('Cargo.lock', 'dioxus/Cargo.toml', 'scripts/build-android.sh') }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-android-gradle-
+      - name: Use Maven Central mirror
+        # dx invokes Gradle internally, so a command-line --init-script would
+        # only cover the build script's second Gradle invocation.
+        run: |
+          gradle_home="${GRADLE_USER_HOME:-$HOME/.gradle}"
+          mkdir -p "$gradle_home/init.d"
+          cp .github/gradle/maven-central-mirror.init.gradle "$gradle_home/init.d/"
       - name: Check signing secrets
         run: |
           for name in TIMEPARAGON_KEYSTORE_BASE64 TIMEPARAGON_KEYSTORE_PASSWORD; do
