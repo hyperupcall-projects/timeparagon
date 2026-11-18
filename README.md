@@ -52,7 +52,7 @@ Of course, there's also week, 2-week, and month views:
 		- Has special focus mode:
 			- Area to brain dump.
 			- Automatic pomodoro timer.
-			- Record distractions (integratead with habits) (TODO).
+			- Record distractions (integrated with habits).
 	- **Sleep:**
 		- Set sleep targets and plan bedtime/wakeup times per-day.
 		- Track expected sleep with actual sleep (TODO).

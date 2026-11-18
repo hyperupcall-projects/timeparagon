@@ -640,6 +640,8 @@ pub enum Action {
 
 	// Looking after a habit.
 	ToggleArchived(String),
+	/// Adds a habit to the distraction habits, or takes it off them.
+	SetDistraction(String, bool),
 	DeleteRequested(String),
 	DeleteEventsToggled(bool),
 	DeleteCancelled,
@@ -928,6 +930,13 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			}
 			persist(state)
 		}
+		Action::SetDistraction(id, distraction) => {
+			let Some(habit) = state.habits.library.habit_mut(&id) else {
+				return Task::none();
+			};
+			habit.distraction = distraction;
+			persist(state)
+		}
 		Action::DeleteRequested(id) => {
 			state.habits.menu = None;
 			state.habits.delete_events = false;
@@ -1104,6 +1113,16 @@ fn open_day(state: &mut State, id: String, day: NaiveDate) -> Task<Message> {
 	} else {
 		Task::none()
 	}
+}
+
+/// Opens today's dialog for a habit that just happened, with an entry for now
+/// ready to fill in. Nothing is recorded until it is saved.
+pub(crate) fn open_happened_now(state: &mut State, id: String) -> Task<Message> {
+	let task = open_day(state, id, crate::clock::now().date_naive());
+	if let Some(dialog) = &mut state.habits.day_dialog {
+		dialog.add(Log::Happened);
+	}
+	task
 }
 
 /// Records what the dialog holds, keeping calendar occurrences in step. A value

@@ -599,6 +599,7 @@ Stored as the `habits` document (shared), type `habits::Library`:
 | `measure` | `{unit, target?, days}`? | Record a number each day. `days` is 1, 7 or 30 (the period the target covers). Never affects the score |
 | `values` | `{date: i64}` | That number, in **thousandths**. Kept even if `measure` is turned off |
 | `area` | `u64`? | Life area ID. Unset means Personal |
+| `distraction` | bool | Offered by "I got distracted" in time-block focus mode. Left out while false |
 
 `Frequency` (externally tagged, snake case):
 
@@ -795,6 +796,8 @@ Recorded in time-block focus mode. Stored as the `shared.task_work` document
   means the work history survives the task moving between Tasks and Calendar.
 - The active session is the most recent one with `stopped_at = null`.
 - Distractions are 1, 5, 10, 15 or 30 minutes long.
+- A distraction caused by a distraction habit is also logged on that habit, in
+  its record for the day. The work log does not say which habit it was.
 
 The pomodoro timer (the `pomodoro.*` device settings) stores work
 and break lengths (25/5 by default), the current phase, the time remaining,

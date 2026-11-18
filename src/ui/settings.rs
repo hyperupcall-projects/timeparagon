@@ -133,6 +133,11 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
         section("Google Calendar", calendar(state, metrics), metrics),
         section("Google Tasks", google_tasks(state, metrics), metrics),
         section("Tasks", tasks(state, metrics), metrics),
+        section(
+            "Distraction habits",
+            distraction_habits(state, metrics),
+            metrics
+        ),
         section("Sleep", sleep(state, metrics), metrics),
         section(
             "Travel",
@@ -1103,6 +1108,65 @@ fn tasks<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 	indent(section.into(), metrics)
 }
 
+/// The habits a time block's "I got distracted" button asks about.
+fn distraction_habits<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+	use crate::habits::Action;
+	let library = &state.habits.library;
+	let chosen = library.distraction_habits();
+	let mut section = column![
+		text(
+			"\"I got distracted\" in a time block asks which of these it was, then records it on that habit."
+		)
+		.size(metrics.label())
+		.style(text::secondary),
+	]
+	.spacing(metrics.spacing);
+	for habit in &chosen {
+		let remove = button(text("Remove").size(metrics.label()))
+			.style(crate::ui::controls::secondary)
+			.on_press(Message::Habits(Action::SetDistraction(
+				habit.id.clone(),
+				false,
+			)));
+		let name = text(habit.name.as_str()).size(metrics.label());
+		let entry: Element<'a, Message> = if metrics.breakpoint.is_compact() {
+			column![name, remove].spacing(2.0).width(Fill).into()
+		} else {
+			row![name.width(Fill), remove]
+				.spacing(metrics.spacing)
+				.align_y(Center)
+				.into()
+		};
+		section = section.push(entry);
+	}
+	let available: Vec<CalendarOption> = library
+		.habits
+		.iter()
+		.filter(|habit| !habit.distraction && !habit.archived)
+		.map(|habit| CalendarOption {
+			id: habit.id.clone(),
+			name: habit.name.clone(),
+		})
+		.collect();
+	if !available.is_empty() {
+		section = section.push(
+			crate::ui::controls::pick_list(available, None::<CalendarOption>, |option| {
+				Message::Habits(Action::SetDistraction(option.id, true))
+			})
+			.placeholder("Add a habit")
+			.text_size(metrics.label())
+			.width(Fill),
+		);
+	} else if chosen.is_empty() {
+		section = section.push(
+			text("Create a habit on the Habits page to add it here.")
+				.size(metrics.label())
+				.style(text::secondary),
+		);
+	}
+	indent(section.into(), metrics)
+}
+
 /// Services a pasted link can come from, and the accounts each one reads as.
 fn integrations<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 	let accounts = &state.accounts;
@@ -1343,6 +1407,50 @@ mod tests {
 
 		let mut ui = Simulator::with_size(Settings::default(), size, preferences(&state, &metrics));
 		assert!(ui.find("Day ends at midnight").is_ok());
+	}
+
+	#[test]
+	fn distraction_habits_are_listed_added_and_removed_at_every_width() {
+		use crate::habits::{Action, Habit};
+		use iced_test::{Simulator, core::Settings};
+
+		let mut state = State::blank();
+		let mut phone = Habit::new("phone", "Check phone");
+		phone.distraction = true;
+		let mut old = Habit::new("old", "Archived distraction");
+		old.distraction = true;
+		old.archived = true;
+		state.habits.library.habits = vec![phone, old, Habit::new("read", "Read a book")];
+
+		for width in [200.0, 420.0, 900.0] {
+			let size = iced::Size::new(width, 900.0);
+			let metrics = Metrics::of(size);
+			let mut ui = Simulator::with_size(
+				Settings::default(),
+				size,
+				distraction_habits(&state, &metrics),
+			);
+			assert!(ui.find("Check phone").is_ok(), "{width}");
+			assert!(ui.find("Archived distraction").is_err(), "{width}");
+			let remove = ui.find("Remove").unwrap().bounds();
+			assert!(remove.x + remove.width <= width, "cut off at {width}");
+			let _ = ui.click("Remove").unwrap();
+			assert!(ui.into_messages().any(|message| matches!(
+				message,
+				Message::Habits(Action::SetDistraction(id, false)) if id == "phone"
+			)));
+		}
+
+		let _ = crate::habits::update(&mut state, Action::SetDistraction("read".into(), true));
+		let _ = crate::habits::update(&mut state, Action::SetDistraction("phone".into(), false));
+		let names: Vec<_> = state
+			.habits
+			.library
+			.distraction_habits()
+			.iter()
+			.map(|habit| habit.name.as_str())
+			.collect();
+		assert_eq!(names, ["Read a book"]);
 	}
 
 	#[test]

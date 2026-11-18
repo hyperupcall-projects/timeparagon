@@ -513,6 +513,9 @@ pub struct Habit {
 	/// The life area it belongs to, by id. Unset means the Personal area.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub area: Option<u64>,
+	/// Offered as the cause when a time block's focus is broken.
+	#[serde(default, skip_serializing_if = "std::ops::Not::not")]
+	pub distraction: bool,
 }
 
 impl Habit {
@@ -537,6 +540,7 @@ impl Habit {
 			measure: None,
 			values: BTreeMap::new(),
 			area: None,
+			distraction: false,
 		}
 	}
 
@@ -1345,6 +1349,14 @@ impl Library {
 		self.habits.iter_mut().find(|habit| habit.id == id)
 	}
 
+	/// The habits to choose from when a time block's focus is broken.
+	pub fn distraction_habits(&self) -> Vec<&Habit> {
+		self.habits
+			.iter()
+			.filter(|habit| habit.distraction && !habit.archived)
+			.collect()
+	}
+
 	/// Selects a sort. The current one reverses instead, except the manual order.
 	pub fn choose_sort(&mut self, key: SortKey) {
 		if key != SortKey::Manual && self.sort == key {
@@ -1777,6 +1789,35 @@ mod tests {
 
 	fn ago(days: i64) -> NaiveDate {
 		today() - Duration::days(days)
+	}
+
+	#[test]
+	fn distraction_habits_leave_out_archived_ones_and_old_records_still_load() {
+		let mut library = Library::default();
+		for (id, distraction, archived) in [
+			("phone", true, false),
+			("read", false, false),
+			("old", true, true),
+		] {
+			let mut habit = Habit::new(id, id);
+			habit.distraction = distraction;
+			habit.archived = archived;
+			library.habits.push(habit);
+		}
+		let ids: Vec<_> = library
+			.distraction_habits()
+			.iter()
+			.map(|habit| habit.id.as_str())
+			.collect();
+		assert_eq!(ids, ["phone"]);
+
+		let plain = serde_json::to_value(Habit::new("read", "Read")).unwrap();
+		assert!(plain.get("distraction").is_none(), "left out until set");
+		let old: Habit = serde_json::from_value(plain).unwrap();
+		assert!(!old.distraction);
+		let chosen = serde_json::to_string(&library.habits[0]).unwrap();
+		let restored: Habit = serde_json::from_str(&chosen).unwrap();
+		assert!(restored.distraction);
 	}
 
 	fn habit(frequency: Frequency) -> Habit {

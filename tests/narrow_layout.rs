@@ -2935,3 +2935,52 @@ fn a_distraction_is_recorded_from_the_focus_view_at_every_width() -> Result<(), 
 	}
 	Ok(())
 }
+
+#[test]
+fn a_distraction_habit_is_chosen_from_the_focus_view_at_every_width() -> Result<(), Error> {
+	use timeparagon::habits::Habit;
+	use timeparagon::timeblocking::{Action, DistractionCause};
+	for width in [200.0, 320.0, 480.0, 900.0] {
+		let size = Size::new(width, 900.0);
+		let mut state = focus_state();
+		let mut habit = Habit::new("phone", "Check phone");
+		habit.distraction = true;
+		state.habits.library.habits.push(habit);
+		let _ = app::update(&mut state, Message::TimeBlocking(Action::OpenDistraction));
+
+		let mut ui = render(&state, size);
+		assert!(ui.find("What distracted you?").is_ok(), "{width}");
+		assert!(ui.find("+5m").is_err(), "how long comes second at {width}");
+		for label in ["Check phone", "Something else"] {
+			let choice = ui.find(label)?.bounds();
+			assert!(choice.x + choice.width <= width, "{label} at {width}");
+		}
+		let _ = ui.click("Check phone")?;
+		let cause = DistractionCause::Habit("phone".into());
+		assert!(
+			ui.into_messages().any(|m| matches!(
+				&m,
+				Message::TimeBlocking(Action::ChooseDistraction(chosen)) if *chosen == cause
+			)),
+			"{width}"
+		);
+		let _ = app::update(
+			&mut state,
+			Message::TimeBlocking(Action::ChooseDistraction(cause)),
+		);
+
+		let mut ui = render(&state, size);
+		assert!(ui.find("How long were you distracted?").is_ok(), "{width}");
+		assert!(ui.find("Check phone").is_ok(), "{width}");
+		drop(ui);
+		let _ = app::update(&mut state, Message::TimeBlocking(Action::AddDistraction(5)));
+
+		// The habit's own dialog comes up over the focus view, ready to save.
+		let mut ui = render(&state, size);
+		assert!(ui.find("Distracted 5m · once").is_ok(), "{width}");
+		let save = ui.find("Save")?.bounds();
+		assert!(save.x + save.width <= width, "Save cut off at {width}");
+		assert!(state.habits.day_dialog.is_some(), "{width}");
+	}
+	Ok(())
+}

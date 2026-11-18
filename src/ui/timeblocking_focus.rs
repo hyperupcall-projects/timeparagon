@@ -7,7 +7,7 @@ use crate::{
 	app::{Message, State},
 	calendar::Event,
 	task_work,
-	timeblocking::{self as tb, Action},
+	timeblocking::{self as tb, Action, DistractionCause},
 };
 use chrono::{DateTime, Local, Utc};
 use iced::widget::canvas::{Frame, Geometry, Path, Stroke, Text};
@@ -516,8 +516,27 @@ fn distractions<'a>(state: &'a State, block: &'a Event) -> Element<'a, Message> 
 	.into()
 }
 
-/// Ask how long a distraction lasted. One press records it and closes.
-pub fn distraction_overlay<'a>(metrics: &Metrics) -> Element<'a, Message> {
+/// What the distraction was, when there are habits to choose from.
+fn distraction_causes<'a>(habits: Vec<&'a crate::habits::Habit>) -> Element<'a, Message> {
+	let choice = |label: &'a str, cause| {
+		button(text(label).size(13).width(Fill))
+			.width(Fill)
+			.on_press(msg(Action::ChooseDistraction(cause)))
+	};
+	let mut choices = column![].spacing(4);
+	for habit in habits {
+		choices = choices.push(
+			choice(&habit.name, DistractionCause::Habit(habit.id.clone()))
+				.style(crate::ui::controls::secondary),
+		);
+	}
+	choices = choices
+		.push(choice("Something else", DistractionCause::Other).style(crate::ui::controls::ghost));
+	crate::ui::controls::scrollable(choices).spacing(6).into()
+}
+
+/// How long the distraction lasted. One press records it and closes.
+fn distraction_lengths<'a>() -> Element<'a, Message> {
 	let mut choices = row![].spacing(6);
 	for minutes in task_work::DISTRACTION_MINUTES {
 		choices = choices.push(
@@ -526,20 +545,45 @@ pub fn distraction_overlay<'a>(metrics: &Metrics) -> Element<'a, Message> {
 				.style(crate::ui::controls::primary),
 		);
 	}
-	let card = container(
-		column![
-			row![
-				text("How long were you distracted?").size(16).width(Fill),
-				button(text("Cancel").size(13))
-					.on_press(msg(Action::CloseDistraction))
-					.style(crate::ui::controls::ghost),
-			]
-			.spacing(8)
-			.align_y(iced::Center),
-			choices.wrap().vertical_spacing(6),
+	choices.wrap().vertical_spacing(6).into()
+}
+
+/// Ask what a distraction was, if any distraction habits are set up, and then
+/// how long it lasted.
+pub fn distraction_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+	let library = &state.habits.library;
+	let cause = state.timeblocking.distraction_cause.as_ref();
+	let habits = library.distraction_habits();
+	let choosing = cause.is_none() && !habits.is_empty();
+	let chosen = match cause {
+		Some(DistractionCause::Habit(id)) => library.habit(id),
+		_ => None,
+	};
+	let mut body = column![
+		row![
+			text(if choosing {
+				"What distracted you?"
+			} else {
+				"How long were you distracted?"
+			})
+			.size(16)
+			.width(Fill),
+			button(text("Cancel").size(13))
+				.on_press(msg(Action::CloseDistraction))
+				.style(crate::ui::controls::ghost),
 		]
-		.spacing(10),
-	)
+		.spacing(8)
+		.align_y(iced::Center),
+	]
+	.spacing(10);
+	if let Some(habit) = chosen {
+		body = body.push(text(&habit.name).size(13).style(text::secondary));
+	}
+	let card = container(body.push(if choosing {
+		distraction_causes(habits)
+	} else {
+		distraction_lengths()
+	}))
 	.padding(16)
 	.width(Fill)
 	.max_width(420)

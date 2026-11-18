@@ -120,6 +120,15 @@ pub struct PendingJoin {
 	pub block: String,
 }
 
+/// The answer to what a distraction was.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DistractionCause {
+	/// One of the distraction habits, by id.
+	Habit(String),
+	/// Something no distraction habit covers.
+	Other,
+}
+
 #[derive(Default)]
 pub struct Workspace {
 	/// The recurring item whose move into a block is being confirmed.
@@ -140,8 +149,10 @@ pub struct Workspace {
 	pub session_start: String,
 	pub session_end: String,
 	pub session_error: Option<String>,
-	/// The choice of how long a distraction lasted is open.
+	/// The questions about a distraction are open.
 	pub distraction_open: bool,
+	/// What the open distraction was, once that has been answered.
+	pub distraction_cause: Option<DistractionCause>,
 	pub revision: u64,
 	pub date: String,
 	pub deadline: String,
@@ -257,10 +268,13 @@ pub enum Action {
 	SaveSession,
 	CloseSession,
 	DeleteSession,
-	/// Ask how long the distraction from the focused block lasted.
+	/// Ask what distracted from the focused block, and for how long.
 	OpenDistraction,
 	CloseDistraction,
-	/// Record this many distracted minutes against the focused block.
+	/// Answer what the distraction was, which moves on to how long it lasted.
+	ChooseDistraction(DistractionCause),
+	/// Record this many distracted minutes against the focused block, then
+	/// open the habit that caused them, if one did.
 	AddDistraction(u32),
 	/// Take back the focused block's latest distraction.
 	UndoDistraction,
@@ -843,14 +857,20 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 		}
 		Action::OpenDistraction => {
 			state.timeblocking.distraction_open = state.timeblocking.focus.is_some();
+			state.timeblocking.distraction_cause = None;
 			return Task::none();
 		}
 		Action::CloseDistraction => {
 			state.timeblocking.distraction_open = false;
 			return Task::none();
 		}
+		Action::ChooseDistraction(cause) => {
+			state.timeblocking.distraction_cause = Some(cause);
+			return Task::none();
+		}
 		Action::AddDistraction(minutes) => {
 			state.timeblocking.distraction_open = false;
+			let cause = state.timeblocking.distraction_cause.take();
 			let Some(key) = focused_block_key(state) else {
 				return Task::none();
 			};
@@ -863,7 +883,13 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 					minutes,
 					recorded_at: crate::clock::utc_now(),
 				});
-			return crate::app::queue_save(state);
+			let saved = crate::app::queue_save(state);
+			return match cause {
+				Some(DistractionCause::Habit(id)) => {
+					Task::batch([saved, crate::habits::open_happened_now(state, id)])
+				}
+				_ => saved,
+			};
 		}
 		Action::UndoDistraction => {
 			let Some(key) = focused_block_key(state) else {
@@ -2958,6 +2984,77 @@ mod tests {
 
 		let _ = update(&mut state, Action::UndoDistraction);
 		assert_eq!(state.config.task_work.distracted(&key), (1, 5));
+	}
+
+	/// A focused block with one distraction habit, "phone".
+	fn distraction_habit_state() -> State {
+		let mut state = estimate_state();
+		let mut habit = crate::habits::Habit::new("phone", "Check phone");
+		habit.kind = crate::habits::Kind::No;
+		habit.distraction = true;
+		state.habits.library.habits.push(habit);
+		state
+	}
+
+	#[test]
+	fn a_distraction_habit_is_chosen_timed_and_then_filled_out() {
+		let mut state = distraction_habit_state();
+		let key = block_key(state.calendar.event("standup").unwrap());
+		let _ = update(&mut state, Action::OpenDistraction);
+		let _ = update(
+			&mut state,
+			Action::ChooseDistraction(DistractionCause::Habit("phone".into())),
+		);
+		assert!(state.timeblocking.distraction_open);
+		assert!(state.habits.day_dialog.is_none());
+
+		let _ = update(&mut state, Action::AddDistraction(10));
+		assert!(!state.timeblocking.distraction_open);
+		assert_eq!(state.config.task_work.distracted(&key), (1, 10));
+		let dialog = state.habits.day_dialog.as_ref().unwrap();
+		assert_eq!(dialog.habit_id, "phone");
+		assert_eq!(dialog.happened.len(), 1, "an entry for now is ready");
+		assert!(dialog.shows_happened());
+		let today = crate::clock::now().date_naive();
+		assert_eq!(
+			state.habits.library.habit("phone").unwrap().times_on(today),
+			0,
+			"nothing reaches the habit until the dialog is saved"
+		);
+
+		let _ = crate::habits::update(&mut state, crate::habits::Action::SaveDay);
+		assert!(state.habits.day_dialog.is_none());
+		assert_eq!(
+			state.habits.library.habit("phone").unwrap().times_on(today),
+			1
+		);
+	}
+
+	#[test]
+	fn a_distraction_no_habit_covers_is_only_timed() {
+		let mut state = distraction_habit_state();
+		let key = block_key(state.calendar.event("standup").unwrap());
+		let _ = update(&mut state, Action::OpenDistraction);
+		let _ = update(
+			&mut state,
+			Action::ChooseDistraction(DistractionCause::Other),
+		);
+		let _ = update(&mut state, Action::AddDistraction(5));
+		assert_eq!(state.config.task_work.distracted(&key), (1, 5));
+		assert!(state.habits.day_dialog.is_none());
+	}
+
+	#[test]
+	fn reopening_the_distraction_questions_starts_from_the_first() {
+		let mut state = distraction_habit_state();
+		let _ = update(&mut state, Action::OpenDistraction);
+		let _ = update(
+			&mut state,
+			Action::ChooseDistraction(DistractionCause::Habit("phone".into())),
+		);
+		let _ = update(&mut state, Action::CloseDistraction);
+		let _ = update(&mut state, Action::OpenDistraction);
+		assert_eq!(state.timeblocking.distraction_cause, None);
 	}
 
 	#[test]
