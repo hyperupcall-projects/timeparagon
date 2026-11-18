@@ -27,7 +27,12 @@ own screen and the rest of the app in sheets over it:
   charts, notes and calendar events, the add and edit form, the day dialog with
   its logs, archiving, deleting and CSV export (to the Download folder).
 - Alarms (**More → Alarms**): add, edit and delete dated alarms with a label and
-  sound. They sync through Turso and appear on the desktop calendar. Android
+  sound. **Actions → Set alarm**, or **Add alarm** in the Alarms sheet, opens a
+  purple needle on the calendar. Drag it to the exact minute or tap a time,
+  then press **Set alarm** in the bottom bar to confirm; **Cancel** discards the
+  selection. One finger still scrolls away from the needle, and two fingers
+  pinch to zoom while choosing. Alarms sync through Turso and appear on the
+  desktop calendar. Android
   delivers them as notifications, including while the app is closed; notification
   permission is required. Built-in sounds work on both devices; desktop audio
   files use Android’s default sound on the phone. Flash, volume, repeat and
