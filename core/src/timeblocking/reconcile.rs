@@ -2,9 +2,12 @@
 //!
 //! A task that repeats with a block is its own Google series, so it shows in
 //! Google Calendar, and the block is the source of truth for it: the task
-//! series has the block's repeat rule, starts where the block starts plus its
-//! place among the block's tasks, and has an occurrence only where the block
-//! does. Rather than copy each change to a block across by hand, this module
+//! series has the block's repeat rule and has an occurrence only where the
+//! block does. Its start includes its place among the block's tasks unless
+//! that crosses a calendar or planning day: then the rule stays anchored to
+//! the block's start and each occurrence is moved to its actual work time.
+//! This keeps overnight tasks attached, including with weekly/monthly rules.
+//! This module
 //! looks at what Google holds and works out the writes that make it so again
 //! ([`reconcile`]). Running it twice in a row makes no writes the second time.
 //!
@@ -25,7 +28,8 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
 
 use super::membership::{
-	block_of, is_follower, layout, original_start, planning_day, series_lineage, task_day, tasks_in,
+	block_of, is_follower, layout, original_start, planning_day, repeat_start, series_lineage,
+	task_day, tasks_in,
 };
 use super::metadata;
 use crate::calendar::{self, Event};
@@ -491,7 +495,8 @@ fn series_fixes(
 		}
 		let order = series.order();
 		let place = offset(&tracked, &span.series.lineage(), order, first_day);
-		let start = original_start(&first_block) + Duration::minutes(place);
+		let anchor = original_start(&first_block);
+		let start = repeat_start(anchor, anchor + Duration::minutes(place), day_start_hour);
 		let end = start + Duration::minutes(series.minutes());
 		// Ends with the block series, or earlier if it was ended earlier,
 		// but never before today.
@@ -574,7 +579,8 @@ fn series_fixes(
 		};
 		let next_day = planning_day(original_start(&next_first), day_start_hour);
 		let place = offset(&tracked, &next_span.series.lineage(), order, next_day);
-		let start = original_start(&next_first) + Duration::minutes(place);
+		let anchor = original_start(&next_first);
+		let start = repeat_start(anchor, anchor + Duration::minutes(place), day_start_hour);
 		let (skip, done) = carried(listing, series, next_day, day_start_hour);
 		fixes.push(Fix::Continue {
 			calendar: calendar.to_owned(),

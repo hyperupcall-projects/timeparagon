@@ -89,6 +89,30 @@ for (const edge of ['start', 'end']) {
     s.down(handle); s.move(100, 580); s.up();
     assert.deepEqual(s.writes[0], {id: 'event', calendar: 'work', before_start: 1000, before_end: 4600, start_delta: edge === 'start' ? 30 : 0, end_delta: edge === 'end' ? 30 : 0});
 }
+for (const [start, end, delta, edge] of [[1380, 1500, -30, 'start'], [-60, 60, 30, 'end'], [-60, 1500, 0, null]]) {
+    const s = setup();
+    Object.assign(s.source.dataset, {startMin: String(start), endMin: String(end), duration: String(end - start)});
+    s.down(); s.hold(); s.up();
+    const preview = s.preview();
+    assert.equal(preview.style.top, Math.max(0, start) + 'px', 'overnight preview clips only its drawing');
+    assert.equal(preview.style.height, (Math.min(1440, end) - Math.max(0, start)) + 'px');
+    assert.deepEqual(preview.children.filter(n => n.dataset.resize).map(n => n.dataset.resize), edge ? [edge] : [], 'only real event edges have resize handles');
+    s.down(preview); s.move(100, 550 + delta); s.up();
+    if (delta) {
+        assert.equal(s.writes[0].start_delta, delta, 'moving keeps the hidden portion of an overnight event');
+        assert.equal(s.writes[0].end_delta, delta);
+    } else {
+        assert.equal(s.writes.length, 0, 'holding an event longer than a day never moves it');
+    }
+}
+for (const [start, end, edge, delta] of [[1380, 1500, 'start', -30], [-60, 60, 'end', 30]]) {
+    const s = setup();
+    Object.assign(s.source.dataset, {startMin: String(start), endMin: String(end), duration: String(end - start)});
+    s.down(); s.hold(); s.up();
+    s.down(s.preview().children.find(n => n.dataset.resize === edge)); s.move(100, 550 + delta); s.up();
+    assert.equal(s.writes[0].start_delta, edge === 'start' ? delta : 0, 'resizing preserves the opposite overnight endpoint');
+    assert.equal(s.writes[0].end_delta, edge === 'end' ? delta : 0);
+}
 {
     const s = setup(); s.down(); s.hold(); s.up();
     s.down(s.preview().children.find(n => n.dataset.resize === 'start'));

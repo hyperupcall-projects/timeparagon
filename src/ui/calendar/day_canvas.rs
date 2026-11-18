@@ -876,7 +876,12 @@ impl DayCanvas {
 			if block.time_block {
 				let total: u32 = block.tasks.iter().map(|t| t.2).sum();
 				let duration = (block.end_min - block.start_min).max(1) as f32;
-				let occupied = (total as f32 / duration).min(1.0);
+				let visible_start = block.start_min.max(0) as f32;
+				let visible_end = block.end_min.min(DAY_MINUTES) as f32;
+				let occupied_end = (block.start_min as f32 + total as f32).min(visible_end);
+				let occupied = ((occupied_end - visible_start).max(0.0)
+					/ (visible_end - visible_start).max(1.0))
+				.min(1.0);
 				frame.fill_rectangle(
 					Point::new(block_bounds.x, block_bounds.y),
 					Size::new(block_bounds.width, block_bounds.height * occupied),
@@ -1320,9 +1325,9 @@ impl DayCanvas {
 		let bounds = self.block_rect(block, width);
 		let edge = EDGE_GRAB.min(bounds.height / 3.0);
 
-		let mode = if point.y - bounds.y <= edge {
+		let mode = if block.start_min >= 0 && point.y - bounds.y <= edge {
 			DragMode::ResizeStart
-		} else if bounds.y + bounds.height - point.y <= edge {
+		} else if block.end_min <= DAY_MINUTES && bounds.y + bounds.height - point.y <= edge {
 			DragMode::ResizeEnd
 		} else {
 			DragMode::Move
@@ -1408,18 +1413,22 @@ impl DayCanvas {
 		let travel = (cursor_y - drag.origin_y) / minute_height;
 		let delta = (travel / SNAP_MINUTES as f32).round() as i32 * SNAP_MINUTES;
 		let duration = drag.end_min - drag.start_min;
+		// Keep any part outside this day. Clamping the stored interval to
+		// the visible slice would shorten an overnight event on its first edit.
+		let lower = drag.start_min.min(0);
+		let upper = drag.end_min.max(DAY_MINUTES);
 
 		let (start, end) = match drag.mode {
 			DragMode::Move => {
-				let start = (drag.start_min + delta).clamp(0, DAY_MINUTES - duration);
+				let start = (drag.start_min + delta).clamp(lower, upper - duration);
 				(start, start + duration)
 			}
 			DragMode::ResizeStart => {
-				let start = (drag.start_min + delta).clamp(0, drag.end_min - MIN_DURATION);
+				let start = (drag.start_min + delta).clamp(lower, drag.end_min - MIN_DURATION);
 				(start, drag.end_min)
 			}
 			DragMode::ResizeEnd => {
-				let end = (drag.end_min + delta).clamp(drag.start_min + MIN_DURATION, DAY_MINUTES);
+				let end = (drag.end_min + delta).clamp(drag.start_min + MIN_DURATION, upper);
 				(drag.start_min, end)
 			}
 		};
@@ -1594,6 +1603,8 @@ impl DayCanvas {
 		start_min: i32,
 		end_min: i32,
 	) -> Rectangle {
+		let start_min = start_min.clamp(0, DAY_MINUTES);
+		let end_min = end_min.clamp(0, DAY_MINUTES);
 		let minute_height = self.hour_height / 60.0;
 		let grid_width = (width - self.gutter).max(40.0);
 		let columns = block.columns.max(1) as f32;

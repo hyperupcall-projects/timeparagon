@@ -502,6 +502,9 @@ pub struct TimedEvent {
 	pub calendar_name: String,
 	pub start_min: i32,
 	pub end_min: i32,
+	/// Full interval for editing, before clipping it to this day's grid.
+	pub scheduled_start_min: i32,
+	pub scheduled_end_min: i32,
 	pub column: usize,
 	pub columns: usize,
 	pub column_span: usize,
@@ -827,14 +830,23 @@ fn timed_events(
 		.iter()
 		.map(|block| (tb::block_key(&block.event), block))
 		.collect();
-	let shown_blocks: Vec<Event> = blocks.iter().map(|block| block.event.clone()).collect();
+	// Off-day blocks can be loaded for planning, but cannot stand in for a
+	// task that spills into this day after its block has ended.
+	let overlaps = |event: &&Event| event.start < view_end && event.end > view_start;
+	let block_events: Vec<Event> = block_events.iter().filter(overlaps).cloned().collect();
+	let shown_blocks: Vec<Event> = blocks
+		.iter()
+		.map(|block| &block.event)
+		.filter(overlaps)
+		.cloned()
+		.collect();
 
 	let mut visible: Vec<&Event> = events
 		.iter()
 		.filter(|event| !event.all_day)
 		.filter(|event| event.start < view_end && event.end > view_start)
 		.filter(|event| calendar::event_enabled(&snapshot.calendars, event, settings))
-		.filter(|event| !managed_copy(event, settings, block_events))
+		.filter(|event| !managed_copy(event, settings, &block_events))
 		// A task that already sits inside a visible block is read in that
 		// block's popup, not drawn a second time as a chip on the grid.
 		.filter(|event| {
@@ -879,6 +891,8 @@ fn timed_events(
 				calendar_name: calendar_name(snapshot, &event.calendar_id),
 				start_min: span.start_min,
 				end_min: span.end_min,
+				scheduled_start_min: minutes_into_day(event.start, day, offset),
+				scheduled_end_min: minutes_into_day(event.end, day, offset),
 				column: slot.column,
 				columns: slot.columns,
 				column_span: slot.column_span,
@@ -1968,6 +1982,88 @@ mod tests {
 		// Tasks remain because the Google Tasks source itself is still on.
 		assert_eq!(model.task_groups[0].tasks.len(), 1);
 		assert!(model.task_groups[0].tasks[0].block.is_none());
+	}
+
+	#[test]
+	fn overnight_events_keep_their_full_interval_for_gestures_on_both_days() {
+		for hour in [0, 3] {
+			let settings = CalendarSettings {
+				day_end_hour: hour,
+				..settings()
+			};
+			let next = day().succ_opt().unwrap();
+			let boundary = calendar::at_clock(next, hour, 0);
+			let event = event(
+				"overnight",
+				"work",
+				"Overnight",
+				boundary - Duration::hours(1),
+				boundary + Duration::hours(1),
+			);
+			for (on, shown, scheduled) in [
+				(day(), (1380, 1440), (1380, 1500)),
+				(next, (0, 60), (-60, 60)),
+			] {
+				let mut snapshot = snapshot(vec![event.clone()]);
+				snapshot.day = on;
+				let model = build_model(&snapshot, &settings);
+				let timed = &model.timed[0];
+				assert_eq!((timed.start_min, timed.end_min), shown);
+				assert_eq!(
+					(timed.scheduled_start_min, timed.scheduled_end_min),
+					scheduled
+				);
+			}
+		}
+	}
+
+	#[test]
+	fn a_task_spilling_into_the_next_day_is_not_hidden_by_an_off_day_block() {
+		for hour in [0, 3] {
+			for calendar_task in [false, true] {
+				let settings = CalendarSettings {
+					day_end_hour: hour,
+					..settings()
+				};
+				let next = day().succ_opt().unwrap();
+				let boundary = calendar::at_clock(next, hour, 0);
+				let block = event(
+					"b1",
+					"blocks",
+					"Deep work",
+					boundary - Duration::minutes(30),
+					boundary,
+				);
+				let mut assigned = task("a", "Write", Some("blocks/b1"), 1, 60, false);
+				assigned.all_day = false;
+				assigned.start = boundary - Duration::minutes(15);
+				assigned.end = boundary + Duration::minutes(45);
+				if calendar_task {
+					assigned.id = "calendar-task".into();
+					assigned.calendar_id = "blocks".into();
+				}
+				let mut snapshot = snapshot(vec![block.clone(), assigned.clone()]);
+				assert_eq!(
+					build_model(&snapshot, &settings)
+						.timed
+						.iter()
+						.map(|e| e.event.id.as_str())
+						.collect::<Vec<_>>(),
+					[block.id.as_str()]
+				);
+				snapshot.day = next;
+				let model = build_model(&snapshot, &settings);
+				assert_eq!(
+					model
+						.timed
+						.iter()
+						.map(|e| e.event.id.as_str())
+						.collect::<Vec<_>>(),
+					[assigned.id.as_str()]
+				);
+				assert_eq!((model.timed[0].start_min, model.timed[0].end_min), (0, 45));
+			}
+		}
 	}
 
 	#[test]

@@ -108,8 +108,20 @@ pub fn apply(
 		Change::Deadline(v) => data.metadata.deadline = *v,
 		Change::BacklogSection(v) => data.metadata.backlog_section = *v,
 		Change::JoinBlockSeries {
-			calendar, series, ..
-		} => data.metadata.block_series = Some(format!("{calendar}/{series}")),
+			calendar,
+			series,
+			from,
+		} => {
+			data.metadata.block_series = Some(format!("{calendar}/{series}"));
+			if task.details.recurring_event_id.is_none() {
+				// Anchor the rule to the block, even when reflow has put this
+				// task after midnight. Each occurrence is laid out separately.
+				let duration = task.end - task.start;
+				task.start =
+					tb::membership::repeat_start(*from, task.start, settings.day_start_hour());
+				task.end = task.start + duration;
+			}
+		}
 		Change::Time(start, end) | Change::Reflow(start, end) | Change::Block(_, start, end) => {
 			if let Change::Block(key, _, _) = change {
 				data.metadata.block = Some(key.clone());
@@ -537,6 +549,34 @@ mod tests {
 			saved.details.task_data.unwrap()
 		);
 	}
+	#[test]
+	fn joining_after_midnight_anchors_the_repeat_rule_to_the_blocks_start() {
+		let day = chrono::NaiveDate::from_ymd_opt(2030, 11, 4).unwrap();
+		let from = super::super::at_clock(day, 23, 0);
+		let start = from + Duration::minutes(90);
+		let placed = apply(
+			task(),
+			&settings(),
+			&Change::Time(start, start + Duration::minutes(45)),
+			0,
+		)
+		.unwrap();
+		let joined = apply(
+			placed,
+			&settings(),
+			&Change::JoinBlockSeries {
+				calendar: "app".into(),
+				series: "block".into(),
+				from,
+			},
+			0,
+		)
+		.unwrap();
+		assert_eq!(joined.start, from);
+		assert_eq!(joined.end, from + Duration::minutes(45));
+		assert_eq!(tb::metadata(&joined).minutes, 45);
+	}
+
 	#[test]
 	fn joining_a_block_series_links_the_task_until_it_leaves_the_block() {
 		let start =

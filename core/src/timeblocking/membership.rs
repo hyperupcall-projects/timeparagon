@@ -19,8 +19,9 @@
 //!   occurrence is ignored.
 //!
 //! Days are compared by when each occurrence was first scheduled (Google's
-//! `originalStartTime`), so moving one occurrence of a block to another day
-//! takes its tasks along.
+//! `originalStartTime`). Repeating tasks anchor that original start to the
+//! block and get their actual times from layout, so crossing midnight or
+//! moving a block occurrence to another day keeps its tasks attached.
 
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, TimeZone, Utc};
 
@@ -67,6 +68,23 @@ pub fn original_start(event: &Event) -> DateTime<Local> {
 /// counts as the day before.
 pub fn planning_day(when: DateTime<Local>, day_start_hour: u32) -> NaiveDate {
 	calendar::day_at(when, day_start_hour)
+}
+
+/// An original start for a task's repeat rule that stays on its block's
+/// calendar and planning day. If layout crosses either boundary, anchor the
+/// rule to the block and move each occurrence to its actual work time.
+pub fn repeat_start(
+	block_start: DateTime<Local>,
+	task_start: DateTime<Local>,
+	day_start_hour: u32,
+) -> DateTime<Local> {
+	if task_start.date_naive() == block_start.date_naive()
+		&& planning_day(task_start, day_start_hour) == planning_day(block_start, day_start_hour)
+	{
+		task_start
+	} else {
+		block_start
+	}
 }
 
 /// A series that Google Calendar split off ("this and following" edited on
@@ -596,15 +614,17 @@ mod tests {
 		let mut moved = occurrence("block", 10, 8);
 		moved.start += chrono::Duration::days(1);
 		assert!(in_block(&task, &moved, 0));
-		// A block running past midnight keeps its small-hours tasks when
-		// the planning day ends later than midnight.
-		let mut late = occurrence("task", 11, 0);
-		late.start += chrono::Duration::minutes(30);
-		late.details.original_start = Some(late.start);
-		late.details.task_data = task.details.task_data.clone();
-		let evening = occurrence("block", 10, 23);
-		assert!(in_block(&late, &evening, 4));
-		assert!(!in_block(&late, &evening, 0));
+		// Layout can put the actual work past midnight or a custom day
+		// boundary; the original start stays anchored to the block.
+		for (hour, boundary) in [(23, 0), (23, 4), (3, 4)] {
+			let evening = occurrence("block", 10, hour);
+			let mut late = occurrence("task", 10, hour);
+			late.start += chrono::Duration::minutes(90);
+			late.end = late.start + chrono::Duration::minutes(30);
+			late.details.task_data = task.details.task_data.clone();
+			assert!(in_block(&late, &evening, boundary));
+			assert!(!in_block(&late, &occurrence("block", 11, hour), boundary));
+		}
 	}
 
 	#[test]
