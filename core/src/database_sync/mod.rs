@@ -1097,7 +1097,7 @@ async fn transport(path: &Path, url: &str) -> io::Result<()> {
 		match tokio::time::timeout(Duration::from_secs(45), cycle).await {
 			Ok(Ok(())) => {
 				if set_status("Database synced".into()) {
-					log_activity("Connected to database sync".into());
+					log_activity("Database synced".into());
 				}
 				note_synced(url);
 			}
