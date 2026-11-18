@@ -1593,6 +1593,47 @@ fn save_event_place_at(database: &Path, event_id: &str, place: Option<u64>) -> i
 	})
 }
 
+/// Changes a saved place's title. What Mapbox knows the place by stays as it
+/// was, and a place another device has removed stays removed.
+pub fn save_place_name(id: u64, name: &str) -> io::Result<()> {
+	save_place_name_at(&database()?, id, name)
+}
+
+fn save_place_name_at(database: &Path, id: u64, name: &str) -> io::Result<()> {
+	update_at(database, |config| {
+		if let Some(place) = config.travel.places.iter_mut().find(|place| place.id == id) {
+			place.name = name.trim().to_owned();
+		}
+	})
+}
+
+/// Chooses how the trip between two saved places is made.
+pub fn save_travel_mode(
+	leg: crate::places::Leg,
+	mode: crate::places::TravelMode,
+) -> io::Result<()> {
+	save_travel_mode_at(&database()?, leg, mode)
+}
+
+fn save_travel_mode_at(
+	database: &Path,
+	leg: crate::places::Leg,
+	mode: crate::places::TravelMode,
+) -> io::Result<()> {
+	update_at(database, |config| {
+		config.travel.set_mode(leg.from, leg.to, mode);
+	})
+}
+
+/// Keeps a trip that was worked out, for every device to draw.
+pub fn save_travel_route(route: crate::places::SavedRoute) -> io::Result<()> {
+	save_travel_route_at(&database()?, route)
+}
+
+fn save_travel_route_at(database: &Path, route: crate::places::SavedRoute) -> io::Result<()> {
+	update_at(database, |config| config.travel.set_route(route))
+}
+
 /// Replaces the notepad's text. Its font size is a setting of each device.
 pub fn save_notepad_text(text: &str) -> io::Result<()> {
 	let notepad = NotepadText {
@@ -1948,6 +1989,62 @@ mod tests {
 		assert_eq!(saved.travel.places[0].address, "1 Main St");
 		assert_eq!(saved.travel.event_places.len(), 1);
 		assert_eq!(saved.travel.event_places["standup"], id);
+	}
+
+	#[test]
+	fn renaming_a_place_keeps_where_it_is() {
+		let (_directory, path) = database();
+		let found = crate::places::Found {
+			place_id: "mapbox-1".into(),
+			name: "Starbucks".into(),
+			address: "1 Main St".into(),
+			lat: 1.5,
+			lng: 2.5,
+		};
+		let id = save_found_place_at(&path, &found).unwrap();
+
+		save_place_name_at(&path, id, "  Study spot ").unwrap();
+		save_place_name_at(&path, id + 1, "Gone").unwrap();
+
+		let saved = Config::load_from(&path);
+		assert_eq!(saved.travel.places.len(), 1);
+		let place = &saved.travel.places[0];
+		assert_eq!(place.name, "Study spot");
+		assert_eq!(place.address, "1 Main St");
+		assert_eq!(place.place_id, "mapbox-1");
+		assert_eq!((place.lat, place.lng), (1.5, 2.5));
+	}
+
+	#[test]
+	fn a_trips_method_and_times_read_back_and_replace_older_ones() {
+		use crate::places::{Leg, Route, SavedRoute, TravelMode};
+
+		let (_directory, path) = database();
+		let leg = Leg { from: 1, to: 2 };
+		let route = |seconds| SavedRoute {
+			from: 1,
+			to: 2,
+			mode: TravelMode::Car,
+			seconds,
+			meters: 5000,
+		};
+
+		save_travel_mode_at(&path, leg, TravelMode::Bike).unwrap();
+		save_travel_mode_at(&path, leg, TravelMode::Car).unwrap();
+		save_travel_route_at(&path, route(600)).unwrap();
+		save_travel_route_at(&path, route(660)).unwrap();
+
+		let saved = Config::load_from(&path).travel;
+		assert_eq!(saved.modes.len(), 1);
+		assert_eq!(saved.mode_for(1, 2), TravelMode::Car);
+		assert_eq!(saved.routes.len(), 1);
+		assert_eq!(
+			saved.route(leg),
+			Some(Route {
+				seconds: 660,
+				meters: 5000
+			})
+		);
 	}
 
 	#[test]

@@ -22,7 +22,9 @@ pub use timeparagon_core::config::{
 	Pace, Project, ProjectsSettings, Status, TriageRequirements, WeekRange, config_path,
 	project_dirs,
 };
-pub use timeparagon_core::places::{DistanceUnit, Place, RouteMode, SavedRoute, TravelMode};
+pub use timeparagon_core::places::{
+	DistanceUnit, MapApp, Place, RouteMode, SavedRoute, TravelMode,
+};
 
 /// How long to wait after the last change before saving.
 pub const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
@@ -483,31 +485,6 @@ impl ViewSettings {
 	}
 }
 
-/// The map that "Open in Maps" shows a trip on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum MapApp {
-	#[default]
-	OpenStreetMap,
-	GoogleMaps,
-}
-
-impl MapApp {
-	pub const ALL: [MapApp; 2] = [Self::OpenStreetMap, Self::GoogleMaps];
-
-	pub fn label(self) -> &'static str {
-		match self {
-			Self::OpenStreetMap => "OpenStreetMap",
-			Self::GoogleMaps => "Google Maps",
-		}
-	}
-}
-
-impl std::fmt::Display for MapApp {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		f.write_str(self.label())
-	}
-}
-
 /// Places, the Mapbox access token, and how trips between places are made.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -532,7 +509,7 @@ pub struct TravelSettings {
 	/// The place each calendar event, by id, was given.
 	#[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
 	pub event_places: std::collections::BTreeMap<String, u64>,
-	/// The trips worked out so far, for the devices that do not work them out.
+	/// The trips worked out so far, by any device.
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	pub routes: Vec<SavedRoute>,
 }

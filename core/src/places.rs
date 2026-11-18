@@ -9,6 +9,7 @@ use serde_json::Value;
 use crate::calendar::Event;
 
 const SEARCH_URL: &str = "https://api.mapbox.com/search/searchbox/v1/forward";
+const DIRECTIONS_URL: &str = "https://api.mapbox.com/directions/v5/mapbox";
 
 /// The most places a search offers.
 const MAX_RESULTS: u32 = 8;
@@ -99,6 +100,31 @@ impl std::fmt::Display for TravelMode {
 	}
 }
 
+/// The map that "Open in Maps" shows a trip on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum MapApp {
+	#[default]
+	OpenStreetMap,
+	GoogleMaps,
+}
+
+impl MapApp {
+	pub const ALL: [MapApp; 2] = [Self::OpenStreetMap, Self::GoogleMaps];
+
+	pub fn label(self) -> &'static str {
+		match self {
+			Self::OpenStreetMap => "OpenStreetMap",
+			Self::GoogleMaps => "Google Maps",
+		}
+	}
+}
+
+impl std::fmt::Display for MapApp {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.write_str(self.label())
+	}
+}
+
 /// How the trip from one place to another is made, when that is not the default.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RouteMode {
@@ -178,6 +204,17 @@ pub fn hops(places: &[Place], home: Option<u64>, stops: &[Stop]) -> Vec<Hop> {
 	found
 }
 
+/// The different trips among `hops`, in the order they are first made.
+pub fn unique_legs(hops: impl IntoIterator<Item = Hop>) -> Vec<Leg> {
+	let mut legs: Vec<Leg> = Vec::new();
+	for hop in hops {
+		if !legs.contains(&hop.leg) {
+			legs.push(hop.leg);
+		}
+	}
+	legs
+}
+
 /// "12 min", or "1 h 05 min".
 pub fn duration_label(seconds: u32) -> String {
 	let minutes = seconds.div_ceil(60).max(1);
@@ -253,12 +290,14 @@ pub struct PlaceSettings {
 	pub event_places: BTreeMap<String, u64>,
 	/// How a trip is made until it is set otherwise.
 	pub default_mode: TravelMode,
+	/// The map "Open in Maps" opens a trip on.
+	pub map_app: MapApp,
 	/// Trips whose method was chosen by hand.
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	pub modes: Vec<RouteMode>,
 	/// Whether travel is shown on the calendar.
 	pub show: bool,
-	/// The trips the desktop app has worked out.
+	/// The trips worked out so far, by any device.
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	pub routes: Vec<SavedRoute>,
 }
@@ -270,6 +309,43 @@ impl PlaceSettings {
 			.iter()
 			.find(|route| route.from == from && route.to == to)
 			.map_or(self.default_mode, |route| route.mode)
+	}
+
+	/// Chooses how the trip from `from` to `to` is made.
+	pub fn set_mode(&mut self, from: u64, to: u64, mode: TravelMode) {
+		match self
+			.modes
+			.iter_mut()
+			.find(|route| route.from == from && route.to == to)
+		{
+			Some(route) => route.mode = mode,
+			None => self.modes.push(RouteMode { from, to, mode }),
+		}
+	}
+
+	/// Keeps a trip that was worked out, replacing any older answer for it.
+	pub fn set_route(&mut self, route: SavedRoute) {
+		match self
+			.routes
+			.iter_mut()
+			.find(|old| old.from == route.from && old.to == route.to && old.mode == route.mode)
+		{
+			Some(old) => *old = route,
+			None => self.routes.push(route),
+		}
+	}
+
+	/// The trips a day needs, given its timed events in the order they happen.
+	pub fn day_hops<'a>(&self, events: impl IntoIterator<Item = &'a Event>) -> Vec<Hop> {
+		let stops: Vec<Stop> = events
+			.into_iter()
+			.map(|event| Stop {
+				id: event.id.clone(),
+				title: event.title.clone(),
+				place: place_of(&self.places, &self.event_places, event),
+			})
+			.collect();
+		hops(&self.places, self.home, &stops)
 	}
 
 	/// How long this trip takes by its method, if that has been worked out.
@@ -510,6 +586,72 @@ pub fn parse_places(response: &Value) -> Vec<Found> {
 		.collect()
 }
 
+/// How long and how far a trip is, from Mapbox Directions. Blocking: run it on
+/// a worker thread.
+pub fn compute_route(
+	key: &str,
+	from: &Place,
+	to: &Place,
+	mode: TravelMode,
+) -> Result<Route, String> {
+	parse_route(&get(&route_url(key, from, to, mode))?)
+}
+
+/// The Directions request for a trip. Mapbox takes coordinates only, as
+/// `longitude,latitude` pairs. Its route distance is always returned in meters;
+/// display units must not affect this request or the cache key.
+pub fn route_url(key: &str, from: &Place, to: &Place, mode: TravelMode) -> String {
+	format!(
+		"{DIRECTIONS_URL}/{}/{},{};{},{}?overview=false&access_token={}",
+		mode.profile(),
+		from.lng,
+		from.lat,
+		to.lng,
+		to.lat,
+		urlencoding::encode(key),
+	)
+}
+
+pub fn parse_route(response: &Value) -> Result<Route, String> {
+	let route = response["routes"]
+		.as_array()
+		.and_then(|routes| routes.first())
+		.ok_or("Mapbox found no route between these places")?;
+
+	let seconds = route["duration"]
+		.as_f64()
+		.ok_or("Mapbox did not say how long the trip takes")?;
+
+	Ok(Route {
+		seconds: seconds.round().max(0.0) as u32,
+		meters: route["distance"].as_f64().unwrap_or(0.0).round().max(0.0) as u32,
+	})
+}
+
+/// A page of the chosen map showing the trip. Mapbox has no page of its own to
+/// send someone to. Both pages are given coordinates, as that is what a place
+/// is known by here.
+pub fn maps_url(app: MapApp, mode: TravelMode, from: &Place, to: &Place) -> String {
+	match app {
+		MapApp::OpenStreetMap => format!(
+			"https://www.openstreetmap.org/directions?engine={}&route={}%2C{}%3B{}%2C{}",
+			mode.osm_engine(),
+			from.lat,
+			from.lng,
+			to.lat,
+			to.lng,
+		),
+		MapApp::GoogleMaps => format!(
+			"https://www.google.com/maps/dir/?api=1&origin={}%2C{}&destination={}%2C{}&travelmode={}",
+			from.lat,
+			from.lng,
+			to.lat,
+			to.lng,
+			mode.google_travelmode(),
+		),
+	}
+}
+
 /// A GET against Mapbox. Blocking.
 pub fn get(url: &str) -> Result<Value, String> {
 	match crate::calendar::api::agent().get(url).call() {
@@ -553,6 +695,40 @@ mod tests {
 		assert_eq!(distance_label(0, DistanceUnit::Miles), "0.0 mi");
 		assert_eq!(distance_label(850, DistanceUnit::Kilometers), "850 m");
 		assert_eq!(distance_label(8047, DistanceUnit::Miles), "5.0 mi");
+	}
+
+	#[test]
+	fn a_trip_worked_out_again_replaces_only_its_own_answer() {
+		let route = |mode, seconds| SavedRoute {
+			from: 1,
+			to: 2,
+			mode,
+			seconds,
+			meters: 100,
+		};
+		let mut travel = PlaceSettings::default();
+		travel.set_route(route(TravelMode::Walk, 600));
+		travel.set_route(route(TravelMode::Car, 120));
+		travel.set_route(route(TravelMode::Walk, 660));
+
+		assert_eq!(
+			travel.routes,
+			[route(TravelMode::Walk, 660), route(TravelMode::Car, 120)]
+		);
+	}
+
+	#[test]
+	fn a_days_repeated_trip_is_listed_once_in_the_order_it_is_first_made() {
+		let hop = |from, to| Hop {
+			leg: Leg { from, to },
+			before: String::new(),
+			from_title: String::new(),
+			to_title: String::new(),
+		};
+		assert_eq!(
+			unique_legs([hop(1, 2), hop(2, 1), hop(1, 2)]),
+			[Leg { from: 1, to: 2 }, Leg { from: 2, to: 1 }]
+		);
 	}
 
 	#[test]

@@ -27,6 +27,7 @@ mod search;
 mod setup;
 mod sleep;
 mod style;
+mod travel;
 mod warnings;
 #[cfg(any(target_os = "android", test))]
 mod widget;
@@ -264,6 +265,7 @@ fn Main() -> Element {
 	// Kept while the app runs, so the sheet reopens on what it showed.
 	let people_store = use_signal(people::Store::live);
 	let mut show_alarms = use_signal(|| false);
+	let mut show_travel = use_signal(|| false);
 	use_effect(move || {
 		if page() != Page::Do
 			&& !(page() == Page::Plan && matches!(plan_view(), PlanView::Day | PlanView::MultiDay))
@@ -797,6 +799,7 @@ fn Main() -> Element {
 	let more_active = show_more()
 		|| page() == Page::Habits
 		|| show_notes()
+		|| show_travel()
 		|| show_log()
 		|| show_scratch().is_some();
 	let task_tabs = TaskTab::ALL.into_iter().map(|tab| {
@@ -1278,6 +1281,14 @@ fn Main() -> Element {
                             class: "btn",
                             onclick: move |_| {
                                 show_more.set(false);
+                                show_travel.set(true);
+                            },
+                            "Travel"
+                        }
+                        button {
+                            class: "btn",
+                            onclick: move |_| {
+                                show_more.set(false);
                                 page.set(Page::Habits);
                             },
                             "Habits"
@@ -1314,6 +1325,23 @@ fn Main() -> Element {
             }
         }
     });
+
+	let travel_sheet = show_travel().then(|| {
+		let connections = travel::connections(
+			selected_day,
+			snapshot.as_ref(),
+			&cached_days.read(),
+			&config.read(),
+		);
+		rsx! {
+			travel::TravelSheet {
+				config,
+				day: selected_day,
+				connections,
+				on_close: move |()| show_travel.set(false),
+			}
+		}
+	});
 
 	let people_settings = settings.clone();
 	let people_sheet = show_people().then(|| {
@@ -1806,6 +1834,7 @@ fn Main() -> Element {
 				on_close: move |_| show_alarms.set(false),
 			} }
 			{people_sheet}
+			{travel_sheet}
 			if show_log() {
 				div { class: "modal-backdrop", onclick: move |_| show_log.set(false),
 					div { class: "modal", onclick: move |event| event.stop_propagation(),

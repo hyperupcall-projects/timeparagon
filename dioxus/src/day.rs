@@ -1092,7 +1092,20 @@ pub fn capacity_label(minutes: i64) -> String {
 	duration_label(minutes)
 }
 
-/// The trips on the grid, with the times the desktop app worked out and synced.
+/// The day's timed events in the order the desktop walks them, so both find
+/// the same trips.
+fn timed_in_order(model: &DayModel) -> Vec<&TimedEvent> {
+	let mut timed: Vec<&TimedEvent> = model.timed.iter().collect();
+	timed.sort_by_key(|timed| (timed.event.start, timed.event.end));
+	timed
+}
+
+/// The trips a day's grid makes.
+pub fn day_hops(model: &DayModel, travel: &PlaceSettings) -> Vec<places::Hop> {
+	travel.day_hops(timed_in_order(model).into_iter().map(|timed| &timed.event))
+}
+
+/// The trips on the grid, with the times already worked out and synced.
 /// Nothing is asked of Mapbox here.
 pub fn travel_boxes(
 	model: &DayModel,
@@ -1102,19 +1115,8 @@ pub fn travel_boxes(
 	if !travel.show {
 		return Vec::new();
 	}
-	// The order the desktop walks a day's events in, so both find the same trips.
-	let mut timed: Vec<&TimedEvent> = model.timed.iter().collect();
-	timed.sort_by_key(|timed| (timed.event.start, timed.event.end));
-	let stops: Vec<places::Stop> = timed
-		.iter()
-		.map(|timed| places::Stop {
-			id: timed.event.id.clone(),
-			title: timed.event.title.clone(),
-			place: places::place_of(&travel.places, &travel.event_places, &timed.event),
-		})
-		.collect();
-
-	places::hops(&travel.places, travel.home, &stops)
+	let timed = timed_in_order(model);
+	day_hops(model, travel)
 		.into_iter()
 		.filter_map(|hop| {
 			let timed = timed.iter().find(|timed| timed.event.id == hop.before)?;
