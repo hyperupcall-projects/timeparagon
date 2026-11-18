@@ -531,8 +531,9 @@ pub(super) fn settings_section<'a>(state: &'a State, metrics: &Metrics) -> Eleme
 	let label = |label: &'static str| text(label).size(metrics.label()).style(text::secondary);
 
 	column![
-        super::settings::field(
+        super::settings::field_with_info(
             "Mapbox access token",
+            "Create a public access token from your Mapbox account. It is used to search for places and to calculate trip durations.",
             crate::ui::controls::text_input("Access token", &settings.api_key)
                 .on_input(|key| msg(Action::ApiKey(key)))
                 .secure(true)
@@ -540,9 +541,6 @@ pub(super) fn settings_section<'a>(state: &'a State, metrics: &Metrics) -> Eleme
                 .into(),
             metrics,
         ),
-        text("Create a public access token from your Mapbox account. It is used to search for places and to calculate trip durations.")
-            .size((metrics.label() - 1.0).max(10.0))
-            .style(text::secondary),
         super::settings::choice(
             "Usual travel method",
             TravelMode::ALL.to_vec(),
@@ -557,7 +555,11 @@ pub(super) fn settings_section<'a>(state: &'a State, metrics: &Metrics) -> Eleme
             |app| msg(Action::SetMapApp(app)),
             metrics,
         ),
-        label("Home"),
+        crate::ui::controls::with_info(
+            label("Home").width(iced::Fill),
+            "Your day’s travel starts and ends at Home. Place searches favor results near this address.",
+            metrics.label(),
+        ),
         location_control(
             state,
             PickTarget::Home,
@@ -565,9 +567,6 @@ pub(super) fn settings_section<'a>(state: &'a State, metrics: &Metrics) -> Eleme
             "Search for your home address",
             metrics,
         ),
-        text("Your day’s travel starts and ends at Home. Place searches favor results near this address.")
-            .size((metrics.label() - 1.0).max(10.0))
-            .style(text::secondary),
     ]
     .spacing(metrics.spacing)
     .into()

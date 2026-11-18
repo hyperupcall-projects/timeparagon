@@ -58,6 +58,21 @@ pub fn info_tip<'a>(description: &'a str, size: f32) -> Element<'a, Message> {
 	.into()
 }
 
+/// `content` with an info symbol at the end of its row. The content should
+/// fill the row: the symbol is then measured first, so a long label wraps
+/// instead of pushing it out of a narrow window.
+pub fn with_info<'a>(
+	content: impl Into<Element<'a, Message>>,
+	description: &'a str,
+	size: f32,
+) -> Element<'a, Message> {
+	row![content.into(), info_tip(description, size)]
+		.spacing(4)
+		.align_y(iced::Center)
+		.width(Fill)
+		.into()
+}
+
 pub fn field_label<'a>(label: &'a str, size: f32) -> iced::widget::Text<'a> {
 	text(label)
 		.size(size)

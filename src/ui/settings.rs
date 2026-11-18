@@ -11,6 +11,7 @@ use crate::calendar;
 use crate::config;
 use crate::integrations::accounts;
 
+use super::controls::with_info;
 use super::layout::{Breakpoint, Metrics};
 pub(super) use timeparagon_core::alarms::repeat_label;
 
@@ -20,6 +21,20 @@ pub(super) use timeparagon_core::alarms::repeat_label;
 const SCROLLBAR_GUTTER: f32 = 14.0;
 
 const SHORTCUTS_INFO: &str = "Global shortcuts. Each action can have several, and any of them triggers it. Combine Ctrl, Alt, Shift or Meta with a letter, number or named key (e.g. Space or F2).";
+const SYNC_URL_INFO: &str = "Leave blank to disable sync.";
+const NOTES_INFO: &str = "To see the same notes on mobile, sync this folder and choose its copy there. Colors and connections use database sync.";
+const DOCK_RESERVATION_INFO: &str =
+	"Enabling prevents maximized windows from overlapping the dock.";
+const PANEL_RESERVATION_INFO: &str =
+	"Enabling prevents maximized windows from overlapping the panel.";
+const TRANSITION_INFO: &str = "Customize the app's transition effects for KDE.";
+const CALENDAR_ORDER_INFO: &str =
+	"Top to bottom sets left to right when events overlap. App-managed task lists are omitted.";
+const SLEEP_INFO: &str = "Each row is the night ending on that weekday. Bedtimes later than wake-up are on the preceding evening. Changes apply from today through four weeks ahead.";
+const GOOGLE_OAUTH_INFO: &str = "Create a Desktop OAuth client in Google Cloud; enable the Calendar API, Tasks API, and the Gmail API. Allow http://127.0.0.1 as a redirect.";
+const TASKS_INFO: &str = "A task cannot leave the Inbox until every required field is filled in.";
+const DISTRACTION_INFO: &str = "\"I got distracted\" in a time block asks which of these it was, then records it on that habit.";
+const GMAIL_INFO: &str = "Use to fetch the title and description of Gmail emails from their URL, and to list contacts under People.";
 
 /// A calendar offered in the default-calendar picker. The name is shown to
 /// the user; the id is what gets saved as the default.
@@ -85,86 +100,102 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 	// There is one settings page rather than one per tab: everything is set
 	// from the same place.
 	let content = column![
-        section("Preferences", preferences(state, metrics), metrics),
-        section(
-            "Desktop appearance",
-            desktop_appearance(state, metrics),
-            metrics
-        ),
-        section(
-            "Reminders",
-            super::reminders::settings_section(state, metrics),
-            metrics
-        ),
-        section(
-            "Database sync",
-            column![
-                text("Sync server URL (blank disables sync)").size(metrics.label()),
-                crate::ui::controls::text_input(
-                    "https://sync.example.com",
-                    &state.config.database_sync.url
-                )
-                .on_input(|url| Message::Settings(SettingsMessage::DatabaseSyncUrlChanged(url)))
-                .size(metrics.label()),
-                text(crate::database_sync::status()).size(metrics.label()),
-            ]
-            .spacing(metrics.spacing)
-            .into(),
-            metrics
-        ),
-        section("Notes", column![
-            text("Notes folder").size(metrics.label()),
-            super::controls::text_input("~/Documents/Notes", &state.notes.directory_input)
-                .on_input(|value| Message::Settings(SettingsMessage::NotesDirectoryChanged(value)))
-                .on_submit(Message::Settings(SettingsMessage::NotesDirectoryApply))
-                .size(metrics.label()),
-            row![
-                button(text("Choose folder").size(metrics.label())).on_press(Message::Settings(SettingsMessage::NotesDirectoryBrowse)),
-                button(text("Apply").size(metrics.label())).on_press(Message::Settings(SettingsMessage::NotesDirectoryApply)),
-            ].spacing(metrics.spacing),
-            text("To see the same notes on mobile, sync this folder and choose its copy there. Colors and connections use database sync.").size(metrics.label()),
-        ].spacing(metrics.spacing).into(), metrics),
-        card(
-            super::controls::section_heading("Keyboard shortcuts", None, metrics.label() + 1.0)
-                .push(super::controls::info_tip(SHORTCUTS_INFO, metrics.label()))
-                .into(),
-            shortcuts(state, metrics),
-            metrics
-        ),
-        section(
-            "Calendar view order",
-            calendar_order(state, metrics),
-            metrics
-        ),
-        section("Google Calendar", calendar(state, metrics), metrics),
-        section("Tasks", tasks(state, metrics), metrics),
-        section(
-            "Distraction habits",
-            distraction_habits(state, metrics),
-            metrics
-        ),
-        section("Sleep", sleep(state, metrics), metrics),
-        section(
-            "Travel",
-            super::travel::settings_section(state, metrics),
-            metrics
-        ),
-        section("AI", crate::voice::settings(state), metrics),
-        section(
-            "Account integrations",
-            integrations(state, metrics),
-            metrics
-        ),
-        section("Application", application(metrics), metrics),
-    ]
-    .spacing(metrics.spacing)
-    .padding(iced::Padding {
-        top: 2.0,
-        left: 3.0,
-        right: SCROLLBAR_GUTTER,
-        bottom: 8.0,
-    })
-    .width(Fill);
+		section("Preferences", preferences(state, metrics), metrics),
+		section(
+			"Desktop appearance",
+			desktop_appearance(state, metrics),
+			metrics
+		),
+		section(
+			"Reminders",
+			super::reminders::settings_section(state, metrics),
+			metrics
+		),
+		section(
+			"Database sync",
+			column![
+				with_info(
+					text("Sync server URL").size(metrics.label()).width(Fill),
+					SYNC_URL_INFO,
+					metrics.label(),
+				),
+				crate::ui::controls::text_input(
+					"https://sync.example.com",
+					&state.config.database_sync.url
+				)
+				.on_input(|url| Message::Settings(SettingsMessage::DatabaseSyncUrlChanged(url)))
+				.size(metrics.label()),
+				text(crate::database_sync::status()).size(metrics.label()),
+			]
+			.spacing(metrics.spacing)
+			.into(),
+			metrics
+		),
+		section_with_info(
+			"Notes",
+			NOTES_INFO,
+			column![
+				text("Notes folder").size(metrics.label()),
+				super::controls::text_input("~/Documents/Notes", &state.notes.directory_input)
+					.on_input(
+						|value| Message::Settings(SettingsMessage::NotesDirectoryChanged(value))
+					)
+					.on_submit(Message::Settings(SettingsMessage::NotesDirectoryApply))
+					.size(metrics.label()),
+				row![
+					button(text("Choose folder").size(metrics.label()))
+						.on_press(Message::Settings(SettingsMessage::NotesDirectoryBrowse)),
+					button(text("Apply").size(metrics.label()))
+						.on_press(Message::Settings(SettingsMessage::NotesDirectoryApply)),
+				]
+				.spacing(metrics.spacing),
+			]
+			.spacing(metrics.spacing)
+			.into(),
+			metrics
+		),
+		section_with_info(
+			"Keyboard shortcuts",
+			SHORTCUTS_INFO,
+			shortcuts(state, metrics),
+			metrics
+		),
+		section_with_info(
+			"Calendar view order",
+			CALENDAR_ORDER_INFO,
+			calendar_order(state, metrics),
+			metrics
+		),
+		section("Google Calendar", calendar(state, metrics), metrics),
+		section_with_info("Tasks", TASKS_INFO, tasks(state, metrics), metrics),
+		section_with_info(
+			"Distraction habits",
+			DISTRACTION_INFO,
+			distraction_habits(state, metrics),
+			metrics
+		),
+		section_with_info("Sleep", SLEEP_INFO, sleep(state, metrics), metrics),
+		section(
+			"Travel",
+			super::travel::settings_section(state, metrics),
+			metrics
+		),
+		section("AI", crate::voice::settings(state, metrics), metrics),
+		section(
+			"Account integrations",
+			integrations(state, metrics),
+			metrics
+		),
+		section("Application", application(metrics), metrics),
+	]
+	.spacing(metrics.spacing)
+	.padding(iced::Padding {
+		top: 2.0,
+		left: 3.0,
+		right: SCROLLBAR_GUTTER,
+		bottom: 8.0,
+	})
+	.width(Fill);
 
 	column![
 		super::controls::section_heading(
@@ -199,6 +230,21 @@ fn section<'a>(
 	card(heading(label, metrics), body, metrics)
 }
 
+fn section_with_info<'a>(
+	label: &'a str,
+	info: &'a str,
+	body: Element<'a, Message>,
+	metrics: &Metrics,
+) -> Element<'a, Message> {
+	card(
+		super::controls::section_heading(label, None, metrics.label() + 1.0)
+			.push(super::controls::info_tip(info, metrics.label()))
+			.into(),
+		body,
+		metrics,
+	)
+}
+
 fn card<'a>(
 	heading: Element<'a, Message>,
 	body: Element<'a, Message>,
@@ -221,7 +267,26 @@ pub(super) fn field<'a>(
 	control: Element<'a, Message>,
 	metrics: &Metrics,
 ) -> Element<'a, Message> {
-	let caption = text(label.into()).size(metrics.label());
+	labelled(text(label.into()).size(metrics.label()), control, metrics)
+}
+
+/// A [`field`] whose label carries an info symbol.
+pub(super) fn field_with_info<'a>(
+	label: impl Into<String>,
+	info: &'a str,
+	control: Element<'a, Message>,
+	metrics: &Metrics,
+) -> Element<'a, Message> {
+	let caption = text(label.into()).size(metrics.label()).width(Fill);
+	labelled(with_info(caption, info, metrics.label()), control, metrics)
+}
+
+fn labelled<'a>(
+	caption: impl Into<Element<'a, Message>>,
+	control: Element<'a, Message>,
+	metrics: &Metrics,
+) -> Element<'a, Message> {
+	let caption = container(caption);
 
 	if metrics.breakpoint.is_compact() {
 		column![caption, control].spacing(2.0).width(Fill).into()
@@ -367,7 +432,12 @@ fn preferences<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
 fn desktop_appearance<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 	column![
 		subsection("Reserve space", reserve_space(state, metrics), metrics),
-		subsection("Desktop transition", windowing(state, metrics), metrics),
+		subsection_with_info(
+			"Desktop transition",
+			TRANSITION_INFO,
+			windowing(state, metrics),
+			metrics
+		),
 		subsection("Borders", borders(state, metrics), metrics),
 		subsection("Dock", dock(state, metrics), metrics),
 		subsection("Side panel", panel(state, metrics), metrics),
@@ -381,44 +451,60 @@ fn subsection<'a>(
 	body: Element<'a, Message>,
 	metrics: &Metrics,
 ) -> Element<'a, Message> {
-	column![
-		text(label).size(metrics.label() + 1.0).font(iced::Font {
-			weight: iced::font::Weight::Bold,
-			..iced::Font::DEFAULT
-		}),
-		body,
-	]
-	.spacing(metrics.spacing)
-	.width(Fill)
-	.into()
+	column![subsection_title(label, metrics), body]
+		.spacing(metrics.spacing)
+		.width(Fill)
+		.into()
+}
+
+fn subsection_with_info<'a>(
+	label: &'a str,
+	info: &'a str,
+	body: Element<'a, Message>,
+	metrics: &Metrics,
+) -> Element<'a, Message> {
+	let title = subsection_title(label, metrics).width(Fill);
+	column![with_info(title, info, metrics.label()), body]
+		.spacing(metrics.spacing)
+		.width(Fill)
+		.into()
+}
+
+fn subsection_title<'a>(label: &'a str, metrics: &Metrics) -> iced::widget::Text<'a> {
+	text(label).size(metrics.label() + 1.0).font(iced::Font {
+		weight: iced::font::Weight::Bold,
+		..iced::Font::DEFAULT
+	})
 }
 
 fn reserve_space<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 	let views = &state.config.views;
 
 	column![
-		container(switch(
-			"Reserve screen space for the dock",
-			views.dock_reserve_space,
-			|v0| Message::Settings(SettingsMessage::DockReserveSpaceToggled(v0)),
-			metrics,
-		))
-		.id("dock-reservation")
-		.width(Fill),
-		text("Enabling prevents maximized windows from overlapping the dock.")
-			.size(metrics.label())
-			.style(text::secondary),
-		container(switch(
-			"Reserve screen space for the side panel",
-			views.panel_reserve_space,
-			|v0| Message::Settings(SettingsMessage::PanelReserveSpaceToggled(v0)),
-			metrics,
-		))
-		.id("panel-reservation")
-		.width(Fill),
-		text("Enabling prevents maximized windows from overlapping the panel.")
-			.size(metrics.label())
-			.style(text::secondary),
+		with_info(
+			container(switch(
+				"Reserve screen space for the dock",
+				views.dock_reserve_space,
+				|v0| Message::Settings(SettingsMessage::DockReserveSpaceToggled(v0)),
+				metrics,
+			))
+			.id("dock-reservation")
+			.width(Fill),
+			DOCK_RESERVATION_INFO,
+			metrics.label(),
+		),
+		with_info(
+			container(switch(
+				"Reserve screen space for the side panel",
+				views.panel_reserve_space,
+				|v0| Message::Settings(SettingsMessage::PanelReserveSpaceToggled(v0)),
+				metrics,
+			))
+			.id("panel-reservation")
+			.width(Fill),
+			PANEL_RESERVATION_INFO,
+			metrics.label(),
+		),
 	]
 	.spacing(metrics.spacing)
 	.into()
@@ -460,9 +546,6 @@ fn borders<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
 fn dock<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 	column![
-		text("Change the appearance of the dock.")
-			.size(metrics.label())
-			.style(text::secondary),
 		choice(
 			"Screen edge",
 			crate::config::DockSide::ALL.to_vec(),
@@ -615,13 +698,7 @@ fn windowing<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 			metrics,
 		));
 	}
-	section
-		.push(
-			text("Customize the app's transition effects for KDE.")
-				.size(metrics.label())
-				.style(text::secondary),
-		)
-		.into()
+	section.into()
 }
 
 fn layout_number<'a>(
@@ -794,15 +871,7 @@ fn shortcut_chip<'a>(
 
 fn calendar_order<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 	let sources = state.calendar.display_sources(&state.config.calendar);
-	let mut section = column![
-		text(
-			"Top to bottom sets left to right when events overlap. App-managed task lists are omitted."
-		)
-		.size(metrics.label())
-		.style(text::secondary),
-	]
-	.spacing(metrics.spacing)
-	.width(Fill);
+	let mut section = column![].spacing(metrics.spacing).width(Fill);
 	for (index, source) in sources.iter().enumerate() {
 		let mut up = button(text("Up").size(metrics.label())).style(crate::ui::controls::secondary);
 		let mut down =
@@ -843,10 +912,7 @@ fn sleep<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 	let settings = &state.config.calendar;
 	let time_format = state.config.appearance.time_format;
 
-	let mut section = column![
-        text("Each row is the night ending on that weekday. Bedtimes later than wake-up are on the preceding evening. Changes apply from today through four weeks ahead.")
-            .size(metrics.label() - 1.0).style(text::secondary),
-    ].spacing(metrics.spacing);
+	let mut section = column![].spacing(metrics.spacing);
 	for day in settings.first_day_of_week.weekdays() {
 		let times = settings.sleep_schedule[day.num_days_from_monday() as usize];
 		let time_field = |label: &'static str, bedtime: bool, value: chrono::NaiveTime| {
@@ -885,28 +951,26 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 	let connected = state.calendar.is_signed_in();
 
 	let mut section = column![
-    text("Create a Desktop OAuth client in Google Cloud; enable the Calendar API, Tasks API, and the Gmail API. Allow http://127.0.0.1 as a redirect.")
-        .size((metrics.label() - 1.0).max(10.0))
-        .style(text::secondary),
-        field(
-            "OAuth client ID",
-            crate::ui::controls::text_input("Desktop client ID", &settings.client_id)
-                .on_input(|v0| Message::Settings(SettingsMessage::GoogleClientIdChanged(v0)))
-                .size(metrics.label())
-                .into(),
-            metrics,
-        ),
-        field(
-            "Client secret",
-            crate::ui::controls::text_input("optional", &settings.client_secret)
-                .on_input(|v0| Message::Settings(SettingsMessage::GoogleClientSecretChanged(v0)))
-                .secure(true)
-                .size(metrics.label())
-                .into(),
-            metrics,
-        )
-    ]
-    .spacing(metrics.spacing);
+		field_with_info(
+			"OAuth client ID",
+			GOOGLE_OAUTH_INFO,
+			crate::ui::controls::text_input("Desktop client ID", &settings.client_id)
+				.on_input(|v0| Message::Settings(SettingsMessage::GoogleClientIdChanged(v0)))
+				.size(metrics.label())
+				.into(),
+			metrics,
+		),
+		field(
+			"Client secret",
+			crate::ui::controls::text_input("optional", &settings.client_secret)
+				.on_input(|v0| Message::Settings(SettingsMessage::GoogleClientSecretChanged(v0)))
+				.secure(true)
+				.size(metrics.label())
+				.into(),
+			metrics,
+		)
+	]
+	.spacing(metrics.spacing);
 
 	let action = if connected {
 		let mut disconnect = button(
@@ -1112,14 +1176,7 @@ fn google_tasks<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
 /// on here has been filled in.
 fn tasks<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 	let settings = &state.config.calendar;
-	let mut section = column![
-		text(
-			"A task cannot leave the Inbox until every field switched on here has been filled in.",
-		)
-		.size(metrics.label())
-		.style(text::secondary),
-	]
-	.spacing(metrics.spacing);
+	let mut section = column![].spacing(metrics.spacing);
 	section = section.push(switch(
 		"Require an estimated time",
 		settings.triage.estimate,
@@ -1154,14 +1211,7 @@ fn distraction_habits<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
 	use crate::habits::Action;
 	let library = &state.habits.library;
 	let chosen = library.distraction_habits();
-	let mut section = column![
-		text(
-			"\"I got distracted\" in a time block asks which of these it was, then records it on that habit."
-		)
-		.size(metrics.label())
-		.style(text::secondary),
-	]
-	.spacing(metrics.spacing);
+	let mut section = column![].spacing(metrics.spacing);
 	for habit in &chosen {
 		let remove = button(text("Remove").size(metrics.label()))
 			.style(crate::ui::controls::secondary)
@@ -1211,15 +1261,13 @@ fn distraction_habits<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
 /// Services a pasted link can come from, and the accounts each one reads as.
 fn integrations<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 	let accounts = &state.accounts;
-	let small = (metrics.label() - 1.0).max(10.0);
 
-	let mut section = column![
-        text("Gmail").size(metrics.label()),
-        text("Use to fetch the title and description of Gmail emails from their URL, and to list contacts under People")
-            .size(small)
-            .style(text::secondary),
-    ]
-    .spacing(metrics.spacing);
+	let mut section = column![with_info(
+		text("Gmail").size(metrics.label()).width(Fill),
+		GMAIL_INFO,
+		metrics.label(),
+	)]
+	.spacing(metrics.spacing);
 
 	if accounts.emails.is_empty() {
 		section = section.push(
@@ -1403,17 +1451,12 @@ mod tests {
 		// The default Google Tasks lists are a subsection of Tasks, below the
 		// triage requirements.
 		let mut ui = Simulator::with_size(Settings::default(), size, tasks(&state, &metrics));
-		let triage_hint =
-			"A task cannot leave the Inbox until every field switched on here has been filled in.";
-		let positions: Vec<_> = [
-			triage_hint,
-			"Google Tasks",
-			"Google Tasks list for backlog tasks",
-		]
-		.into_iter()
-		.map(|label| ui.find(label).unwrap().bounds().y)
-		.collect();
-		assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+		let positions: Vec<_> = ["Google Tasks", "Google Tasks list for backlog tasks"]
+			.into_iter()
+			.map(|label| ui.find(label).unwrap().bounds().y)
+			.collect();
+		assert!(positions[0] > 0.0, "the triage switches come first");
+		assert!(positions[0] < positions[1]);
 		for label in [
 			"Google Tasks list for backlog tasks",
 			"Google Tasks list for triaged tasks",
@@ -1430,7 +1473,6 @@ mod tests {
 		// Neither is in Google Calendar, and the day end control moved out.
 		let mut ui = Simulator::with_size(Settings::default(), size, calendar(&state, &metrics));
 		assert!(ui.find("Google Tasks list for backlog tasks").is_err());
-		assert!(ui.find(triage_hint).is_err());
 		assert!(ui.find("Day ends at midnight").is_err());
 
 		let mut ui = Simulator::with_size(Settings::default(), size, preferences(&state, &metrics));
@@ -1596,6 +1638,40 @@ mod tests {
 				assert!(ui.find(action.description()).is_err());
 			}
 			assert!(ui.find(SHORTCUTS_INFO).is_err());
+		}
+	}
+
+	#[test]
+	fn explanations_are_tucked_behind_info_symbols() {
+		use iced_test::{Simulator, core::Settings};
+
+		let state = State::blank();
+		for width in [180.0, 420.0, 900.0] {
+			let size = iced::Size::new(width, 6000.0);
+			let metrics = Metrics::of(size);
+			let mut ui = Simulator::with_size(Settings::default(), size, view(&state, &metrics));
+			for info in [
+				SHORTCUTS_INFO,
+				SYNC_URL_INFO,
+				NOTES_INFO,
+				DOCK_RESERVATION_INFO,
+				PANEL_RESERVATION_INFO,
+				TRANSITION_INFO,
+				CALENDAR_ORDER_INFO,
+				SLEEP_INFO,
+				GOOGLE_OAUTH_INFO,
+				TASKS_INFO,
+				DISTRACTION_INFO,
+				GMAIL_INFO,
+			] {
+				assert!(
+					ui.find(info).is_err(),
+					"{info:?} is spelled out at {width}px"
+				);
+			}
+			for label in ["Sync server URL", "OAuth client ID", "Gmail"] {
+				assert!(ui.find(label).is_ok(), "missing {label} at {width}px");
+			}
 		}
 	}
 

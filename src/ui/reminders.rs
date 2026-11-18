@@ -31,17 +31,16 @@ fn message(action: Action) -> Message {
 
 pub fn settings_section<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 	let settings = &state.config.reminders;
-	let mut body = column![
+	let mut body = column![crate::ui::controls::with_info(
 		switch(
 			"Remind me of what is coming up",
 			settings.enabled,
 			|enabled| message(Action::Toggled(enabled)),
 			metrics,
 		),
-		text("Reminders are shown as desktop notifications. The sound plays at the alarm volume.")
-			.size(metrics.label() - 1.0)
-			.style(text::secondary),
-	]
+		"Reminders are shown as desktop notifications. The sound plays at the alarm volume.",
+		metrics.label(),
+	),]
 	.spacing(metrics.spacing);
 
 	if !settings.enabled {

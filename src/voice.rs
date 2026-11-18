@@ -704,7 +704,12 @@ fn provider_tabs<'a>(section: InputSection, selected: Provider) -> iced::Element
 	.into()
 }
 
-pub fn settings<'a>(state: &'a State) -> iced::Element<'a, Message> {
+pub fn settings<'a>(
+	state: &'a State,
+	metrics: &crate::ui::layout::Metrics,
+) -> iced::Element<'a, Message> {
+	use crate::ui::controls::with_info;
+	use iced::Fill;
 	use iced::widget::{button, column, text};
 	let settings = &state.config.voice;
 	let voice = &state.inbox.voice;
@@ -714,39 +719,66 @@ pub fn settings<'a>(state: &'a State) -> iced::Element<'a, Message> {
 			..iced::Font::DEFAULT
 		})
 	};
+	let info = metrics.label();
 	let mut token = column![
 		heading("OpenRouter"),
-		text("API token"),
+		with_info(
+			text("API token").width(Fill),
+			"Stored privately on this device. Clear and save to remove.",
+			info,
+		),
 		crate::ui::controls::text_input("OpenRouter API token", &voice.openrouter_token.0)
 			.secure(true)
 			.on_input(|s| msg(Action::OpenRouterToken(Token(s))))
 			.on_submit(msg(Action::SaveOpenRouterToken)),
 		button("Save token").on_press(msg(Action::SaveOpenRouterToken)),
-		text("Stored privately on this device. Clear and save to remove.").size(12),
 	]
 	.spacing(6);
 	if let Some(status) = voice.token_status {
 		token = token.push(text(status).size(12));
 	}
+	let voice_heading: iced::Element<'a, Message> = if voice.voice_tab == Provider::Whisper {
+		with_info(
+			heading("Voice input").width(Fill),
+			"Uses the default microphone via arecord (alsa-utils). Click the microphone again to finish; maximum recording is 2 minutes.",
+			info,
+		)
+	} else {
+		heading("Voice input").into()
+	};
 	let mut voice_fields = column![
-		heading("Voice input"),
-		provider_tabs(InputSection::Voice, voice.voice_tab),
+		voice_heading,
+		provider_tabs(InputSection::Voice, voice.voice_tab)
 	]
 	.spacing(6);
 	match voice.voice_tab {
 		Provider::Whisper => {
 			voice_fields = voice_fields.extend([
-                text("Whisper server URL (optional; uses its loaded model)").into(),
-                crate::ui::controls::text_input("http://server:8080", &settings.whisper_url)
-                    .on_input(|s| msg(Action::WhisperUrl(s))).into(),
-                text("whisper.cpp binary (name on PATH or full path)").into(),
-                crate::ui::controls::text_input("whisper-cli", &settings.binary)
-                    .on_input(|s| msg(Action::Binary(s))).into(),
-                text("Whisper model file (ggml .bin)").into(),
-                crate::ui::controls::text_input("/path/to/ggml-base.bin", &settings.whisper_model)
-                    .on_input(|s| msg(Action::WhisperModel(s))).into(),
-                text("Uses the default microphone via arecord (alsa-utils). Click the microphone again to finish; maximum recording is 2 minutes.").size(12).into(),
-            ]);
+				with_info(
+					text("Whisper server URL").width(Fill),
+					"Optional. Uses the model loaded on the server.",
+					info,
+				),
+				crate::ui::controls::text_input("http://server:8080", &settings.whisper_url)
+					.on_input(|s| msg(Action::WhisperUrl(s)))
+					.into(),
+				with_info(
+					text("whisper.cpp binary").width(Fill),
+					"A name on PATH or a full path.",
+					info,
+				),
+				crate::ui::controls::text_input("whisper-cli", &settings.binary)
+					.on_input(|s| msg(Action::Binary(s)))
+					.into(),
+				with_info(
+					text("Whisper model file").width(Fill),
+					"A ggml .bin file.",
+					info,
+				),
+				crate::ui::controls::text_input("/path/to/ggml-base.bin", &settings.whisper_model)
+					.on_input(|s| msg(Action::WhisperModel(s)))
+					.into(),
+			]);
 		}
 		Provider::Ollama => {}
 		Provider::OpenRouter => {
