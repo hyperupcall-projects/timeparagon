@@ -837,14 +837,6 @@ fn unique_id(taken: impl Iterator<Item = u64>) -> u64 {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CalendarSettings {
-	/// How often to pull events, in minutes. 15 is Google's own default-ish
-	/// cadence and is what we ship with. Only used when [`Self::incremental_sync`]
-	/// is off: incremental sync checks every [`Self::INCREMENTAL_SYNC_EVERY`].
-	pub sync_minutes: u32,
-	/// Sync with Google incrementally: Calendar sync tokens and Tasks'
-	/// `updatedMin`, so a sync only fetches what changed. Off fetches the
-	/// whole range in view on every sync, as before.
-	pub incremental_sync: bool,
 	/// OAuth client ID for a Desktop app created in Google Cloud. Empty until
 	/// the user pastes one in Settings.
 	pub client_id: String,
@@ -943,8 +935,6 @@ pub struct CalendarSettings {
 impl Default for CalendarSettings {
 	fn default() -> Self {
 		Self {
-			sync_minutes: 60,
-			incremental_sync: true,
 			client_id: String::new(),
 			client_secret: String::new(),
 			disabled: Vec::new(),
@@ -1054,8 +1044,9 @@ impl CalendarSettings {
 		name.trim() == Self::APP_CALENDAR_NAME
 	}
 
-	pub const MIN_SYNC_MINUTES: u32 = 1;
-	pub const MAX_SYNC_MINUTES: u32 = 1440;
+	/// How often the apps ask Google for what changed in the background.
+	pub const REFRESH_EVERY: Duration = Duration::from_secs(2 * 60);
+
 	/// The latest hour a day can end: 5am, which is as far into the morning
 	/// as a late night is worth pushing the boundary. Midnight (0) is the
 	/// default.
@@ -1092,46 +1083,6 @@ impl CalendarSettings {
 
 	pub fn weekly_day_width(&self) -> u32 {
 		self.weekly_day_width.clamp(100, 400)
-	}
-
-	/// How often incremental sync asks Google for changes in the background.
-	pub const INCREMENTAL_SYNC_EVERY: Duration = Duration::from_secs(2 * 60);
-
-	/// How often the apps sync in the background: every two minutes with
-	/// incremental sync, since each sync only fetches what changed, otherwise
-	/// every [`Self::sync_every`].
-	pub fn refresh_every(&self) -> Duration {
-		if self.incremental_sync {
-			Self::INCREMENTAL_SYNC_EVERY
-		} else {
-			self.sync_every()
-		}
-	}
-
-	/// [`Self::incremental_sync`] as saved in the settings of the database
-	/// `connection` is open on. Read on its own so that every process (the
-	/// dock, the phone's widget) follows the same switch.
-	pub(crate) fn stored_incremental_sync(connection: &rusqlite::Connection) -> bool {
-		use rusqlite::OptionalExtension;
-		let saved: Option<String> = connection
-			.query_row(
-				"SELECT value FROM settings WHERE key='calendar.incremental_sync'",
-				[],
-				|row| row.get(0),
-			)
-			.optional()
-			.ok()
-			.flatten();
-		saved
-			.and_then(|text| serde_json::from_str::<bool>(&text).ok())
-			.unwrap_or(Self::default().incremental_sync)
-	}
-
-	pub fn sync_every(&self) -> Duration {
-		let minutes = self
-			.sync_minutes
-			.clamp(Self::MIN_SYNC_MINUTES, Self::MAX_SYNC_MINUTES);
-		Duration::from_secs(u64::from(minutes) * 60)
 	}
 
 	/// Minutes past midnight at which the day ends, clamped to a real hour.
@@ -1512,13 +1463,6 @@ fn save_first_day_of_week_at(
 ) -> io::Result<()> {
 	update_at(database, |config| {
 		config.calendar.first_day_of_week = first_day;
-	})
-}
-
-/// Turns incremental sync with Google on or off.
-pub fn save_incremental_sync(on: bool) -> io::Result<()> {
-	update_at(&database()?, |config| {
-		config.calendar.incremental_sync = on;
 	})
 }
 

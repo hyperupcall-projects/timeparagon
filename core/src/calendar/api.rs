@@ -16,6 +16,8 @@ use crate::hex;
 pub mod block_sync;
 pub mod incremental;
 
+pub use incremental::fetch_range;
+
 /// Stands in for Google in tests: answers a request's method, URL and JSON
 /// body with the response body, or with an HTTP status and message.
 #[cfg(test)]
@@ -203,126 +205,11 @@ struct EventTime {
 /// that ends at 3am still includes the small hours of the next morning.
 pub fn fetch_day(
 	access_token: &str,
-	disabled: &[String],
 	day: NaiveDate,
 	day_end_hour: u32,
 	app_calendar: Option<&str>,
 ) -> Result<Snapshot, String> {
-	fetch_range(
-		access_token,
-		disabled,
-		day,
-		day,
-		day,
-		day_end_hour,
-		app_calendar,
-	)
-}
-
-/// Every calendar, the events between `first` and `last`, and the tasks.
-///
-/// With incremental sync on (the default, see [`incremental`]) this asks
-/// Google only for what changed since the last sync and answers from the
-/// local copy. Otherwise every call fetches the whole range again.
-pub fn fetch_range(
-	access_token: &str,
-	disabled: &[String],
-	day: NaiveDate,
-	first: NaiveDate,
-	last: NaiveDate,
-	day_end_hour: u32,
-	app_calendar: Option<&str>,
-) -> Result<Snapshot, String> {
-	if incremental::enabled() {
-		return incremental::fetch_range(
-			access_token,
-			day,
-			first,
-			last,
-			day_end_hour,
-			app_calendar,
-		);
-	}
-	let fetch_started = crate::clock::now();
-	let mut calendars = fetch_calendars(access_token)?;
-	// Every event TimeParagon writes lives on one calendar. Find it by name, or
-	// create it the first time it is missing.
-	let _app_calendar = resolve_app_calendar(access_token, &mut calendars, app_calendar);
-	// Task refresh and independent calendar requests overlap. Bound concurrency
-	// so an account with many calendars does not open an unbounded worker pool.
-	let _ = disabled;
-	let (mut events, task_result) = std::thread::scope(|scope| -> Result<_, String> {
-		let tasks = scope.spawn(|| fetch_tasks(access_token, day, _app_calendar.as_deref()));
-		let mut events = Vec::new();
-		for chunk in calendars.chunks(4) {
-			let workers: Vec<_> = chunk
-				.iter()
-				.map(|calendar| {
-					scope.spawn(move || {
-						fetch_events(access_token, calendar, first, last, day_end_hour)
-					})
-				})
-				.collect();
-			for worker in workers {
-				events.extend(worker.join().map_err(|_| "Calendar worker failed")??);
-			}
-		}
-		Ok((events, tasks.join().map_err(|_| "Tasks worker failed")?))
-	})?;
-	// Calendar owns every dated task; no cross-service mirror reconciliation.
-	// Retain non-recurring tasks outside this window for task lists and block planning.
-	if let Some(calendar) = calendars
-		.iter()
-		.find(|c| Some(&c.id) == _app_calendar.as_ref())
-	{
-		let mut page: Option<String> = None;
-		loop {
-			let url = format!(
-				"{EVENTS}/{}/events?privateExtendedProperty=ttKind%3Dtask&singleEvents=false&maxResults=2500{}",
-				urlencoding::encode(&calendar.id),
-				page.as_ref()
-					.map(|p| format!("&pageToken={}", urlencoding::encode(p)))
-					.unwrap_or_default()
-			);
-			let result: EventList = get(&url, access_token)?;
-			for mut entry in result.items {
-				if !entry.recurrence.is_empty()
-					|| entry.recurring_event_id.is_some()
-					|| entry.status.as_deref() == Some("cancelled")
-				{
-					continue;
-				}
-				entry.options.default_reminders = result.default_reminders.clone();
-				if let Some(event) =
-					parse_event_in_range(entry, calendar, NaiveDate::MIN, NaiveDate::MAX)
-				{
-					if !events
-						.iter()
-						.any(|e| e.id == event.id && e.calendar_id == event.calendar_id)
-					{
-						events.push(event);
-					}
-				}
-			}
-			page = result.next_page_token;
-			if page.is_none() {
-				break;
-			}
-		}
-	}
-	finish(
-		access_token,
-		calendars,
-		events,
-		task_result,
-		Range {
-			day,
-			first,
-			last,
-			day_end_hour,
-			fetched_at: fetch_started,
-		},
-	)
+	fetch_range(access_token, day, day, day, day_end_hour, app_calendar)
 }
 
 /// The days a fetch was for, and when it began.
@@ -334,9 +221,9 @@ struct Range {
 	fetched_at: DateTime<Local>,
 }
 
-/// What every fetch does with Google's answer, however it got it: adds the
-/// tasks, lays the local edits over the result, records what Google now
-/// holds, and sorts it into a [`Snapshot`].
+/// What a fetch does with Google's answer: adds the tasks, lays the local
+/// edits over the result, records what Google now holds, and sorts it into a
+/// [`Snapshot`].
 fn finish(
 	access_token: &str,
 	mut calendars: Vec<Calendar>,
@@ -489,53 +376,6 @@ fn fetch_calendars(access_token: &str) -> Result<Vec<Calendar>, String> {
 	Ok(calendars)
 }
 
-fn fetch_events(
-	access_token: &str,
-	calendar: &Calendar,
-	day: NaiveDate,
-	last: NaiveDate,
-	day_end_hour: u32,
-) -> Result<Vec<Event>, String> {
-	let (time_min, _) = day_bounds(day, day_end_hour);
-	let (_, time_max) = day_bounds(last, day_end_hour);
-	let calendar_id = urlencoding::encode(&calendar.id);
-	let mut page_token: Option<String> = None;
-	let mut events = Vec::new();
-
-	loop {
-		let mut url = format!(
-			"{EVENTS}/{calendar_id}/events?singleEvents=true&orderBy=startTime&maxResults=250&timeMin={}&timeMax={}",
-			urlencoding::encode(&time_min),
-			urlencoding::encode(&time_max),
-		);
-		if let Some(token) = &page_token {
-			url.push_str("&pageToken=");
-			url.push_str(&urlencoding::encode(token));
-		}
-
-		let list: EventList = get(&url, access_token)?;
-
-		for mut entry in list.items {
-			entry.options.default_reminders = list.default_reminders.clone();
-
-			if entry.status.as_deref() == Some("cancelled") {
-				continue;
-			}
-
-			if let Some(event) = parse_event_in_range(entry, calendar, day, last) {
-				events.push(event);
-			}
-		}
-
-		match list.next_page_token {
-			Some(next) => page_token = Some(next),
-			None => break,
-		}
-	}
-
-	Ok(events)
-}
-
 /// Every occurrence of the series `series_id` on `calendar` between the
 /// starts of `first` and the end of `last`, as Google now has it. A series
 /// that no longer exists has no occurrences. Blocking: run it off the UI
@@ -589,93 +429,6 @@ pub fn fetch_series_instances(
 
 pub const TASK_LISTS: &str = "https://tasks.googleapis.com/tasks/v1/users/@me/lists";
 pub const TASKS: &str = "https://tasks.googleapis.com/tasks/v1/lists";
-
-#[derive(Default)]
-struct TaskCache {
-	token: String,
-	lists: std::collections::HashMap<String, CachedTasks>,
-}
-struct CachedTasks {
-	items: std::collections::HashMap<String, TaskEntry>,
-}
-
-static TASK_CACHE: std::sync::Mutex<Option<TaskCache>> = std::sync::Mutex::new(None);
-
-/// The tasks currently on `list`.
-///
-/// Each refresh replaces that list. A move between lists does not come back as
-/// a deletion on the list that was left, so merging incremental updates kept a
-/// ghost there and Delete asked Google for a task on the wrong list.
-fn cached_task_items(access_token: &str, list: &str) -> Result<Vec<TaskEntry>, String> {
-	let mut guard = TASK_CACHE.lock().map_err(|_| "Task cache is unavailable")?;
-	let cache = guard.get_or_insert_with(TaskCache::default);
-	if cache.token != access_token {
-		cache.token = access_token.to_owned();
-		cache.lists.clear();
-	}
-	let mut page_token: Option<String> = None;
-	let mut tasks = Vec::new();
-	loop {
-		let mut url = format!(
-			"{TASKS}/{}/tasks?showCompleted=true&showHidden=true&showDeleted=true&maxResults=100",
-			urlencoding::encode(list)
-		);
-		if let Some(token) = &page_token {
-			url.push_str("&pageToken=");
-			url.push_str(&urlencoding::encode(token));
-		}
-		let page: TaskPage = get(&url, access_token)?;
-		tasks.extend(page.items);
-		page_token = page.next_page_token;
-		if page_token.is_none() {
-			break;
-		}
-	}
-	adopt_list(&mut cache.lists, list, tasks);
-	Ok(cache
-		.lists
-		.get(list)
-		.map(|cached| cached.items.values().cloned().collect())
-		.unwrap_or_default())
-}
-
-/// `list` now contains exactly the live tasks in `tasks`. The same task id on
-/// any other list is a move, so it is dropped there.
-fn adopt_list(
-	lists: &mut std::collections::HashMap<String, CachedTasks>,
-	list: &str,
-	tasks: Vec<TaskEntry>,
-) {
-	let mut items = std::collections::HashMap::new();
-	for task in tasks {
-		if task.deleted || task.id.is_empty() {
-			continue;
-		}
-		items.insert(task.id.clone(), task);
-	}
-	let ids: Vec<String> = items.keys().cloned().collect();
-	lists.insert(list.to_owned(), CachedTasks { items });
-	for (other, cached) in lists.iter_mut() {
-		if other == list {
-			continue;
-		}
-		for id in &ids {
-			cached.items.remove(id);
-		}
-	}
-}
-
-fn forget_cached_task(task_id: &str) {
-	incremental::forget_task(task_id);
-	let Ok(mut guard) = TASK_CACHE.lock() else {
-		return;
-	};
-	if let Some(cache) = guard.as_mut() {
-		for cached in cache.lists.values_mut() {
-			cached.items.remove(task_id);
-		}
-	}
-}
 
 /// A habit event as Google Calendar stores it: the master of a recurring
 /// series on the app's TimeParagon calendar.
@@ -1057,72 +810,8 @@ pub fn fetch_task_list(
 	Ok(items)
 }
 
-/// Task lists become calendars you can toggle, and each task due on `day`
-/// becomes an all-day chip. Tasks are not calendar events, so the Calendar
-/// API never returns them.
 /// Task lists as calendars, their tasks, and a notice if some are unavailable.
 type FetchedTasks = (Vec<Calendar>, Vec<Event>, Option<String>);
-
-fn fetch_tasks(
-	access_token: &str,
-	day: NaiveDate,
-	app_calendar: Option<&str>,
-) -> Result<FetchedTasks, GoogleError> {
-	let mut lists: TaskLists = get(&format!("{TASK_LISTS}?maxResults=100"), access_token)?;
-	while let Some(token) = lists.next_page_token.take() {
-		let next: TaskLists = get(
-			&format!(
-				"{TASK_LISTS}?maxResults=100&pageToken={}",
-				urlencoding::encode(&token)
-			),
-			access_token,
-		)?;
-		lists.items.extend(next.items);
-		lists.next_page_token = next.next_page_token;
-	}
-	let color = colors::TASK;
-	let mut calendars = Vec::new();
-	let mut events = Vec::new();
-
-	for list in lists.items {
-		let name = if list.title.is_empty() {
-			"Tasks".to_owned()
-		} else {
-			list.title
-		};
-		let id = format!("tasks:{}", list.id);
-		calendars.push(Calendar {
-			id: id.clone(),
-			name,
-			color,
-			primary: false,
-			selected_by_google: true,
-		});
-
-		events.extend(fetch_task_items(
-			access_token,
-			&list.id,
-			&id,
-			color,
-			day,
-			app_calendar,
-		)?);
-	}
-
-	Ok((calendars, events, None))
-}
-
-fn fetch_task_items(
-	access_token: &str,
-	list_id: &str,
-	calendar_id: &str,
-	color: Color,
-	_day: NaiveDate,
-	app_calendar: Option<&str>,
-) -> Result<Vec<Event>, GoogleError> {
-	let tasks = cached_task_items(access_token, list_id)?;
-	task_events(access_token, tasks, calendar_id, color, app_calendar)
-}
 
 /// The chips for the tasks of one list, with their local metadata. A task
 /// with a due date is moved onto the calendar.
@@ -1240,11 +929,11 @@ pub fn delete_task(access_token: &str, list_id: &str, task_id: &str) -> Result<(
 		task_presence(access_token, list, task_id)
 	})?
 	else {
-		forget_cached_task(task_id);
+		incremental::forget_task(task_id);
 		return Ok(());
 	};
 	delete(&task_item_url(list, task_id), access_token, "Google Tasks")?;
-	forget_cached_task(task_id);
+	incremental::forget_task(task_id);
 	Ok(())
 }
 
@@ -3237,7 +2926,7 @@ mod tests {
 
 	#[test]
 	fn cancelled_events_are_not_parsed_by_the_status_guard() {
-		// parse_event itself does not look at status; fetch_events drops them.
+		// parse_event itself does not look at status; its callers drop them.
 		// This keeps the parser focused on times.
 		let calendar = Calendar {
 			id: "primary".into(),
@@ -3527,45 +3216,6 @@ mod tests {
 			"Request had insufficient authentication scopes.",
 		));
 		assert_eq!(notice, "Reconnect Google so Tasks are included");
-	}
-
-	fn task_entry(id: &str, deleted: bool) -> TaskEntry {
-		TaskEntry {
-			updated: None,
-			deleted,
-			id: id.into(),
-			title: id.into(),
-			notes: String::new(),
-			status: None,
-			due: None,
-			web_view_link: String::new(),
-		}
-	}
-
-	#[test]
-	fn a_moved_task_leaves_the_list_it_came_from() {
-		let mut lists = std::collections::HashMap::new();
-		adopt_list(
-			&mut lists,
-			"low-priority",
-			vec![task_entry("shopping", false), task_entry("keep", false)],
-		);
-		adopt_list(
-			&mut lists,
-			"time-blocked",
-			vec![task_entry("shopping", false)],
-		);
-		assert!(!lists["low-priority"].items.contains_key("shopping"));
-		assert!(lists["low-priority"].items.contains_key("keep"));
-		assert!(lists["time-blocked"].items.contains_key("shopping"));
-
-		adopt_list(
-			&mut lists,
-			"low-priority",
-			vec![task_entry("keep", false), task_entry("shopping", true)],
-		);
-		assert!(!lists["low-priority"].items.contains_key("shopping"));
-		assert!(lists["time-blocked"].items.contains_key("shopping"));
 	}
 
 	#[test]

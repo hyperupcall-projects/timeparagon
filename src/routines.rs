@@ -902,7 +902,6 @@ fn load_range(state: &mut State) -> Task<Message> {
 		let last = *dates.last().ok_or("No days to fetch")?;
 		calendar::api::fetch_range(
 			&token,
-			&settings.disabled,
 			period.first,
 			first.pred_opt().unwrap_or(first),
 			last.succ_opt().unwrap_or(last),

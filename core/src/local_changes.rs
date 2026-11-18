@@ -188,7 +188,7 @@ mod tests {
 		// Settings, and the documents the config holds, move the config's.
 		let mut reader = Reader::open(&path).unwrap();
 		crate::settings::update(&path, |config: &mut crate::config::Config| {
-			config.calendar.sync_minutes = 5;
+			config.calendar.weekly_day_width = 200;
 		})
 		.unwrap();
 		let after_setting = reader.read().unwrap();

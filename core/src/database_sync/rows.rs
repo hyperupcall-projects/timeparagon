@@ -1,7 +1,7 @@
 //! Rows of the synced settings tables, replicated the way documents are.
 //!
 //! Every row is a document of its own in the journal, named after its table
-//! and primary key: `places:[17]`, `settings:["calendar.sync_minutes"]`,
+//! and primary key: `places:[17]`, `settings:["calendar.weekly_day_width"]`,
 //! `travel_modes:[1,2]`. Its value is the row as a JSON object, with JSON
 //! columns embedded as JSON. So the same journal, merge, snapshots and
 //! compaction serve rows too: two devices editing different columns of one

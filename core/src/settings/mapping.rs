@@ -493,7 +493,7 @@ mod tests {
 			"notepad": {"text": "kept elsewhere", "font_size": 120},
 			"projects": {"items": []},
 			"calendar": {
-				"sync_minutes": 30,
+				"weekly_day_width": 200,
 				"app_calendar": null,
 				"disabled": ["work", "tasks:abc"],
 				"source_order": ["b", "work", "b"],
@@ -533,7 +533,10 @@ mod tests {
 		// work, tasks:abc, b and the colored calendar.
 		assert_eq!(tables("calendar_sources"), 4);
 		let key = |table: &'static str, key: &str| (table, Value::from(vec![key]).to_string());
-		assert_eq!(rows[&key("settings", "calendar.sync_minutes")]["value"], 30);
+		assert_eq!(
+			rows[&key("settings", "calendar.weekly_day_width")]["value"],
+			200
+		);
 		assert_eq!(rows[&key("settings", "appearance.theme")]["value"], "Ocean");
 		assert_eq!(rows[&key("settings", "reminders.enabled")]["value"], true);
 		assert_eq!(rows[&key("settings", "alarm.sound")]["value"]["volume"], 25);
@@ -573,7 +576,7 @@ mod tests {
 		assert_eq!(back["travel"], original["travel"]);
 		assert_eq!(back["reminders"], original["reminders"]);
 		let calendar = &back["calendar"];
-		assert_eq!(calendar["sync_minutes"], 30);
+		assert_eq!(calendar["weekly_day_width"], 200);
 		assert_eq!(calendar["disabled"], json!(["tasks:abc", "work"]));
 		assert_eq!(calendar["source_order"], json!(["b", "work"]));
 		assert_eq!(calendar["task_colors"], original["calendar"]["task_colors"]);
@@ -604,9 +607,9 @@ mod tests {
 
 	#[test]
 	fn values_at_their_default_are_not_stored() {
-		let defaults = rows(&json!({"calendar": {"sync_minutes": 60, "show_tasks": true}}));
+		let defaults = rows(&json!({"calendar": {"weekly_day_width": 150, "show_tasks": true}}));
 		let stored = without_defaults(
-			rows(&json!({"calendar": {"sync_minutes": 60, "show_tasks": false}})),
+			rows(&json!({"calendar": {"weekly_day_width": 150, "show_tasks": false}})),
 			&defaults,
 		);
 		let keys: Vec<&String> = stored.keys().map(|(_, key)| key).collect();

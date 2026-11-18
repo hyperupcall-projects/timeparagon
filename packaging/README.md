@@ -278,7 +278,7 @@ with its own colour) are set from **Settings → Desktop appearance** and apply
 the next time the dock opens.
 
 It shares the main app's config, theme, sign-in and day cache, and syncs today
-itself every `sync_minutes`.
+itself every two minutes.
 
 ### Multiple Slack workspaces
 

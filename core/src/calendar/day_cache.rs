@@ -165,53 +165,6 @@ fn month_text(connection: &rusqlite::Connection, month: &str) -> rusqlite::Resul
 		.optional()
 }
 
-/// Read each requested month once. Canonical tasks, sleep and pending edits
-/// are merged by the view loader once for the whole range.
-pub(super) fn load_months(
-	connection: &rusqlite::Connection,
-	dates: &[NaiveDate],
-	day_end_hour: u32,
-) -> rusqlite::Result<Option<Vec<Event>>> {
-	let canonical: bool = connection.query_row(
-		"SELECT EXISTS(SELECT 1 FROM documents WHERE key='calendar_task_snapshot')",
-		[],
-		|row| row.get(0),
-	)?;
-	let mut months = std::collections::BTreeMap::<_, Vec<_>>::new();
-	for &date in dates {
-		months.entry(month_key(date)).or_default().push(date);
-	}
-	let mut events = Vec::new();
-	for (month, days) in months {
-		let Some(text) = month_text(connection, &month)? else {
-			let local: bool = connection.query_row(
-				"SELECT EXISTS(SELECT 1 FROM google_entities) OR EXISTS(SELECT 1 FROM google_task_records)",
-				[],
-				|row| row.get(0),
-			)?;
-			if !local {
-				return Ok(None);
-			}
-			continue;
-		};
-		let Ok(saved) = serde_json::from_str::<SavedMonth>(&text) else {
-			return Ok(None);
-		};
-		events.extend(
-			saved
-				.events
-				.into_iter()
-				.map(Event::from)
-				.filter(|event| !canonical || !event.is_task())
-				.filter(|event| {
-					days.iter()
-						.any(|&day| super::event_on_day(event, day, day_end_hour))
-				}),
-		);
-	}
-	Ok(Some(events))
-}
-
 /// Replace the covered days with one read/write per month, inside the caller's
 /// transaction. Unrequested dates in the same month survive the refresh.
 pub(super) fn save_days(
@@ -541,7 +494,7 @@ pub fn clear(database: &Path) {
 			.execute_batch(&format!(
 				"BEGIN IMMEDIATE;
                  DELETE FROM calendar_months;
-                 DELETE FROM documents WHERE key IN ('{}','calendar_view_coverage');
+                 DELETE FROM documents WHERE key='{}';
                  COMMIT;",
 				keys::SYNC_STATE
 			))

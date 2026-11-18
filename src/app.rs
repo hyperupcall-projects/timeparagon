@@ -569,8 +569,6 @@ pub enum SettingsMessage {
 	DockHourLinesToggled(bool),
 	/// Quit and start again from the binary on disk.
 	RestartRequested,
-	/// Turn incremental sync with Google on or off.
-	IncrementalSyncToggled(bool),
 	/// Forget what incremental sync has stored and fetch everything again.
 	FullSyncRequested,
 	/// The stored sync state was forgotten, or could not be.
@@ -600,7 +598,6 @@ pub enum SettingsMessage {
 	GoogleConnectRequested,
 	GoogleConnected(Result<calendar::oauth::Tokens, String>),
 	GoogleDisconnectRequested,
-	CalendarSyncMinutesChanged(u32),
 	/// The hour the calendar day ends, so late-night events stay with the
 	/// evening they belong to.
 	CalendarDayEndChanged(u32),
@@ -1799,7 +1796,7 @@ pub fn subscription(state: &State) -> Subscription<Message> {
 	}
 	if state.calendar.is_signed_in() {
 		subscriptions.push(
-			iced::time::every(state.config.calendar.refresh_every())
+			iced::time::every(config::CalendarSettings::REFRESH_EVERY)
 				.map(|_| Message::Calendar(CalendarMessage::CalendarAutoSyncRequested)),
 		);
 	}
@@ -2563,7 +2560,7 @@ fn fetch_pending_calendar_days(state: &mut State, fetched: &[chrono::NaiveDate])
 fn auto_sync_calendar(state: &mut State) -> Task<Message> {
 	if state
 		.calendar
-		.sync_due(state.config.calendar.refresh_every(), crate::clock::now())
+		.sync_due(config::CalendarSettings::REFRESH_EVERY, crate::clock::now())
 	{
 		sync_calendar(state)
 	} else {

@@ -557,7 +557,6 @@ pub fn sync(
 		});
 		let snapshot = api::fetch_range(
 			&token,
-			&settings.disabled,
 			anchor,
 			first.pred_opt().unwrap_or(first),
 			last,

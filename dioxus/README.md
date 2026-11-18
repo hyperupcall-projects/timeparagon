@@ -266,7 +266,7 @@ did and each change sent to Google, and whether it was saved). Life stays on the
 - **The timed grid** with calendar events and time blocks, using the same
   overlap packing and end-of-day boundary as the iced app.
 - A live **current-time needle**, automatic scroll to now, day navigation,
-  manual refresh, and a refresh on the configured sync interval.
+  manual refresh, and a refresh every two minutes.
 - Tapping a **time block** opens a popup listing **every task assigned to that
   block**, in planned order, with each task's list, status and estimate, and the
   block's total planned time against its capacity. Tasks can be opened, removed
@@ -275,9 +275,8 @@ did and each change sent to Google, and whether it was saved). Life stays on the
 Do, Plan and agenda sheets read their data from SQLite first. Successfully
 fetched empty days are cached too; opening another date fetches its missing
 range. Completed fetches save on the worker even if you leave the view, and
-cached views remain available offline. With incremental sync enabled, the app
-checks every two minutes using the desktop's Calendar sync tokens and Google
-Tasks `updatedMin` timestamps. Those checks update the local copy for all
+cached views remain available offline. The app checks every two minutes using
+the desktop's Calendar sync tokens and Google Tasks `updatedMin` timestamps. Those checks update the local copy for all
 covered dates, including dates outside the current view. The widget also saves
 its fetched days to SQLite, whether or not reminders are enabled.
 

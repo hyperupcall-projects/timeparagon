@@ -51,12 +51,7 @@ impl Loader {
 		// Hold the lock through persistence, so a request from another view
 		// observes both the new records and the completed refresh generation.
 		let mut refresh = self.0.lock().map_err(|_| "The calendar worker stopped")?;
-		let cached = view_cache::load(
-			path,
-			dates,
-			settings.day_start_hour(),
-			settings.incremental_sync,
-		)?;
+		let cached = view_cache::load(path, dates, settings.day_start_hour())?;
 		let forced = match &refresh.completed {
 			Some((seen, previous)) => *seen != revision || previous != settings,
 			None => revision != 0,
@@ -64,7 +59,7 @@ impl Loader {
 		let due = cached.as_ref().is_none_or(|snapshot| {
 			(timeparagon_core::clock::now() - snapshot.fetched_at)
 				.to_std()
-				.is_ok_and(|elapsed| elapsed >= settings.refresh_every())
+				.is_ok_and(|elapsed| elapsed >= CalendarSettings::REFRESH_EVERY)
 		});
 		if !forced
 			&& !due && let Some(snapshot) = cached
@@ -105,12 +100,7 @@ pub fn use_calendar(
 			let saved = crate::editor::worker(move || {
 				let path =
 					timeparagon_core::task_db::path().ok_or("Cannot locate the local database")?;
-				view_cache::load(
-					&path,
-					&wanted,
-					options.day_start_hour(),
-					options.incremental_sync,
-				)
+				view_cache::load(&path, &wanted, options.day_start_hour())
 			})
 			.await?;
 			if let Some(snapshot) = &saved {
@@ -137,13 +127,23 @@ pub fn use_calendar(
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use timeparagon_core::calendar::sample_snapshot;
+	use timeparagon_core::calendar::{at_clock, sample_snapshot};
 
 	fn options() -> CalendarSettings {
-		CalendarSettings {
-			incremental_sync: false,
-			..Default::default()
-		}
+		CalendarSettings::default()
+	}
+
+	/// Records `day` as complete, as a sync that fetched it would.
+	fn cover(path: &Path, day: NaiveDate) {
+		timeparagon_core::task_db::Database::open(path).unwrap();
+		let bound = |day: NaiveDate| at_clock(day, 0, 0).to_utc().to_rfc3339();
+		rusqlite::Connection::open(path)
+			.unwrap()
+			.execute(
+				"INSERT INTO google_sync_windows (start_at,end_at) VALUES (?1,?2)",
+				[bound(day), bound(day.succ_opt().unwrap())],
+			)
+			.unwrap();
 	}
 
 	#[test]
@@ -154,6 +154,7 @@ mod tests {
 		snapshot.fetched_at = timeparagon_core::clock::now();
 		snapshot.events.clear();
 		let day = snapshot.day;
+		cover(&path, day);
 		let loader = Loader::default();
 		let mut calls = 0;
 		loader
@@ -204,26 +205,24 @@ mod tests {
 		let mut snapshot = sample_snapshot();
 		snapshot.fetched_at = timeparagon_core::clock::now() - chrono::Duration::days(1);
 		let day = snapshot.day;
+		cover(&path, day);
 		view_cache::save(&path, &snapshot, &[day], 0).unwrap();
+		let before = view_cache::load(&path, &[day], 0).unwrap().unwrap();
 		let loader = Loader::default();
 		assert!(
 			loader
 				.load_with(&path, &[day], &options(), 2, || Err("offline".into()))
 				.is_err()
 		);
-		assert_eq!(
-			view_cache::load(&path, &[day], 0, false)
-				.unwrap()
-				.unwrap()
-				.events,
-			snapshot.events
-		);
+		let after = view_cache::load(&path, &[day], 0).unwrap().unwrap();
+		assert_eq!(after.events, before.events);
+		assert_eq!(after.fetched_at, before.fetched_at);
 		snapshot.fetched_at = timeparagon_core::clock::now();
 		loader
 			.load_with(&path, &[day], &options(), 2, || Ok(snapshot.clone()))
 			.unwrap();
 		assert_eq!(
-			view_cache::load(&path, &[day], 0, false)
+			view_cache::load(&path, &[day], 0)
 				.unwrap()
 				.unwrap()
 				.fetched_at,

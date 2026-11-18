@@ -396,7 +396,7 @@ fn Main() -> Element {
 					scrolled.set(false);
 				}
 			}
-			if last_refresh.elapsed() >= config.peek().calendar.refresh_every() {
+			if last_refresh.elapsed() >= CalendarSettings::REFRESH_EVERY {
 				last_refresh = tokio::time::Instant::now();
 				revision.set(revision() + 1);
 			}
@@ -1497,29 +1497,6 @@ fn Main() -> Element {
 						reminders::ReminderSection { config }
 						sleep::SleepSettings { config }
 						h3 { class: "settings-heading", "Application" }
-						label { class: "sheet-check",
-							input {
-								r#type: "checkbox",
-								checked: config().calendar.incremental_sync,
-								onchange: move |event: FormEvent| {
-									match day::set_incremental_sync(event.checked()) {
-										Ok(saved) => {
-											config.set(saved);
-											settings_error.set(None);
-										}
-										Err(error) => settings_error.set(Some(error)),
-									}
-								},
-							}
-							" Incremental sync"
-						}
-						p { class: "hint",
-							if config().calendar.incremental_sync {
-								"Asks Google Calendar and Tasks only for what changed, every 2 minutes."
-							} else {
-								"Fetches everything in view on every sync."
-							}
-						}
 						div { class: "state-actions",
 							button {
 								class: "btn",

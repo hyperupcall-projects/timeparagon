@@ -325,12 +325,12 @@ mod tests {
 		}
 
 		update(&path, |config: &mut Config| {
-			config.calendar.sync_minutes = 30
+			config.calendar.weekly_day_width = 200
 		})
 		.unwrap();
 		assert_eq!(count(&path, "settings"), 1);
 		update(&path, |config: &mut Config| {
-			config.calendar.sync_minutes = 60
+			config.calendar.weekly_day_width = 150
 		})
 		.unwrap();
 		assert_eq!(
@@ -351,7 +351,7 @@ mod tests {
 			lng: 2.5,
 		};
 		let id = update(&path, |config: &mut Config| {
-			config.calendar.sync_minutes = 30;
+			config.calendar.weekly_day_width = 200;
 			crate::places::add_place(
 				&mut config.travel.places,
 				&found.name,
@@ -366,7 +366,7 @@ mod tests {
 
 		// Another process, or another device, changes things.
 		update(&path, |config: &mut Config| {
-			config.calendar.sync_minutes = 45;
+			config.calendar.weekly_day_width = 250;
 			config.travel.places[0].favorite = true;
 			config.travel.event_places.insert("standup".into(), id);
 		})
@@ -378,7 +378,7 @@ mod tests {
 		save(&path, &stale, &desired).unwrap();
 
 		let saved: Config = load(&path, |_| {}).unwrap().value;
-		assert_eq!(saved.calendar.sync_minutes, 45);
+		assert_eq!(saved.calendar.weekly_day_width, 250);
 		assert_eq!(saved.travel.places[0].name, "Campus");
 		assert!(
 			saved.travel.places[0].favorite,
@@ -455,7 +455,7 @@ mod tests {
 			);
 			connection
 				.execute_batch(
-					"INSERT INTO settings VALUES('calendar.sync_minutes','\"often\"');
+					"INSERT INTO settings VALUES('calendar.weekly_day_width','\"often\"');
                      INSERT INTO settings VALUES('future.setting','1');
                      UPDATE timeparagon_sync_control SET projecting=1;
                      INSERT INTO settings VALUES('calendar.weekly_days','not json');
@@ -466,9 +466,9 @@ mod tests {
 		let mut ignored = Vec::new();
 		let loaded: Loaded<Config> = load(&path, |field| ignored.push(field)).unwrap();
 		assert_eq!(loaded.value.calendar.day_end_hour, 3);
-		assert_eq!(loaded.value.calendar.sync_minutes, 60);
+		assert_eq!(loaded.value.calendar.weekly_day_width, 150);
 		assert_eq!(loaded.problems.len(), 1, "{:?}", loaded.problems);
-		assert!(loaded.problems[0].starts_with("calendar.sync_minutes"));
+		assert!(loaded.problems[0].starts_with("calendar.weekly_day_width"));
 		assert_eq!(ignored, ["future"]);
 
 		update(&path, |config: &mut Config| {
@@ -479,7 +479,7 @@ mod tests {
 		let kept: i64 = db
             .connection()
             .query_row(
-                "SELECT count(*) FROM settings WHERE key IN ('calendar.sync_minutes','calendar.weekly_days','future.setting')",
+                "SELECT count(*) FROM settings WHERE key IN ('calendar.weekly_day_width','calendar.weekly_days','future.setting')",
                 [],
                 |row| row.get(0),
             )
