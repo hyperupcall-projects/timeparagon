@@ -61,22 +61,41 @@ impl NotesStore {
 	}
 
 	/// Reads the directory again when its files changed.
-	pub fn reload_shared(mut self) {
+	pub async fn reload_shared(mut self) {
 		if *self.edits.peek() != *self.saved_edits.peek() {
 			return;
 		}
 		let Some(directory) = self.directory.peek().clone() else {
 			return;
 		};
-		let fingerprint = notes::fingerprint(&directory);
-		if *self.fingerprint.peek() == Some(fingerprint) {
+		let edits = *self.edits.peek();
+		let seen = *self.fingerprint.peek();
+		let wanted = directory.clone();
+		let result = crate::editor::worker(move || {
+			let fingerprint = notes::fingerprint(&wanted);
+			let library = if seen == Some(fingerprint) {
+				None
+			} else {
+				Some(Library::read(&wanted).map_err(|e| e.to_string())?)
+			};
+			Ok((fingerprint, library))
+		})
+		.await;
+		// Do not replace typing, a local save, or a newly selected directory
+		// with the result of a read that began before it.
+		if self.directory.peek().as_ref() != Some(&directory)
+			|| *self.edits.peek() != edits
+			|| *self.saved_edits.peek() != edits
+		{
 			return;
 		}
-		match Library::read(&directory) {
-			Ok(mut library) => {
-				library.adopt_identities(&self.library.peek());
-				if library != *self.library.peek() {
-					self.library.set(library);
+		match result {
+			Ok((fingerprint, library)) => {
+				if let Some(mut library) = library {
+					library.adopt_identities(&self.library.peek());
+					if library != *self.library.peek() {
+						self.library.set(library);
+					}
 				}
 				self.fingerprint.set(Some(fingerprint));
 			}
@@ -182,7 +201,9 @@ impl NotesStore {
 		if *self.edits.peek() != *self.saved_edits.peek() {
 			self.save_local();
 		} else {
-			self.reload_shared();
+			spawn_forever(async move {
+				self.reload_shared().await;
+			});
 		}
 	}
 

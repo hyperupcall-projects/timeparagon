@@ -10,7 +10,7 @@ use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
 use super::{Event, Snapshot, api::incremental, day_cache, event_on_day, operations, sleep};
-use crate::task_db::{self, Database};
+use crate::task_db::Database;
 
 const COVERAGE: &str = "calendar_view_coverage";
 #[derive(Default, Serialize, Deserialize)]
@@ -41,38 +41,27 @@ pub fn load(
 	let Some((fetched_at, calendars)) = day_cache::load_sync_state(path) else {
 		return Ok(None);
 	};
+	let mut database = Database::open(path)?;
+	let tx = database
+		.connection()
+		.unchecked_transaction()
+		.map_err(|e| e.to_string())?;
 	let mut events = if incremental {
-		let mut database = Database::open(path)?;
-		let tx = database
-			.connection()
-			.unchecked_transaction()
-			.map_err(|e| e.to_string())?;
-		let Some(mut events) =
-			incremental::cached_events(&tx, &calendars, first, last, day_end_hour)?
+		let Some(events) = incremental::cached_events(&tx, &calendars, first, last, day_end_hour)?
 		else {
 			return Ok(None);
 		};
-		// Tasks have one canonical snapshot, shared by all dates. Calendar
-		// tasks come from the sync tables, including pinned off-day tasks.
-		let mut query = tx
-			.prepare("SELECT event FROM google_task_records")
-			.map_err(|e| e.to_string())?;
-		let rows = query
-			.query_map([], |row| row.get::<_, String>(0))
-			.map_err(|e| e.to_string())?;
-		for row in rows {
-			let task: Event = serde_json::from_str(&row.map_err(|e| e.to_string())?)
-				.map_err(|e| e.to_string())?;
-			if !task.is_calendar_task() {
-				events.retain(|event| event.id != task.id);
-				events.push(task);
-			}
-		}
 		events
 	} else {
-		let coverage: Coverage = task_db::read_document(path, COVERAGE)
-			.ok()
-			.flatten()
+		let coverage: Coverage = tx
+			.query_row(
+				"SELECT value FROM documents WHERE key=?1",
+				[COVERAGE],
+				|row| row.get::<_, String>(0),
+			)
+			.optional()
+			.map_err(|e| e.to_string())?
+			.and_then(|json| serde_json::from_str(&json).ok())
 			.unwrap_or_default();
 		if coverage.account != account(&calendars)
 			|| coverage.day_end_hour != day_end_hour
@@ -80,15 +69,32 @@ pub fn load(
 		{
 			return Ok(None);
 		}
-		let mut events = Vec::new();
-		for &day in dates {
-			let Some(saved) = day_cache::load(path, day, day_end_hour) else {
-				return Ok(None);
-			};
-			events.extend(saved);
-		}
+		let Some(events) =
+			day_cache::load_months(&tx, dates, day_end_hour).map_err(|e| e.to_string())?
+		else {
+			return Ok(None);
+		};
 		events
 	};
+	// Merge the canonical task snapshot once, rather than once per date.
+	let mut query = tx
+		.prepare("SELECT event FROM google_task_records")
+		.map_err(|e| e.to_string())?;
+	let tasks: Vec<Event> = query
+		.query_map([], |row| row.get::<_, String>(0))
+		.map_err(|e| e.to_string())?
+		.map(|row| {
+			serde_json::from_str::<Event>(&row.map_err(|e| e.to_string())?)
+				.map_err(|e| e.to_string())
+		})
+		.collect::<Result<_, _>>()?;
+	let tasks: Vec<_> = tasks
+		.into_iter()
+		.filter(|task| !incremental || !task.is_calendar_task())
+		.collect();
+	let ids: HashSet<_> = tasks.iter().map(|task| task.id.as_str()).collect();
+	events.retain(|event| !ids.contains(event.id.as_str()));
+	events.extend(tasks);
 	let mut seen = HashSet::new();
 	events.retain(|event| seen.insert((event.calendar_id.clone(), event.id.clone())));
 	sleep::store::merge(sleep::stored_nights(path, first, last)?, &mut events);
@@ -123,20 +129,12 @@ pub fn save(
 	if dates.is_empty() {
 		return Err("Calendar range is empty".to_owned());
 	}
-	for &day in dates {
-		let events: Vec<_> = snapshot
-			.events
-			.iter()
-			.filter(|event| event_on_day(event, day, day_end_hour))
-			.cloned()
-			.collect();
-		day_cache::save(path, day, &events, day_end_hour).map_err(|e| e.to_string())?;
-	}
 	let mut database = Database::open(path)?;
 	let tx = database
 		.connection()
 		.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
 		.map_err(|e| e.to_string())?;
+	day_cache::save_days(&tx, dates, &snapshot.events, day_end_hour).map_err(|e| e.to_string())?;
 	let mut coverage: Coverage = tx
 		.query_row(
 			"SELECT value FROM documents WHERE key=?1",
@@ -158,9 +156,9 @@ pub fn save(
 	coverage.days.extend(dates);
 	let json = serde_json::to_string(&coverage).map_err(|e| e.to_string())?;
 	tx.execute("INSERT INTO documents(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [COVERAGE, &json]).map_err(|e| e.to_string())?;
-	tx.commit().map_err(|e| e.to_string())?;
-	day_cache::save_sync_state(path, snapshot.fetched_at, &snapshot.calendars)
-		.map_err(|e| e.to_string())
+	day_cache::save_sync_state_in(&tx, snapshot.fetched_at, &snapshot.calendars)
+		.map_err(|e| e.to_string())?;
+	tx.commit().map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -256,5 +254,67 @@ mod tests {
 		snapshot.day = next;
 		save(&path, &snapshot, &[next], 0).unwrap();
 		assert!(load(&path, &[day], 0, false).unwrap().is_none());
+	}
+
+	#[test]
+	fn range_save_writes_each_month_once_and_preserves_unrequested_days() {
+		let dir = tempfile::tempdir().unwrap();
+		let path = dir.path().join("calendar.sqlite3");
+		let mut snapshot = sample_snapshot();
+		snapshot.events.truncate(1);
+		let untouched = snapshot.events[0].clone();
+		let first = snapshot.day;
+		save(&path, &snapshot, &[first], 0).unwrap();
+		let mut db = Database::open(&path).unwrap();
+		db.connection().execute_batch("
+            CREATE TABLE cache_writes(month TEXT);
+            CREATE TRIGGER count_month_insert AFTER INSERT ON calendar_months BEGIN INSERT INTO cache_writes VALUES(NEW.month); END;
+            CREATE TRIGGER count_month_update AFTER UPDATE ON calendar_months BEGIN INSERT INTO cache_writes VALUES(NEW.month); END;
+        ").unwrap();
+		let start = first + chrono::Duration::days(20);
+		let dates: Vec<_> = (0..35)
+			.map(|offset| start + chrono::Duration::days(offset))
+			.collect();
+		snapshot.events[0].start =
+			super::super::at_clock(first + chrono::Duration::days(30), 23, 0);
+		snapshot.events[0].end = snapshot.events[0].start + chrono::Duration::hours(3);
+		snapshot.events[0].id = "overnight".into();
+		save(&path, &snapshot, &dates, 0).unwrap();
+		let writes: i64 = db
+			.connection()
+			.query_row("SELECT count(*) FROM cache_writes", [], |row| row.get(0))
+			.unwrap();
+		assert_eq!(
+			writes, 2,
+			"a date range spanning two months writes two rows"
+		);
+		assert_eq!(
+			load(&path, &[first], 0, false).unwrap().unwrap().events,
+			vec![untouched]
+		);
+		assert_eq!(
+			load(&path, &dates, 0, false).unwrap().unwrap().events,
+			snapshot.events
+		);
+	}
+
+	#[test]
+	fn failed_range_save_rolls_back_contents_coverage_and_sync_time_together() {
+		let dir = tempfile::tempdir().unwrap();
+		let path = dir.path().join("calendar.sqlite3");
+		let mut snapshot = sample_snapshot();
+		let day = snapshot.day;
+		save(&path, &snapshot, &[day], 0).unwrap();
+		let before = load(&path, &[day], 0, false).unwrap().unwrap();
+		let mut db = Database::open(&path).unwrap();
+		db.connection().execute_batch("CREATE TRIGGER fail_next_month BEFORE INSERT ON calendar_months WHEN NEW.month='2026-11' BEGIN SELECT RAISE(ABORT,'test failure'); END;").unwrap();
+		snapshot.events.clear();
+		snapshot.fetched_at += chrono::Duration::hours(1);
+		let next = NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+		assert!(save(&path, &snapshot, &[day, next], 0).is_err());
+		let after = load(&path, &[day], 0, false).unwrap().unwrap();
+		assert_eq!(after.events, before.events);
+		assert_eq!(after.fetched_at, before.fetched_at);
+		assert!(load(&path, &[next], 0, false).unwrap().is_none());
 	}
 }

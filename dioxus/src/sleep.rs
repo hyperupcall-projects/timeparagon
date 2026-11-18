@@ -31,6 +31,7 @@ pub fn running(
 	snapshot: Option<&Snapshot>,
 	store: &calendar::Store,
 	today: NaiveDate,
+	overlay: Option<&calendar::operations::Overlay>,
 ) -> Option<Event> {
 	let shown = snapshot.map_or(&[][..], |snapshot| snapshot.events.as_slice());
 	let mut cached: Vec<Event> = Vec::new();
@@ -48,13 +49,12 @@ pub fn running(
 		}
 	}
 	if !cached.is_empty()
-		&& let Some(path) = timeparagon_core::task_db::path()
-		&& let Err(error) = calendar::operations::overlay(
-			&path,
+		&& let Some(overlay) = overlay
+	{
+		overlay.apply(
 			&mut cached,
 			store.cached_snapshot().map(|snapshot| snapshot.fetched_at),
-		) {
-		eprintln!("Could not load local edits: {error}");
+		);
 	}
 	active(shown.iter().chain(&cached)).cloned()
 }

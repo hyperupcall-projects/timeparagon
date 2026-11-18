@@ -50,13 +50,7 @@ pub fn Planner(
 	on_open: EventHandler<Event>,
 	on_block: EventHandler<Event>,
 ) -> Element {
-	let mut clock = use_signal(chrono::Local::now);
-	use_future(move || async move {
-		loop {
-			tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-			clock.set(chrono::Local::now());
-		}
-	});
+	let crate::habits::EventNames(names) = use_context();
 	let mut count = use_signal(|| 3u8);
 	let mut expanded = use_signal(|| false);
 	let selected = anchor();
@@ -100,7 +94,7 @@ pub fn Planner(
 		settings.first_day_of_week,
 	);
 	let heading = calendar::month_heading(calendar::first_of_month(selected));
-	let snapshot = loaded
+	let raw_snapshot = use_memo(use_reactive!(|dates| loaded
 		.read()
 		.as_ref()
 		.and_then(|result| result.as_ref().ok())
@@ -112,26 +106,42 @@ pub fn Planner(
 				.as_ref()
 				.filter(|(wanted, _)| *wanted == dates)
 				.map(|(_, snapshot)| snapshot.clone())
-		});
+		})));
 	// Cached grids remain interactive while refreshing or offline. Keep the
 	// complete snapshot for edits, before narrowing what is drawn to a search.
-	let gesture_context = snapshot
-		.as_ref()
-		.map(|snapshot| day::EditContext::new(&config.read(), snapshot));
-	let snapshot = snapshot.map(|mut snapshot| {
-		crate::habits::name_events(&mut snapshot.events);
-		day::filter_snapshot(&snapshot, &search, &settings)
-	});
+	let snapshot = use_memo(use_reactive!(|search, settings| {
+		raw_snapshot.read().as_ref().map(|snapshot| {
+			let mut snapshot = snapshot.clone();
+			let names = names.read();
+			for event in &mut snapshot.events {
+				names.name_event(event);
+			}
+			day::filter_snapshot(&snapshot, &search, &settings)
+		})
+	}));
 	let error = loaded
 		.read()
 		.as_ref()
 		.and_then(|result| result.as_ref().err())
 		.cloned();
-	let month_rows = snapshot
-		.as_ref()
-		.filter(|_| full_month)
-		.map(|snapshot| day::agenda(snapshot, &dates, &settings))
-		.unwrap_or_default();
+	let month_rows = use_memo(use_reactive!(|dates, settings, full_month| {
+		snapshot
+			.read()
+			.as_ref()
+			.filter(|_| full_month)
+			.map(|snapshot| day::month_previews(snapshot, &dates, &settings))
+			.unwrap_or_default()
+	}));
+	let agenda_days = use_memo(use_reactive!(|dates, settings, agenda_mode| {
+		snapshot
+			.read()
+			.as_ref()
+			.filter(|_| agenda_mode)
+			.map(|snapshot| day::schedule_agenda(snapshot, &dates, &settings))
+			.unwrap_or_default()
+	}));
+	let snapshot = snapshot.read();
+	let month_rows = month_rows.read();
 	let shown_count = if period == PlanView::Day {
 		1
 	} else {
@@ -186,7 +196,7 @@ pub fn Planner(
 						let in_range = !full_month && !agenda_mode && dates.contains(&date);
 						if date == selected { class.push_str(" selected"); }
 						else if in_range { class.push_str(" in-range"); }
-						let rows = month_rows.iter().find(|(day, _)| *day == date).map(|(_, rows)| rows.as_slice()).unwrap_or(&[]);
+						let preview = month_rows.iter().find(|(day, _)| *day == date).map(|(_, preview)| preview);
 						rsx! {
 							button {
 								key: "{date}", class: "{class}",
@@ -200,13 +210,13 @@ pub fn Planner(
 								},
 								span { class: "planner-number", "{date.day()}" }
 								if full_month {
-									for row in rows.iter().take(2) {
+									for row in preview.into_iter().flat_map(|preview| &preview.rows) {
 										{
 											let color = if search.hides_details(&row.event) { calendar::search::PRIVATE_COLOR } else { row.color };
 											rsx! { span { class: "month-preview", style: "border-left-color: {crate::css_color(color)};", "{day::display_title(&row.event, &search)}" } }
 										}
 									}
-									if rows.len() > 2 { span { class: "month-more", "+{rows.len() - 2} more" } }
+									if let Some(preview) = preview.filter(|preview| preview.total > 2) { span { class: "month-more", "+{preview.total - 2} more" } }
 								}
 							}
 						}
@@ -231,15 +241,15 @@ pub fn Planner(
 				p { class: "planner-message hint", role: "status", "Loading calendar…" }
 			}
 			if agenda_mode {
-				if let Some(snapshot) = &snapshot {
-					{schedule_list(snapshot, &dates, &settings, time_format, &search, clock(), on_open, anchor)}
+				if snapshot.is_some() {
+					ScheduleList { days: agenda_days, format: time_format, search: search.clone(), on_open, anchor }
 				}
 			}
 			if !full_month && !agenda_mode {
-				if let Some(context) = gesture_context {
+				if let Some(context) = raw_snapshot.read().as_ref().map(|snapshot| day::EditContext::new(&config.read(), snapshot)) {
 					crate::calendar_gestures::Gestures { context, zoom, on_saved: move |_| revision.set(revision() + 1) }
 				}
-				if let Some(snapshot) = snapshot {
+				if let Some(snapshot) = snapshot.as_ref() {
 					{schedule_grid(&snapshot, &dates, &settings, time_format, zoom(), shown_count, on_open, on_block, (!search.is_modified()).then(|| config.read().clone()).as_ref(), &search)}
 				}
 			}
@@ -367,6 +377,8 @@ mod tests {
 
 	fn preview<const MODE: u8>() -> Element {
 		use_context_provider(crate::cache::Loader::default);
+		let names = use_signal(timeparagon_core::habits::Library::default);
+		use_context_provider(|| crate::habits::EventNames(names));
 		let changes = use_signal(|| 0);
 		use_context_provider(|| crate::cache::Changes(changes));
 		let day = date(2026, 11, 8);
@@ -436,6 +448,85 @@ mod tests {
 				std::fs::write(format!("{directory}/{mode}.html"), page).unwrap();
 			}
 		}
+	}
+
+	#[test]
+	fn clock_state_changes_only_at_an_event_boundary_or_midnight() {
+		let mut snapshot = calendar::sample_snapshot();
+		snapshot.events.truncate(1);
+		let event = &mut snapshot.events[0];
+		event.all_day = false;
+		event.start = calendar::at_clock(snapshot.day, 10, 0);
+		event.end = calendar::at_clock(snapshot.day, 11, 0);
+		let rows = vec![day::AgendaRow {
+			event: event.clone(),
+			time: String::new(),
+			color: event.color,
+		}];
+		let now = calendar::at_clock(snapshot.day, 9, 0);
+		assert!(
+			schedule_time(snapshot.day, &rows, now)
+				== schedule_time(snapshot.day, &rows, now + Duration::seconds(30))
+		);
+		assert!(
+			schedule_time(snapshot.day, &rows, now)
+				!= schedule_time(snapshot.day, &rows, event.start)
+		);
+		assert!(
+			schedule_time(snapshot.day, &rows, event.start)
+				!= schedule_time(snapshot.day, &rows, event.end)
+		);
+		assert!(
+			schedule_time(snapshot.day, &rows, event.end)
+				!= schedule_time(snapshot.day, &rows, now + Duration::days(1))
+		);
+	}
+
+	#[derive(Props, Clone, PartialEq)]
+	struct ClockHarnessProps {
+		clock: std::rc::Rc<std::cell::Cell<Option<Signal<chrono::DateTime<chrono::Local>>>>>,
+	}
+
+	fn clock_harness(props: ClockHarnessProps) -> Element {
+		let date = date(2026, 11, 8);
+		let clock = use_signal(move || calendar::at_clock(date, 9, 0));
+		props.clock.set(Some(clock));
+		let anchor = use_signal(move || date);
+		let rows = use_hook(move || {
+			let mut event = calendar::sample_snapshot().events.remove(0);
+			event.title = "Clock test meeting".into();
+			event.all_day = false;
+			event.start = calendar::at_clock(date, 10, 0);
+			event.end = calendar::at_clock(date, 11, 0);
+			vec![day::AgendaRow {
+				color: event.color,
+				event,
+				time: String::new(),
+			}]
+		});
+		rsx! { ScheduleDay { date, rows, clock, format: TimeFormat::TwentyFourHour, search: Search::default(), on_open: |_| {}, anchor } }
+	}
+
+	#[test]
+	fn schedule_day_keeps_rows_until_the_clock_crosses_their_boundary() {
+		let clock = std::rc::Rc::new(std::cell::Cell::new(None));
+		let mut dom = VirtualDom::new_with_props(
+			clock_harness,
+			ClockHarnessProps {
+				clock: clock.clone(),
+			},
+		);
+		dom.rebuild_in_place();
+		let before = dioxus_ssr::render(&dom);
+		assert!(before.contains("Clock test meeting"));
+		assert!(!before.contains("schedule-row past"));
+		let mut signal = clock.get().unwrap();
+		dom.in_runtime(|| signal.set(signal() + Duration::seconds(30)));
+		dom.render_immediate_to_vec();
+		assert_eq!(dioxus_ssr::render(&dom), before);
+		dom.in_runtime(|| signal.set(calendar::at_clock(date(2026, 11, 8), 11, 0)));
+		dom.render_immediate_to_vec();
+		assert!(dioxus_ssr::render(&dom).contains("schedule-row past"));
 	}
 
 	fn grid_preview(
@@ -664,6 +755,129 @@ mod tests {
 	}
 }
 
+/// Only this small clock-dependent state changes while the user reads a
+/// schedule. Unchanged days do not recreate their rows on a clock tick.
+#[derive(Clone, PartialEq)]
+struct ScheduleTime {
+	today: bool,
+	needle: Option<usize>,
+	past: Vec<bool>,
+}
+
+fn schedule_time(
+	date: NaiveDate,
+	rows: &[day::AgendaRow],
+	now: chrono::DateTime<chrono::Local>,
+) -> ScheduleTime {
+	let today = date == now.date_naive();
+	ScheduleTime {
+		today,
+		needle: today.then(|| {
+			rows.iter()
+				.position(|row| !row.event.all_day && row.event.start > now)
+				.unwrap_or(rows.len())
+		}),
+		past: rows
+			.iter()
+			.map(|row| !row.event.all_day && row.event.end <= now)
+			.collect(),
+	}
+}
+
+#[component]
+fn ScheduleList(
+	days: Memo<Vec<(NaiveDate, Vec<day::AgendaRow>)>>,
+	format: TimeFormat,
+	search: Search,
+	on_open: EventHandler<Event>,
+	anchor: Signal<NaiveDate>,
+) -> Element {
+	let mut clock = use_signal(chrono::Local::now);
+	use_future(move || async move {
+		loop {
+			tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+			clock.set(chrono::Local::now());
+		}
+	});
+	let days = days.read();
+	rsx! {
+		div { key: "{days.first().map(|(date, _)| date):?}", class: "schedule-list", aria_label: "Schedule",
+			for (date, rows) in days.iter() {
+				ScheduleDay { key: "{date}", date: *date, rows: rows.clone(), clock, format, search: search.clone(), on_open, anchor }
+			}
+		}
+	}
+}
+
+#[component]
+fn ScheduleDay(
+	date: NaiveDate,
+	rows: Vec<day::AgendaRow>,
+	clock: Signal<chrono::DateTime<chrono::Local>>,
+	format: TimeFormat,
+	search: Search,
+	on_open: EventHandler<Event>,
+	anchor: Signal<NaiveDate>,
+) -> Element {
+	let time = use_memo(use_reactive!(|date, rows| schedule_time(
+		date,
+		&rows,
+		clock()
+	)));
+	schedule_day(date, &rows, format, &search, &time.read(), on_open, anchor)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn schedule_day(
+	date: NaiveDate,
+	rows: &[day::AgendaRow],
+	format: TimeFormat,
+	search: &Search,
+	time: &ScheduleTime,
+	on_open: EventHandler<Event>,
+	mut anchor: Signal<NaiveDate>,
+) -> Element {
+	let needle = time.needle;
+	rsx! {
+		section { key: "{date}", class: "schedule-day",
+			button {
+				class: if time.today { "schedule-date today" } else { "schedule-date" },
+				aria_label: date.format("%A, %B %-d, %Y").to_string(),
+				onclick: move |_| anchor.set(date),
+				span { class: "schedule-day-number", {date.format("%-d").to_string()} }
+				span { {date.format("%b, %a").to_string()} }
+			}
+			div { class: "schedule-rows",
+				if rows.is_empty() { p { class: "schedule-empty hint", "No events" } }
+				for (index, row) in rows.iter().enumerate() {
+					{
+						let event = row.event.clone();
+						let hidden = search.hides_details(&event);
+						let title = if hidden { calendar::search::PRIVATE_TITLE.into() } else { calendar::schedule::title(&event, date) };
+						let dot = crate::css_color(if hidden { calendar::search::PRIVATE_COLOR } else { row.color });
+						let past = time.past[index];
+						let label = calendar::schedule::time_label(&event, format);
+						rsx! {
+							div { key: "{event.id}", class: "schedule-entry", "data-sending": event.details.sending,
+								if needle == Some(index) { div { class: "schedule-now", role: "separator", aria_label: "Current time" } }
+								button {
+									class: if past { "schedule-row past" } else { "schedule-row" },
+									onclick: move |_| on_open.call(event.clone()),
+									span { class: "schedule-dot", style: "background:{dot}" }
+									span { class: "schedule-time", "{label}" }
+									span { class: "schedule-title", "{title}" }
+								}
+							}
+						}
+					}
+				}
+				if needle == Some(rows.len()) { div { class: "schedule-now", role: "separator", aria_label: "Current time" } }
+			}
+		}
+	}
+}
+
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn schedule_list(
 	snapshot: &Snapshot,
@@ -673,55 +887,13 @@ fn schedule_list(
 	search: &Search,
 	now: chrono::DateTime<chrono::Local>,
 	on_open: EventHandler<Event>,
-	mut anchor: Signal<NaiveDate>,
+	anchor: Signal<NaiveDate>,
 ) -> Element {
 	let days = day::schedule_agenda(snapshot, dates, settings);
 	rsx! {
-		div { key: "{dates.first():?}", class: "schedule-list", aria_label: "Schedule",
+		div { class: "schedule-list", aria_label: "Schedule",
 			for (date, rows) in days {
-				{
-					let today = date == now.date_naive();
-					let needle = if today {
-						Some(rows.iter().position(|row| !row.event.all_day && row.event.start > now).unwrap_or(rows.len()))
-					} else { None };
-					rsx! {
-						section { key: "{date}", class: "schedule-day",
-							button {
-								class: if today { "schedule-date today" } else { "schedule-date" },
-								aria_label: date.format("%A, %B %-d, %Y").to_string(),
-								onclick: move |_| anchor.set(date),
-								span { class: "schedule-day-number", {date.format("%-d").to_string()} }
-								span { {date.format("%b, %a").to_string()} }
-							}
-							div { class: "schedule-rows",
-								if rows.is_empty() { p { class: "schedule-empty hint", "No events" } }
-								for (index, row) in rows.iter().enumerate() {
-									{
-										let event = row.event.clone();
-										let hidden = search.hides_details(&event);
-										let title = if hidden { timeparagon_core::calendar::search::PRIVATE_TITLE.into() } else { calendar::schedule::title(&event, date) };
-										let dot = crate::css_color(if hidden { timeparagon_core::calendar::search::PRIVATE_COLOR } else { row.color });
-										let past = !event.all_day && event.end <= now;
-										let time = calendar::schedule::time_label(&event, format);
-										rsx! {
-											div { key: "{event.id}", class: "schedule-entry", "data-sending": event.details.sending,
-											if needle == Some(index) { div { class: "schedule-now", role: "separator", aria_label: "Current time" } }
-											button {
-												class: if past { "schedule-row past" } else { "schedule-row" },
-												onclick: move |_| on_open.call(event.clone()),
-												span { class: "schedule-dot", style: "background:{dot}" }
-												span { class: "schedule-time", "{time}" }
-												span { class: "schedule-title", "{title}" }
-											}
-											}
-										}
-									}
-								}
-								if needle == Some(rows.len()) { div { class: "schedule-now", role: "separator", aria_label: "Current time" } }
-							}
-						}
-					}
-				}
+				{schedule_day(date, &rows, format, search, &schedule_time(date, &rows, now), on_open, anchor)}
 			}
 		}
 	}

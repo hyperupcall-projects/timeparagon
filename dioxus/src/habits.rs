@@ -35,6 +35,10 @@ const DAY_COLUMNS: i64 = 4;
 /// creates it when it is saved.
 pub const NEW_HABIT_ID: &str = "timeparagon:new-habit";
 
+/// Calendar renders use the library already loaded by the database watcher.
+#[derive(Clone, Copy)]
+pub struct EventNames(pub Signal<Library>);
+
 // -------------------------------------------------------------------- saving
 
 /// The saved habits, and where changes go. A file that exists but cannot be

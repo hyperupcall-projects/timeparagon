@@ -334,6 +334,20 @@ pub struct AgendaRow {
 	pub color: timeparagon_core::Color,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MonthPreview {
+	pub rows: Vec<AgendaRow>,
+	pub total: usize,
+}
+
+pub fn month_previews(
+	snapshot: &Snapshot,
+	dates: &[NaiveDate],
+	settings: &CalendarSettings,
+) -> Vec<(NaiveDate, MonthPreview)> {
+	agenda_rows(snapshot, dates, settings, false, Some(2))
+}
+
 /// The days of a range with what is on each, all-day items first. A task that
 /// sits inside a block is left to that block, and days with nothing are kept
 /// so the range still reads as a calendar.
@@ -342,7 +356,10 @@ pub fn agenda(
 	dates: &[NaiveDate],
 	settings: &CalendarSettings,
 ) -> Vec<(NaiveDate, Vec<AgendaRow>)> {
-	agenda_rows(snapshot, dates, settings, false)
+	agenda_rows(snapshot, dates, settings, false, None)
+		.into_iter()
+		.map(|(date, day)| (date, day.rows))
+		.collect()
 }
 
 pub fn schedule_agenda(
@@ -350,7 +367,10 @@ pub fn schedule_agenda(
 	dates: &[NaiveDate],
 	settings: &CalendarSettings,
 ) -> Vec<(NaiveDate, Vec<AgendaRow>)> {
-	agenda_rows(snapshot, dates, settings, true)
+	agenda_rows(snapshot, dates, settings, true, None)
+		.into_iter()
+		.map(|(date, day)| (date, day.rows))
+		.collect()
 }
 
 fn agenda_rows(
@@ -358,7 +378,8 @@ fn agenda_rows(
 	dates: &[NaiveDate],
 	settings: &CalendarSettings,
 	schedule: bool,
-) -> Vec<(NaiveDate, Vec<AgendaRow>)> {
+	limit: Option<usize>,
+) -> Vec<(NaiveDate, MonthPreview)> {
 	let hour = settings.day_start_hour();
 	let assigned = tb::holding_blocks(&snapshot.events, hour);
 	let blocks: Vec<Event> = snapshot
@@ -374,17 +395,18 @@ fn agenda_rows(
 			.iter()
 			.filter_map(calendar::deadline::marker),
 	);
+	let membership = tb::membership::BlockIndex::new(&blocks, hour);
+	// These tests do not depend on the date. In particular, do not resolve a
+	// task's holding block again for every cell in a month or schedule.
+	display_events.retain(|event| {
+		calendar::event_enabled(&snapshot.calendars, event, settings)
+			&& (calendar::deadline::is_marker(event) || membership.block_of(event).is_none())
+	});
 	dates
 		.iter()
 		.map(|&date| {
 			let mut events: Vec<&Event> = display_events
 				.iter()
-				.filter(|event| calendar::event_enabled(&snapshot.calendars, event, settings))
-				.filter(|event| !managed_copy(event, settings, &blocks))
-				.filter(|event| {
-					!(!calendar::deadline::is_marker(event)
-						&& in_loaded_block(event, &blocks, settings))
-				})
 				.filter(|event| {
 					if schedule {
 						calendar::schedule::occurs_on(event, date)
@@ -396,12 +418,18 @@ fn agenda_rows(
 					}
 				})
 				.collect();
-			events.sort_by_key(|event| (!event.all_day, event.start, event.title.clone()));
+			events.sort_by(|a, b| {
+				(!a.all_day, a.start, &a.title).cmp(&(!b.all_day, b.start, &b.title))
+			});
+			let total = events.len();
 			let rows = events
 				.into_iter()
+				.take(limit.unwrap_or(usize::MAX))
 				.map(|event| AgendaRow {
 					event: event.clone(),
-					time: if event.all_day {
+					time: if limit.is_some() {
+						String::new()
+					} else if event.all_day {
 						"All day".to_owned()
 					} else {
 						calendar::event_time_label(event)
@@ -409,7 +437,7 @@ fn agenda_rows(
 					color: event.display_color(settings, &snapshot.calendars),
 				})
 				.collect();
-			(date, rows)
+			(date, MonthPreview { rows, total })
 		})
 		.collect()
 }
@@ -1889,6 +1917,35 @@ mod tests {
 		assert_eq!(block.capacity_minutes, 120);
 		assert_eq!(block.tasks[0].list_name, "Work");
 		assert!(!model.tasks_hidden);
+	}
+
+	#[test]
+	fn month_previews_count_every_entry_but_only_build_two_rows() {
+		let block = event("block", "blocks", "Focus", at(9, 0), at(11, 0));
+		let assigned = task("assigned", "In block", Some("blocks/block"), 1, 30, false);
+		let mut events = vec![block, assigned];
+		for hour in 12..16 {
+			events.push(event(
+				&format!("meeting-{hour}"),
+				"work",
+				"Meeting",
+				at(hour, 0),
+				at(hour + 1, 0),
+			));
+		}
+		let snapshot = snapshot(events);
+		let dates = [day(), day() + Duration::days(1)];
+		let preview = month_previews(&snapshot, &dates, &settings());
+		let full = agenda(&snapshot, &dates, &settings());
+		assert_eq!(preview[0].1.total, 5);
+		assert_eq!(preview[0].1.rows.len(), 2);
+		for (shown, expected) in preview[0].1.rows.iter().zip(&full[0].1) {
+			assert_eq!(shown.event, expected.event);
+			assert_eq!(shown.color, expected.color);
+			assert!(shown.time.is_empty());
+		}
+		assert_eq!(preview[1].1.total, 0);
+		assert!(preview[1].1.rows.is_empty());
 	}
 
 	#[test]

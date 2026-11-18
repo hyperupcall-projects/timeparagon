@@ -70,6 +70,15 @@ pub fn save_sync_state(
 	fetched_at: DateTime<Local>,
 	calendars: &[Calendar],
 ) -> io::Result<()> {
+	let mut database = open(database)?;
+	save_sync_state_in(database.connection(), fetched_at, calendars)
+}
+
+pub(super) fn save_sync_state_in(
+	connection: &rusqlite::Connection,
+	fetched_at: DateTime<Local>,
+	calendars: &[Calendar],
+) -> io::Result<()> {
 	let state = SyncState {
 		fetched_at,
 		calendars: calendars
@@ -83,7 +92,11 @@ pub fn save_sync_state(
 			})
 			.collect(),
 	};
-	task_db::write_document(database, keys::SYNC_STATE, &state)
+	let json = serde_json::to_string(&state).map_err(io::Error::other)?;
+	connection.execute(
+		"INSERT INTO documents(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+		params![keys::SYNC_STATE, json],
+	).map(|_| ()).map_err(io::Error::other)
 }
 
 /// One event as the cache row holds it.
@@ -150,6 +163,91 @@ fn month_text(connection: &rusqlite::Connection, month: &str) -> rusqlite::Resul
 			|row| row.get(0),
 		)
 		.optional()
+}
+
+/// Read each requested month once. Canonical tasks, sleep and pending edits
+/// are merged by the view loader once for the whole range.
+pub(super) fn load_months(
+	connection: &rusqlite::Connection,
+	dates: &[NaiveDate],
+	day_end_hour: u32,
+) -> rusqlite::Result<Option<Vec<Event>>> {
+	let canonical: bool = connection.query_row(
+		"SELECT EXISTS(SELECT 1 FROM documents WHERE key='calendar_task_snapshot')",
+		[],
+		|row| row.get(0),
+	)?;
+	let mut months = std::collections::BTreeMap::<_, Vec<_>>::new();
+	for &date in dates {
+		months.entry(month_key(date)).or_default().push(date);
+	}
+	let mut events = Vec::new();
+	for (month, days) in months {
+		let Some(text) = month_text(connection, &month)? else {
+			let local: bool = connection.query_row(
+				"SELECT EXISTS(SELECT 1 FROM google_entities) OR EXISTS(SELECT 1 FROM google_task_records)",
+				[],
+				|row| row.get(0),
+			)?;
+			if !local {
+				return Ok(None);
+			}
+			continue;
+		};
+		let Ok(saved) = serde_json::from_str::<SavedMonth>(&text) else {
+			return Ok(None);
+		};
+		events.extend(
+			saved
+				.events
+				.into_iter()
+				.map(Event::from)
+				.filter(|event| !canonical || !event.is_task())
+				.filter(|event| {
+					days.iter()
+						.any(|&day| super::event_on_day(event, day, day_end_hour))
+				}),
+		);
+	}
+	Ok(Some(events))
+}
+
+/// Replace the covered days with one read/write per month, inside the caller's
+/// transaction. Unrequested dates in the same month survive the refresh.
+pub(super) fn save_days(
+	connection: &rusqlite::Connection,
+	dates: &[NaiveDate],
+	events: &[Event],
+	day_end_hour: u32,
+) -> io::Result<()> {
+	let mut months = std::collections::BTreeMap::<_, Vec<_>>::new();
+	for &date in dates {
+		months.entry(month_key(date)).or_default().push(date);
+	}
+	for (name, days) in months {
+		let mut month: SavedMonth = month_text(connection, &name)
+			.map_err(io::Error::other)?
+			.and_then(|text| serde_json::from_str(&text).ok())
+			.unwrap_or(SavedMonth { events: Vec::new() });
+		let on_days = |event: &Event| {
+			days.iter()
+				.any(|&day| super::event_on_day(event, day, day_end_hour))
+		};
+		let incoming: Vec<_> = events.iter().filter(|event| on_days(event)).collect();
+		let keys: std::collections::HashSet<_> = incoming
+			.iter()
+			.map(|event| (event.calendar_id.as_str(), event.id.as_str()))
+			.collect();
+		month.events.retain(|saved| {
+			!on_days(&Event::from(saved.clone()))
+				&& !keys.contains(&(saved.calendar_id.as_str(), saved.id.as_str()))
+		});
+		month
+			.events
+			.extend(incoming.into_iter().map(SavedEvent::from));
+		write_month(connection, &name, &month)?;
+	}
+	Ok(())
 }
 
 /// The day's events as an earlier run wrote them, or nothing when no run has

@@ -64,6 +64,7 @@ pub fn AgendaDays(
 	on_day: EventHandler<NaiveDate>,
 	on_open: EventHandler<Event>,
 ) -> Element {
+	let crate::habits::EventNames(names) = use_context();
 	let dates = dates(range, anchor, &settings);
 	let (loaded, disk_view) =
 		crate::cache::use_calendar(dates.clone(), settings.clone(), revision, true);
@@ -93,7 +94,9 @@ pub fn AgendaDays(
 		None => rsx! { p { class: "hint", role: "status", "Loading…" } },
 		Some(snapshot) => {
 			let mut snapshot = snapshot.clone();
-			crate::habits::name_events(&mut snapshot.events);
+			for event in &mut snapshot.events {
+				names.read().name_event(event);
+			}
 			let mut days = day::agenda(&snapshot, &dates, &settings);
 			for (_, rows) in &mut days {
 				rows.retain(|row| {

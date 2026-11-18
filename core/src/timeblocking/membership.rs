@@ -310,6 +310,80 @@ pub fn block_of<'a>(
 	found
 }
 
+/// A range view resolves the same tasks against many block occurrences. Index
+/// both exact IDs and series/planning-day fallbacks once, retaining input order
+/// so an exact match and the first fallback win just as in `block_of`.
+pub struct BlockIndex<'a> {
+	blocks: Vec<&'a Event>,
+	exact: std::collections::HashMap<String, Vec<usize>>,
+	series: std::collections::HashMap<(String, NaiveDate), Vec<usize>>,
+	hour: u32,
+}
+
+impl<'a> BlockIndex<'a> {
+	pub fn new(events: impl IntoIterator<Item = &'a Event>, hour: u32) -> Self {
+		let mut index = Self {
+			blocks: events
+				.into_iter()
+				.filter(|event| !event.is_task())
+				.collect(),
+			exact: Default::default(),
+			series: Default::default(),
+			hour,
+		};
+		for (position, block) in index.blocks.iter().enumerate() {
+			index
+				.exact
+				.entry(block_key(block))
+				.or_default()
+				.push(position);
+			let day = planning_day(original_start(block), hour);
+			for name in lineage(block) {
+				index.series.entry((name, day)).or_default().push(position);
+			}
+		}
+		index
+	}
+
+	fn candidates(&self, task: &Event) -> (&[usize], &[usize]) {
+		if !task.is_task() {
+			return (&[], &[]);
+		}
+		let meta = metadata(task);
+		if task.details.recurring_event_id.is_some()
+			&& let Some(series) = meta.block_series
+		{
+			let day = planning_day(original_start(task), self.hour);
+			return (
+				&[],
+				self.series
+					.get(&(series, day))
+					.map(Vec::as_slice)
+					.unwrap_or(&[]),
+			);
+		}
+		let Some(key) = meta.block else {
+			return (&[], &[]);
+		};
+		let exact = self.exact.get(&key).map(Vec::as_slice).unwrap_or(&[]);
+		let fallback = placement(task, &key, self.hour)
+			.and_then(|(calendar, series, day)| {
+				self.series.get(&(format!("{calendar}/{series}"), day))
+			})
+			.map(Vec::as_slice)
+			.unwrap_or(&[]);
+		(exact, fallback)
+	}
+
+	pub fn block_of(&self, task: &Event) -> Option<&'a Event> {
+		let (exact, fallback) = self.candidates(task);
+		exact
+			.first()
+			.or_else(|| fallback.first())
+			.map(|&i| self.blocks[i])
+	}
+}
+
 /// The order tasks sit in a block: those repeating with it first, so a
 /// one-off added on one day never pushes them later, then each by its
 /// order. Ties go by series, so every day of a block lays its repeating
@@ -363,16 +437,16 @@ pub fn layout(block: &Event, tasks: &[&Event]) -> Vec<(DateTime<Local>, DateTime
 /// Keys of the events in `events` that some task is in, so an event on
 /// another calendar that holds tasks still shows as a block.
 pub fn holding_blocks(events: &[Event], day_start_hour: u32) -> std::collections::HashSet<String> {
-	let tasks: Vec<&Event> = events.iter().filter(|e| is_assigned(e)).collect();
+	let index = BlockIndex::new(events, day_start_hour);
 	events
 		.iter()
-		.filter(|block| !block.is_task())
-		.filter(|block| {
-			tasks
+		.flat_map(|task| {
+			let (exact, fallback) = index.candidates(task);
+			exact
 				.iter()
-				.any(|task| in_block(task, block, day_start_hour))
+				.chain(fallback)
+				.map(|&i| block_key(index.blocks[i]))
 		})
-		.map(block_key)
 		.collect()
 }
 
@@ -422,6 +496,60 @@ mod tests {
 			metadata: meta,
 		});
 		event
+	}
+
+	#[test]
+	fn indexed_membership_preserves_exact_matches_splits_and_planning_days() {
+		let original = occurrence("block", 9, 1);
+		let mut moved = occurrence("later", 10, 10);
+		moved.details.original_start = original.details.original_start;
+		moved.details.split_from = vec!["app/block".into()];
+		let mut other_calendar = original.clone();
+		other_calendar.calendar_id = "other".into();
+		let blocks = vec![
+			moved,
+			occurrence("block", 10, 1),
+			original.clone(),
+			other_calendar,
+		];
+		let mut follower = occurrence("task-series", 9, 1);
+		follower.details.task_data = Some(TaskData {
+			id: 101,
+			metadata: Metadata {
+				block: Some(block_key(&blocks[1])),
+				block_series: Some("app/block".into()),
+				..Default::default()
+			},
+		});
+		let tasks = vec![
+			task(Metadata {
+				block: Some(block_key(&original)),
+				..Default::default()
+			}),
+			task(Metadata {
+				block: Some("app/block_20261109T010000Z".into()),
+				..Default::default()
+			}),
+			task(Metadata {
+				block: Some("missing/block".into()),
+				..Default::default()
+			}),
+			task(Metadata::default()),
+			follower,
+		];
+		for hour in [0, 3] {
+			let index = BlockIndex::new(&blocks, hour);
+			for task in &tasks {
+				assert_eq!(index.block_of(task), block_of(task, &blocks, hour));
+			}
+			let expected: std::collections::HashSet<_> = blocks
+				.iter()
+				.filter(|block| tasks.iter().any(|task| in_block(task, block, hour)))
+				.map(block_key)
+				.collect();
+			let events: Vec<_> = blocks.iter().chain(&tasks).cloned().collect();
+			assert_eq!(holding_blocks(&events, hour), expected);
+		}
 	}
 
 	#[test]

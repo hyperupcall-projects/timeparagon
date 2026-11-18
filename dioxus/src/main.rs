@@ -278,7 +278,10 @@ fn Main() -> Element {
 	// Bumped when the local edits change (a write was answered, say), so the
 	// day is drawn again with its items unlocked.
 	let mut local_edits = use_signal(|| 0u64);
+	let mut local_overlay = use_signal(|| None::<calendar::operations::Overlay>);
 	use_context_provider(|| cache::Changes(local_edits));
+	let mut habit_names = use_signal(timeparagon_core::habits::Library::default);
+	use_context_provider(|| habits::EventNames(habit_names));
 	// Nights of the days in memory as the database has them, reread whenever
 	// one changes there, as when another device's night arrives by sync.
 	let mut stored_nights = use_signal(Vec::<calendar::Event>::new);
@@ -390,12 +393,63 @@ fn Main() -> Element {
 		// changed, which is one small query instead of a full read, and the
 		// notes only when their directory's fingerprint moved.
 		let mut changes: Option<timeparagon_core::local_changes::Counters> = None;
+		let mut reader = None::<timeparagon_core::local_changes::Reader>;
 		loop {
-			tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-
-			database_sync_status.set(timeparagon_core::database_sync::status());
-			let counters = timeparagon_core::task_db::path()
-				.and_then(|path| timeparagon_core::local_changes::read(&path).ok());
+			let status = timeparagon_core::database_sync::status();
+			if status != *database_sync_status.peek() {
+				database_sync_status.set(status);
+			}
+			let days = cached_days.peek().loaded_days();
+			let range = days.first().copied().zip(days.last().copied());
+			let config_before_read = config.peek().clone();
+			let result = editor::worker(move || {
+				let path = timeparagon_core::task_db::path();
+				if reader.is_none() {
+					reader = path
+						.as_ref()
+						.and_then(|path| timeparagon_core::local_changes::Reader::open(path).ok());
+				}
+				let counters = reader.as_mut().and_then(|reader| reader.read().ok());
+				if counters.is_none() {
+					reader = None;
+				}
+				let moved = |part: fn(&timeparagon_core::local_changes::Counters) -> i64| {
+					counters.is_none_or(|now| changes.is_none_or(|seen| part(&seen) != part(&now)))
+				};
+				let nights = if moved(|c| c.sleep) {
+					path.as_ref().zip(range).map(|(path, (first, last))| {
+						calendar::sleep::stored_nights(path, first, last)
+					})
+				} else {
+					None
+				};
+				let overlay = (moved(|c| c.overlay) || moved(|c| c.config))
+					.then(|| path.as_deref().map(calendar::operations::load_overlay))
+					.flatten();
+				let names = moved(|c| c.habits).then(|| habits::read(path).library);
+				let reloaded = (changes.is_some() && moved(|c| c.config)).then(day::load_config);
+				Ok((reader, counters, nights, names, reloaded, overlay))
+			})
+			.await;
+			let (next_reader, counters, nights, names, reloaded, overlay) = match result {
+				Ok(result) => result,
+				Err(error) => {
+					eprintln!("Could not poll local changes: {error}");
+					reader = None;
+					tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+					continue;
+				}
+			};
+			reader = next_reader;
+			if let Some(overlay) = overlay {
+				match overlay {
+					Ok(overlay) if local_overlay.peek().as_ref() != Some(&overlay) => {
+						local_overlay.set(Some(overlay))
+					}
+					Err(error) => eprintln!("Could not load local edits: {error}"),
+					_ => {}
+				}
+			}
 			let moved = |part: fn(&timeparagon_core::local_changes::Counters) -> i64| {
 				counters.is_none_or(|now| changes.is_none_or(|seen| part(&seen) != part(&now)))
 			};
@@ -414,33 +468,40 @@ fn Main() -> Element {
 			if sending != *google_sending.peek() {
 				google_sending.set(sending);
 			}
-			if moved(|c| c.overlay) {
+			if moved(|c| c.overlay) || moved(|c| c.sleep) {
 				local_edits.set(local_edits() + 1);
 			}
-			if moved(|c| c.sleep)
-				&& let Some(path) = timeparagon_core::task_db::path()
-			{
-				let days = cached_days.peek().loaded_days();
-				if let (Some(&first), Some(&last)) = (days.first(), days.last()) {
-					match calendar::sleep::stored_nights(&path, first, last) {
-						Ok(nights) => {
-							cached_days.write().apply_stored_nights(&nights);
-							stored_nights.set(nights);
-						}
-						Err(error) => eprintln!("Could not load stored sleep: {error}"),
+			if let Some(nights) = nights {
+				match nights {
+					Ok(nights) => {
+						cached_days.write().apply_stored_nights(&nights);
+						stored_nights.set(nights);
 					}
+					Err(error) => eprintln!("Could not load stored sleep: {error}"),
 				}
+			}
+			if let Some(names) = names
+				&& names != *habit_names.peek()
+			{
+				habit_names.set(names);
 			}
 			if moved(|c| c.alarms) {
 				reminders::republish(&config.peek());
 			}
-			notes_store.reload_shared();
+			notes_store.reload_shared().await;
 			// Nothing to compare against before the first read, which only
 			// repeats the load the view started with.
-			let settings_moved = changes.is_some() && moved(|c| c.config);
-			changes = counters;
-			if settings_moved {
-				let reloaded = day::load_config();
+			// A setting edited while the worker read the database wins over
+			// that older read. Leave its counters pending and retry next time.
+			let settings_unchanged = *config.peek() == config_before_read;
+			if reloaded.is_none() || settings_unchanged {
+				changes = counters;
+			}
+			if let Some(reloaded) = reloaded {
+				if !settings_unchanged {
+					tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+					continue;
+				}
 				if reloaded.notes != config.peek().notes
 					&& let Err(error) = notes_store.configure(&reloaded.notes.directory)
 				{
@@ -451,6 +512,7 @@ fn Main() -> Element {
 					config.set(reloaded);
 				}
 			}
+			tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 		}
 	});
 
@@ -511,78 +573,98 @@ fn Main() -> Element {
 	});
 
 	let pending = matches!(*data.state().read(), UseResourceState::Pending);
-	let resource = data.read();
-	let fetch_error = match resource.as_ref() {
-		Some(Err(error)) => Some(error.clone()),
-		_ => None,
-	};
-	let requested_day = current_day();
-	let mut snapshot = match resource.as_ref() {
-		// A resource keeps the previous value while its next fetch is running.
-		// Never paint yesterday's events under today's heading.
-		Some(Ok((_, snapshot))) if snapshot.day == requested_day => Some(snapshot.clone()),
-		_ => disk_view
+	let fetch_error = data
+		.read()
+		.as_ref()
+		.and_then(|result| result.as_ref().err())
+		.cloned();
+	let snapshot_memo = use_memo(move || {
+		let resource = data.read();
+		let requested_day = current_day();
+		let mut snapshot = match resource.as_ref() {
+			// A resource keeps the previous value while its next fetch is running.
+			// Never paint yesterday's events under today's heading.
+			Some(Ok((_, snapshot))) if snapshot.day == requested_day => Some(snapshot.clone()),
+			_ => disk_view
+				.read()
+				.as_ref()
+				.filter(|(dates, _)| dates == &[requested_day])
+				.map(|(_, snapshot)| snapshot.clone())
+				.or_else(|| {
+					cached_days
+						.read()
+						.cached_snapshot()
+						.filter(|snapshot| snapshot.day == requested_day)
+				}),
+		};
+		drop(resource);
+		if let Some(snapshot) = &mut snapshot {
+			calendar::sleep::merge_stored(
+				&mut snapshot.events,
+				&stored_nights.read(),
+				snapshot.day,
+				config.read().calendar.day_start_hour(),
+			);
+			if let Some(overlay) = local_overlay.read().as_ref() {
+				overlay.apply(&mut snapshot.events, Some(snapshot.fetched_at));
+			}
+			let names = habit_names.read();
+			for event in &mut snapshot.events {
+				names.name_event(event);
+			}
+		}
+		snapshot
+	});
+	// Plan owns its range model. Build the separate Day model only while it
+	// is shown, or when a block sheet needs its tasks.
+	let day_model = use_memo(move || {
+		if page() == Page::Plan && selected_block().is_none() {
+			return None;
+		}
+		snapshot_memo
 			.read()
 			.as_ref()
-			.filter(|(dates, _)| dates == &[requested_day])
-			.map(|(_, snapshot)| snapshot.clone())
-			.or_else(|| {
-				cached_days
-					.read()
-					.cached_snapshot()
-					.filter(|snapshot| snapshot.day == requested_day)
-			}),
-	};
-	drop(resource);
-	// Drawn again whenever the local edits change, so an item unlocks as soon
-	// as Google accepts its change.
-	let _ = local_edits();
-	if let Some(snapshot) = &mut snapshot {
-		let day = snapshot.day;
-		let day_end_hour = config.read().calendar.day_start_hour();
-		calendar::sleep::merge_stored(
-			&mut snapshot.events,
-			&stored_nights.read(),
-			day,
-			day_end_hour,
-		);
-	}
-	if let (Some(snapshot), Some(path)) = (&mut snapshot, timeparagon_core::task_db::path())
-		&& let Err(error) =
-			calendar::operations::overlay(&path, &mut snapshot.events, Some(snapshot.fetched_at))
-	{
-		eprintln!("Could not load local edits: {error}");
-	}
-
-	if let Some(snapshot) = &mut snapshot {
-		habits::name_events(&mut snapshot.events);
-	}
-
-	let model = snapshot
-		.as_ref()
-		.map(|snapshot| day::build_model(snapshot, &settings));
-	let travel = model
-		.as_ref()
-		.map(|model| {
-			day::travel_boxes(
-				model,
-				&config.read().travel,
-				config.read().appearance.distance_unit,
-			)
-		})
-		.unwrap_or_default();
+			.map(|snapshot| day::build_model(snapshot, &config.read().calendar))
+	});
+	let day_travel = use_memo(move || {
+		day_model
+			.read()
+			.as_ref()
+			.map(|model| {
+				day::travel_boxes(
+					model,
+					&config.read().travel,
+					config.read().appearance.distance_unit,
+				)
+			})
+			.unwrap_or_default()
+	});
+	#[cfg(target_os = "android")]
+	use_effect(move || {
+		if let (Some(model), Some(snapshot)) = (day_model(), snapshot_memo()) {
+			let travel = day_travel();
+			let settings = config.read().calendar.clone();
+			let today = day::today(&settings);
+			spawn(async move {
+				let _ = editor::worker(move || {
+					widget::publish(&model, &travel, today, &settings, snapshot.fetched_at);
+					Ok(())
+				})
+				.await;
+			});
+		}
+	});
+	let snapshot = snapshot_memo();
+	let model = day_model();
+	let travel = day_travel();
 	let selected_day = current_day();
 	let today = day::today(&settings);
-	#[cfg(target_os = "android")]
-	if let (Some(model), Some(snapshot)) = (&model, &snapshot) {
-		widget::publish(model, &travel, today, &settings, snapshot.fetched_at);
-	}
 
 	// Only what is drawn is filtered. The widget above keeps the whole day, and
 	// trips join up the whole day's events, so they go while a search is on.
 	let searching = search_state.read().is_modified();
 	let (model, travel) = if searching {
-		let filtered = snapshot.as_ref().map(|snapshot| {
+		let filtered = model.as_ref().and(snapshot.as_ref()).map(|snapshot| {
 			day::build_model(
 				&day::filter_snapshot(snapshot, &search_state.read(), &settings),
 				&settings,
@@ -596,7 +678,12 @@ fn Main() -> Element {
 	let time_format = config.read().appearance.time_format;
 
 	// The night being timed, wherever the view is, kept in the notification.
-	let running = sleep::running(snapshot.as_ref(), &cached_days.read(), today);
+	let running = sleep::running(
+		snapshot.as_ref(),
+		&cached_days.read(),
+		today,
+		local_overlay.read().as_ref(),
+	);
 	let settled = snapshot
 		.as_ref()
 		.is_some_and(|snapshot| (snapshot.day - today).num_days().abs() <= 1);
@@ -791,7 +878,7 @@ fn Main() -> Element {
 
 	// View (Calendars and Filter) and Actions, beside the picker.
 	let view_lit = view_sheet().is_some() || searching;
-	let can_place_alarm = model.is_some();
+	let can_place_alarm = snapshot.is_some();
 	let header_buttons = move || {
 		rsx! {
 			button {
@@ -873,7 +960,7 @@ fn Main() -> Element {
 		warnings::WarningCenter {
 			sync_error: fetch_error.clone(),
 			connect_error: connect_error(),
-			notice: model.as_ref().and_then(|model| model.notice.clone()),
+			notice: snapshot.as_ref().and_then(|snapshot| snapshot.notice.clone()),
 			pending,
 			connecting: connecting(),
 			on_retry: move |_| revision.set(revision() + 1),
@@ -1693,7 +1780,7 @@ fn Main() -> Element {
 				{body}
 			}
 			alarms::PlacementControls { config }
-			if model.is_some() && page() != Page::Habits && alarm_placement().is_none() {
+			if snapshot.is_some() && page() != Page::Habits && alarm_placement().is_none() {
 				button {
 					class: "fab",
 					title: "Add",
@@ -1711,7 +1798,7 @@ fn Main() -> Element {
 			{more_sheet}
 			if show_alarms() { alarms::AlarmsSheet {
 				config, day: selected_day,
-				on_place: model.as_ref().map(|_| begin_alarm),
+				on_place: snapshot.as_ref().map(|_| begin_alarm),
 				on_close: move |_| show_alarms.set(false),
 			} }
 			{people_sheet}
