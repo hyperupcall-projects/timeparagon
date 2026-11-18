@@ -168,12 +168,12 @@ fn choosing_a_time_block_starts_the_block_write_instead_of_the_event_form() {
 	assert!(draft.saving, "the block write is already in flight");
 	assert!(
 		state.calendar.open_event.is_none(),
-		"a time block is planned in the panel, not the event form"
+		"a time block is filled in after it is saved, not on the creation form"
 	);
 }
 
 #[test]
-fn a_saved_time_block_opens_the_block_panel() {
+fn a_saved_time_block_opens_its_details() {
 	let mut state = State::blank();
 	state.config.calendar.app_calendar = Some("timeparagon".into());
 	let start = calendar::at_clock(chrono::NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(), 9, 0);
@@ -198,13 +198,29 @@ fn a_saved_time_block_opens_the_block_panel() {
 		Message::EventDraft(EventDraftMessage::EventDraftSaved(Ok(block))),
 	);
 	assert!(state.calendar.draft.is_none());
+	let queued = messages(task);
 	assert!(
-		messages(task).iter().any(|message| matches!(
+		queued.iter().any(|message| matches!(
 			message,
-			Message::TimeBlocking(crate::timeblocking::Action::Plan(id)) if id == "block-1"
+			Message::Event(EventMessage::EventOpened(id)) if id == "block-1"
 		)),
-		"a new block is planned in the right-hand panel"
+		"a new block opens on its details"
 	);
+	assert!(
+		!queued.iter().any(|message| matches!(
+			message,
+			Message::TimeBlocking(crate::timeblocking::Action::Plan(_))
+		)),
+		"a new block does not open the plan panel"
+	);
+
+	let _ = update(
+		&mut state,
+		Message::Event(EventMessage::EventOpened("block-1".into())),
+	);
+	assert_eq!(state.calendar.open_event.as_deref(), Some("block-1"));
+	assert!(state.calendar.edit_draft.is_some());
+	assert!(state.timeblocking.block.is_none());
 }
 
 /// The messages a task resolves to, for asserting on what an update queued.

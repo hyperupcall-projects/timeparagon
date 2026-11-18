@@ -112,8 +112,8 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
 			crate::habits::open_new(state, habit)
 		}
 		EventDraftMessage::EventDraftKindSelected(calendar::DraftKind::TimeBlock) => {
-			// A time block is planned in the block panel, not filled in as an
-			// event, so choosing it writes the block and opens that panel.
+			// A time block is written straight away and filled in afterwards, so
+			// choosing it saves the block and then opens its details.
 			let app_calendar = state.config.calendar.app_calendar.clone();
 			let Some(draft) = state.calendar.draft.as_mut() else {
 				return Task::none();
@@ -198,10 +198,8 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
 			if remember {
 				tasks.push(crate::app::queue_save(state));
 			}
-			// The block is planned in the right-hand panel.
-			tasks.push(Task::done(Message::TimeBlocking(
-				crate::timeblocking::Action::Plan(block),
-			)));
+			// The details pane edits the saved block.
+			tasks.push(Task::done(Message::Event(EventMessage::EventOpened(block))));
 			Task::batch(tasks)
 		}
 		EventDraftMessage::EventDraftSaved(Err(error)) => {
