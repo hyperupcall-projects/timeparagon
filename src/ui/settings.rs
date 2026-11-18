@@ -145,7 +145,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             integrations(state, metrics),
             metrics
         ),
-        section("Application", application(state, metrics), metrics),
+        section("Application", application(metrics), metrics),
     ]
     .spacing(metrics.spacing)
     .padding(iced::Padding {
@@ -529,22 +529,8 @@ fn border_color_input<'a>(
 	field(label, input.into(), metrics)
 }
 
-fn application<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-	let incremental = state.config.calendar.incremental_sync;
+fn application<'a>(metrics: &Metrics) -> Element<'a, Message> {
 	column![
-		switch(
-			"Incremental sync",
-			incremental,
-			|on| Message::Settings(SettingsMessage::IncrementalSyncToggled(on)),
-			metrics,
-		),
-		text(if incremental {
-			"Asks Google Calendar and Tasks only for what changed, every 2 minutes."
-		} else {
-			"Fetches everything in view on every sync."
-		})
-		.size(metrics.label())
-		.style(text::secondary),
 		crate::ui::controls::action_button(
 			text("Full sync").size(metrics.label()).center().width(Fill),
 		)
@@ -905,22 +891,6 @@ fn calendar<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 	}
 	section = section.push(resync);
 
-	let selected = SyncInterval(settings.sync_minutes.clamp(
-		config::CalendarSettings::MIN_SYNC_MINUTES,
-		config::CalendarSettings::MAX_SYNC_MINUTES,
-	));
-	let mut intervals = vec![1, 5, 15, 30, 60, 120, 240, 480, 720, 1440];
-	intervals.push(selected.0);
-	intervals.sort_unstable();
-	intervals.dedup();
-	section = section.push(choice(
-		"Automatic sync",
-		intervals.into_iter().map(SyncInterval).collect(),
-		Some(selected),
-		|interval| Message::Settings(SettingsMessage::CalendarSyncMinutesChanged(interval.0)),
-		metrics,
-	));
-
 	// New plain events use regular Google calendars; task lists and the
 	// calendar reserved for TimeParagon's own kinds are excluded.
 	let options: Vec<calendar::Calendar> = state
@@ -1162,24 +1132,6 @@ fn integrations<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
 	section = section.push(add);
 
 	indent(section.into(), metrics)
-}
-
-#[derive(Clone, Copy, PartialEq)]
-struct SyncInterval(u32);
-
-impl std::fmt::Display for SyncInterval {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		f.write_str(&sync_label(self.0))
-	}
-}
-
-fn sync_label(minutes: u32) -> String {
-	match minutes {
-		1 => "Sync every minute".to_owned(),
-		60 => "Sync every hour".to_owned(),
-		n if n % 60 == 0 => format!("Sync every {} hours", n / 60),
-		n => format!("Sync every {n} minutes"),
-	}
 }
 
 fn day_end_label(hour: u32, time_format: TimeFormat) -> String {
@@ -1507,7 +1459,7 @@ mod tests {
 		use crate::{app, config::Config, theme::Catalog};
 		use iced_test::{Simulator, core::Settings};
 
-		let old: Config = toml::from_str("[calendar]\nsync_minutes = 60\n").unwrap();
+		let old: Config = toml::from_str("[calendar]\nweekly_day_width = 150\n").unwrap();
 		assert_eq!(old.calendar.first_day_of_week, FirstDayOfWeek::Sunday);
 		let mut state = State::new(old, Catalog::built_in());
 		for expected in FirstDayOfWeek::ALL {
@@ -1719,14 +1671,6 @@ mod tests {
 		assert_eq!(repeat_label(0), "Repeat until dismissed");
 		assert_eq!(repeat_label(1), "Play once");
 		assert_eq!(repeat_label(3), "Play 3 times");
-	}
-
-	#[test]
-	fn sync_labels_read_naturally() {
-		assert_eq!(sync_label(1), "Sync every minute");
-		assert_eq!(sync_label(15), "Sync every 15 minutes");
-		assert_eq!(sync_label(60), "Sync every hour");
-		assert_eq!(sync_label(1440), "Sync every 24 hours");
 	}
 
 	#[test]

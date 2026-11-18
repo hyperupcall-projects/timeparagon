@@ -1399,11 +1399,6 @@ fn a_recent_sync_prevents_an_automatic_fetch_but_manual_sync_still_works() {
 	assert_eq!(state.calendar.sync, SyncState::Idle);
 	let _ = update(
 		&mut state,
-		Message::Settings(SettingsMessage::CalendarSyncMinutesChanged(120)),
-	);
-	assert_eq!(state.calendar.sync, SyncState::Idle);
-	let _ = update(
-		&mut state,
 		Message::Calendar(CalendarMessage::CalendarSyncRequested),
 	);
 	assert_eq!(state.calendar.sync, SyncState::Syncing);

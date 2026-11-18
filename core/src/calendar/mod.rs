@@ -2422,18 +2422,16 @@ pub fn connect(client_id: String, client_secret: String) -> Result<oauth::Tokens
 /// still includes the small hours of the next morning.
 pub fn sync_day(
 	client: &GoogleClient,
-	disabled: &[String],
 	day: NaiveDate,
 	day_end_hour: u32,
 	app_calendar: Option<&str>,
 ) -> Result<Snapshot, String> {
 	let token = client.access_token()?;
-	api::fetch_day(&token, disabled, day, day_end_hour, app_calendar)
+	api::fetch_day(&token, day, day_end_hour, app_calendar)
 }
 
 pub fn sync_week(
 	client: &GoogleClient,
-	disabled: &[String],
 	anchor: NaiveDate,
 	days: u32,
 	day_end_hour: u32,
@@ -2441,7 +2439,6 @@ pub fn sync_week(
 ) -> Result<Snapshot, String> {
 	sync_range(
 		client,
-		disabled,
 		anchor,
 		&week_dates(anchor, days),
 		day_end_hour,
@@ -2452,7 +2449,6 @@ pub fn sync_week(
 /// Fetch the complete visible range for a week or month in a single request.
 pub fn sync_range(
 	client: &GoogleClient,
-	disabled: &[String],
 	anchor: NaiveDate,
 	dates: &[NaiveDate],
 	day_end_hour: u32,
@@ -2461,15 +2457,7 @@ pub fn sync_range(
 	let first = *dates.first().ok_or("Calendar range is empty")?;
 	let last = *dates.last().ok_or("Calendar range is empty")?;
 	let token = client.access_token()?;
-	api::fetch_range(
-		&token,
-		disabled,
-		anchor,
-		first,
-		last,
-		day_end_hour,
-		app_calendar,
-	)
+	api::fetch_range(&token, anchor, first, last, day_end_hour, app_calendar)
 }
 
 /// Seven or eight days starting at the selected day, or for nine, eight
@@ -3759,11 +3747,9 @@ mod tests {
 		view_cache::save(scratch.path(), &fresh, &[day], 0).unwrap();
 		store.cache_fetched_snapshot(old, &[day]);
 		store.set_day(day.succ_opt().unwrap(), day);
-		let restored = view_cache::load(scratch.path(), &[day], 0, false)
-			.unwrap()
-			.unwrap();
-		assert!(restored.events.is_empty());
-		assert_eq!(restored.fetched_at, fresh.fetched_at);
+		assert!(day_cache::load(scratch.path(), day, 0).unwrap().is_empty());
+		let (fetched_at, _) = day_cache::load_sync_state(scratch.path()).unwrap();
+		assert_eq!(fetched_at, fresh.fetched_at);
 	}
 
 	#[test]

@@ -209,7 +209,6 @@ fn the_settings_tab_is_usable_at_two_hundred_pixels() {
 		"Screen margin (px, 0–30)",
 		// Google Calendar.
 		"OAuth client ID",
-		"Sync every hour",
 	] {
 		assert!(ui.find(label).is_ok(), "{label:?} is missing at 200px");
 	}
@@ -1044,7 +1043,6 @@ fn the_settings_pane_includes_calendar_sync_controls() {
 		"Google Calendar",
 		"OAuth client ID",
 		"Resync calendar and tasks data",
-		"Sync every hour",
 		"Day ends at midnight",
 	] {
 		assert!(ui.find(label).is_ok(), "{label:?} is missing from settings");

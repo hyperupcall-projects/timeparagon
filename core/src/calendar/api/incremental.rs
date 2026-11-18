@@ -4,8 +4,7 @@
 //! get a sync token, then fetches the occurrences of the days asked for. From
 //! then on each sync asks Google only for what changed since that token, and
 //! applies the changes to a local copy of the events (`google_sync_events`).
-//! A snapshot is then read from that copy, so the apps see the same
-//! [`Snapshot`] whichever way it was made.
+//! A [`Snapshot`] is then read from that copy.
 //!
 //! The copy only holds the days that have been asked for (its *windows*),
 //! plus every one-off task event on the app's calendar, which the task lists
@@ -40,7 +39,6 @@ use crate::calendar::colors;
 use crate::calendar::day_cache::SavedEvent;
 use crate::calendar::google::GoogleError;
 use crate::calendar::{Calendar, Event, Snapshot};
-use crate::config::CalendarSettings;
 use crate::task_db::Database;
 
 /// One sync at a time: two at once would read the same tokens and apply the
@@ -90,17 +88,6 @@ const KEPT_PAST: Duration = Duration::days(90);
 /// ...to this far ahead. Further windows are dropped, so a changed series
 /// is not fetched again for days nobody is looking at.
 const KEPT_FUTURE: Duration = Duration::days(365);
-
-/// Whether syncs are incremental: the `calendar.incremental_sync` setting.
-pub fn enabled() -> bool {
-	let Some(path) = crate::task_db::path() else {
-		return false;
-	};
-	match Database::open(&path) {
-		Ok(mut database) => CalendarSettings::stored_incremental_sync(database.connection()),
-		Err(_) => CalendarSettings::default().incremental_sync,
-	}
-}
 
 /// Forgets every sync token, window and stored event and task, so the next
 /// sync is a full one. What the Full sync button does.
@@ -913,8 +900,7 @@ fn stored_events(
 		.collect())
 }
 
-/// Read a completely covered view without contacting Google. Month snapshots
-/// may predate an incremental change to an offscreen day.
+/// Read a completely covered view without contacting Google.
 pub(crate) fn cached_events(
 	connection: &Connection,
 	calendars: &[Calendar],
@@ -980,9 +966,9 @@ fn fetch_all<'a>(
 	})
 }
 
-/// [`super::fetch_range`] by incremental sync: brings the stored copy up to
-/// date with Google's changes and answers from it.
-pub(super) fn fetch_range(
+/// Every calendar, the events between `first` and `last`, and the tasks:
+/// brings the stored copy up to date with Google's changes and answers from it.
+pub fn fetch_range(
 	access_token: &str,
 	day: NaiveDate,
 	first: NaiveDate,

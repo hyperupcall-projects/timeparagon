@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::calendar::api::with_transport;
+use crate::config::CalendarSettings;
 
 const PRIMARY: &str = "me@example.com";
 const APP: &str = "app-calendar";
@@ -538,12 +539,12 @@ fn offline_views_use_coverage_and_changes_to_offscreen_dates_after_reopening() {
 		)
 		.unwrap();
 	// A fetched empty day is different from one outside the sync windows.
-	let cached = crate::calendar::view_cache::load(&harness.path, &[next], 0, true)
+	let cached = crate::calendar::view_cache::load(&harness.path, &[next], 0)
 		.unwrap()
 		.unwrap();
 	assert!(cached.events.is_empty());
 	assert!(
-		crate::calendar::view_cache::load(&harness.path, &[next.succ_opt().unwrap()], 0, true)
+		crate::calendar::view_cache::load(&harness.path, &[next.succ_opt().unwrap()], 0)
 			.unwrap()
 			.is_none()
 	);
@@ -555,7 +556,7 @@ fn offline_views_use_coverage_and_changes_to_offscreen_dates_after_reopening() {
 	// Refresh only tomorrow; today's database copy must still catch up.
 	harness.sync(next, next);
 	let requests = harness.google.borrow().requests.len();
-	let cached = crate::calendar::view_cache::load(&harness.path, &[day()], 0, true)
+	let cached = crate::calendar::view_cache::load(&harness.path, &[day()], 0)
 		.unwrap()
 		.unwrap();
 	assert_eq!(

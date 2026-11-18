@@ -1463,7 +1463,7 @@ mod tests {
 		let (_b, phone) = db();
 		let mut server = HashMap::new();
 		let id = update(&desktop, |config: &mut Config| {
-			config.calendar.sync_minutes = 30;
+			config.calendar.weekly_day_width = 200;
 			crate::places::add_place(
 				&mut config.travel.places,
 				"Library",
@@ -1476,7 +1476,7 @@ mod tests {
 		.unwrap();
 		sync([&desktop, &phone], &mut server);
 		let on_phone = read(&phone);
-		assert_eq!(on_phone.calendar.sync_minutes, 30);
+		assert_eq!(on_phone.calendar.weekly_day_width, 200);
 		assert_eq!(on_phone.travel.places[0].id, id);
 		assert!(
 			edits(&open(&phone).unwrap(), true).unwrap().is_empty(),

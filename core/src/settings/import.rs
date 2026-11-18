@@ -216,7 +216,7 @@ distance_unit = "miles"
 width = 320.0
 
 [calendar]
-sync_minutes = 60
+weekly_day_width = 150
 client_id = "id"
 client_secret = "secret"
 disabled = ["work"]
@@ -299,7 +299,7 @@ dock_width = nan
 				"travel.api_key",
 				"travel.home",
 			],
-			"sync_minutes = 60 is the default"
+			"weekly_day_width = 150 is the default"
 		);
 		let device = rows(&path, "SELECT key, value FROM device_settings ORDER BY key");
 		assert_eq!(
@@ -333,7 +333,7 @@ dock_width = nan
 		assert_eq!(config.notes.directory, "~/Notes");
 
 		// Never again, even if a file turns up.
-		fs::write(&file, "[calendar]\nsync_minutes = 5\n").unwrap();
+		fs::write(&file, "[calendar]\nweekly_day_width = 200\n").unwrap();
 		assert!(!import_file(&path, &file).unwrap());
 		assert!(file.exists());
 	}
@@ -344,7 +344,7 @@ dock_width = nan
 		crate::task_db::write_document_json(&path, "habits", "{}").unwrap();
 		import_file(&path, &file).unwrap();
 		crate::settings::update(&path, |config: &mut Config| {
-			config.calendar.sync_minutes = 5;
+			config.calendar.weekly_day_width = 200;
 		})
 		.unwrap();
 		let journal = rows(
@@ -366,7 +366,7 @@ dock_width = nan
 		);
 		assert!(clock("places:").iter().all(|clock| *clock == 1));
 		assert_eq!(
-			clock("settings:[\"calendar.sync_minutes\"]"),
+			clock("settings:[\"calendar.weekly_day_width\"]"),
 			[2],
 			"an edit after it sorts after it"
 		);

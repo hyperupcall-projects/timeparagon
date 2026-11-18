@@ -60,7 +60,7 @@ use smithay_client_toolkit::{
 };
 
 use crate::calendar::{self, Snapshot, Store};
-use crate::config::{Config, DockSide};
+use crate::config::{CalendarSettings, Config, DockSide};
 use crate::ipc;
 use crate::theme::Catalog;
 
@@ -378,13 +378,11 @@ fn spawn_sync(
 		.name("dock-sync".into())
 		.spawn(move || {
 			let hour = calendar.day_start_hour();
-			let every = calendar.refresh_every();
 
 			loop {
 				let day = calendar::day_at(crate::clock::now(), hour);
 				let result = calendar::sync_day(
 					&calendar::GoogleClient::from_settings(&calendar),
-					&calendar.disabled,
 					day,
 					hour,
 					calendar.app_calendar.as_deref(),
@@ -392,7 +390,9 @@ fn spawn_sync(
 				if results.send(result).is_err() {
 					break;
 				}
-				if let Err(mpsc::RecvTimeoutError::Disconnected) = woken.recv_timeout(every) {
+				if let Err(mpsc::RecvTimeoutError::Disconnected) =
+					woken.recv_timeout(CalendarSettings::REFRESH_EVERY)
+				{
 					break;
 				}
 			}

@@ -254,11 +254,9 @@ pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message>
 				state.config.calendar.day_end_minutes(),
 			);
 
-			// Incremental sync is cheap, so opening the app always catches up.
-			let sync = if state.calendar.is_signed_in() && state.config.calendar.incremental_sync {
+			// A sync only fetches what changed, so opening the app always catches up.
+			let sync = if state.calendar.is_signed_in() {
 				sync_calendar(state)
-			} else if state.calendar.is_signed_in() {
-				auto_sync_calendar(state)
 			} else {
 				Task::none()
 			};

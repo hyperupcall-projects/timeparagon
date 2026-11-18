@@ -809,7 +809,7 @@ mod tests {
 		timeparagon_core::settings::update(
 			&path,
 			|phone: &mut timeparagon_core::config::Config| {
-				phone.calendar.sync_minutes = 5;
+				phone.calendar.weekly_day_width = 200;
 				phone.travel.show = true;
 			},
 		)
@@ -821,7 +821,7 @@ mod tests {
 		assert_eq!(saved.voice.binary, "/opt/whisper");
 		assert_eq!(saved.travel.map_app, MapApp::GoogleMaps);
 		assert!(saved.travel.show);
-		assert_eq!(saved.calendar.sync_minutes, 5);
+		assert_eq!(saved.calendar.weekly_day_width, 200);
 	}
 
 	#[test]
@@ -1132,26 +1132,6 @@ mod tests {
 			(restored.dock_left_margin(), restored.dock_right_margin()),
 			(0.0, 32.0)
 		);
-	}
-
-	#[test]
-	fn explicit_sync_intervals_are_preserved_and_invalid_values_are_clamped() {
-		let parsed: Config = toml::from_str("[calendar]\nsync_minutes = 120").unwrap();
-		assert_eq!(parsed.calendar.sync_every(), Duration::from_secs(7200));
-		let mut settings = CalendarSettings {
-			sync_minutes: 0,
-			..Default::default()
-		};
-		assert_eq!(settings.sync_every(), Duration::from_secs(60));
-		settings.sync_minutes = u32::MAX;
-		assert_eq!(settings.sync_every(), Duration::from_secs(24 * 3600));
-	}
-
-	#[test]
-	fn calendar_sync_defaults_to_one_hour() {
-		let parsed: Config = toml::from_str("").unwrap();
-		assert_eq!(parsed.calendar.sync_minutes, 60);
-		assert_eq!(parsed.calendar.sync_every(), Duration::from_secs(60 * 60));
 	}
 
 	#[test]

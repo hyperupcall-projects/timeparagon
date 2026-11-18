@@ -501,8 +501,8 @@ use; a test checks the description against the tables created.
 -- One value each, named "section.field". Only values that differ from the
 -- built-in default are stored. Shared.
 CREATE TABLE settings (
-  key   TEXT PRIMARY KEY,        -- "calendar.sync_minutes"
-  value TEXT NOT NULL            -- JSON: 30, "Ocean", {"volume":70,…}
+  key   TEXT PRIMARY KEY,        -- "calendar.weekly_day_width"
+  value TEXT NOT NULL            -- JSON: 200, "Ocean", {"volume":70,…}
 );
 -- The same, for what describes this device. Never leaves it.
 CREATE TABLE device_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -709,7 +709,7 @@ named after its table and primary key as a JSON array:
 
 | Document | Row |
 | --- | --- |
-| `settings:["calendar.sync_minutes"]` | `{"key":"calendar.sync_minutes","value":30}` |
+| `settings:["calendar.weekly_day_width"]` | `{"key":"calendar.weekly_day_width","value":200}` |
 | `places:[1730000000000]` | `{"id":1730000000000,"name":"Home",…,"favorite":0}` |
 | `travel_modes:[1,2]` | `{"from_place":1,"to_place":2,"mode":"car"}` |
 

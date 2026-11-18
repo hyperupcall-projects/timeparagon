@@ -29,4 +29,5 @@ dioxus = { version = "0.7.3", default-features = false, features = ["desktop", "
 
 [dev-dependencies]
 dioxus-ssr = "0.7.3"
+rusqlite = "0.41.0"
 tempfile = "3"

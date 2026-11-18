@@ -338,10 +338,6 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
 				}
 			})
 		}
-		SettingsMessage::IncrementalSyncToggled(on) => {
-			state.config.calendar.incremental_sync = on;
-			queue_save(state)
-		}
 		SettingsMessage::FullSyncRequested => blocking::run(calendar::forget_sync_state)
 			.map(|result| Message::Settings(SettingsMessage::FullSyncReset(result))),
 		SettingsMessage::FullSyncReset(result) => match result {
@@ -479,13 +475,6 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
 			state.calendar.cache_days_in(crate::task_db::path());
 			state.calendar.connection = Connection::SignedOut;
 			crate::people::forget_primary(state)
-		}
-		SettingsMessage::CalendarSyncMinutesChanged(minutes) => {
-			state.config.calendar.sync_minutes = minutes.clamp(
-				config::CalendarSettings::MIN_SYNC_MINUTES,
-				config::CalendarSettings::MAX_SYNC_MINUTES,
-			);
-			queue_save(state)
 		}
 		SettingsMessage::SleepTimeChanged(day, bedtime, value) => {
 			let Ok(time) = chrono::NaiveTime::parse_from_str(&value, "%H:%M") else {

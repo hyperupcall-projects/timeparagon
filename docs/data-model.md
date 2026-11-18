@@ -164,11 +164,9 @@ honor the sync interval.
 
 Mobile views read covered ranges from `google_sync_events` and the canonical
 task records, then apply stored sleep and local edits. `google_sync_windows`
-records coverage even for empty dates. When incremental sync is disabled,
-`calendar_view_coverage` records the fetched dates, account and day boundary for
-the month snapshots. A month containing some events does not imply that its
-other dates were fetched. View loading saves snapshots before delivering them
-to the UI; restoring a UI cache never overwrites those newer database records.
+records coverage even for empty dates. View loading saves snapshots before
+delivering them to the UI; restoring a UI cache never overwrites those newer
+database records.
 
 ### Event
 
@@ -923,7 +921,7 @@ setup and the timer running on it. Another device would be broken by them.
 
 | Settings | Where | Shared |
 | --- | --- | :---: |
-| `calendar.*`: OAuth client, sync interval, app calendar and task-list IDs, task sorts, triage requirements, day-end hour, first day of week, week view, colors per kind | `settings` | ✅ |
+| `calendar.*`: OAuth client, app calendar and task-list IDs, task sorts, triage requirements, day-end hour, first day of week, week view, colors per kind | `settings` | ✅ |
 | Hidden calendars, source order, colors per calendar or task list | `calendar_sources` | ✅ |
 | Weekly bedtime and wake-up times, and dated changes to them | `sleep_schedule`, `sleep_schedule_changes` | ✅ |
 | Card order on the week board | `weekly_task_order` | ✅ |
@@ -943,7 +941,7 @@ setup and the timer running on it. Another device would be broken by them.
 The split is `settings::mapping::DEVICE_SECTIONS`.
 
 A setting is named `section.field`, as in the apps' `Config`
-(`calendar.sync_minutes`), and its value is JSON (`30`, `"Ocean"`, or an
+(`calendar.weekly_day_width`), and its value is JSON (`200`, `"Ocean"`, or an
 object for `alarm.sound`). **A setting at its default is not stored**: no
 row means the default. So a device that never touched a setting cannot
 override another device's choice, and an untouched install stores nothing.
