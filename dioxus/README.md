@@ -32,11 +32,11 @@ own screen and the rest of the app in sheets over it:
   files use Android’s default sound on the phone. Flash, volume, repeat and
   window-raising settings apply on desktop.
 - Sleep, with the desktop's features: the weekly schedule (**Settings → Sleep**),
-  adding a night (**+ → Sleep**), editing a night's times for that night or that
-  weekday from then on, and its actual sleep. **Start sleep** and **Finish sleep**
-  are on the night and in its editor. While sleep is being timed, a strip under
-  the navigation shows how long it has run, the wake-up times for 6 to 9 hours
-  and the target, and **Finish sleep**. Android also shows an ongoing
+  adding a night (**+ → Sleep**), editing a night's times for that night, that
+  weekday from then on, or all days of the week from then on, and its actual sleep.
+  **Start sleep** and **Finish sleep** are on the night and in its editor. While
+  sleep is being timed, a strip under the navigation shows how long it has run,
+  the wake-up times for 6 to 9 hours and the target, and **Finish sleep**. Android also shows an ongoing
   notification with a running clock, replaced by how long you slept once it is
   finished.
 - Reminders for events, tasks, time blocks, habits, sleep and travel, with a

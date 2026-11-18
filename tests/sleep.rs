@@ -290,10 +290,11 @@ fn sleep_moves_and_both_resize_edges_preview_then_cancel_without_changing_settin
 }
 
 #[test]
-fn sleep_scope_success_updates_only_the_selected_weekday_from_the_selected_night() {
+fn sleep_scope_success_updates_the_selected_night_weekday_or_all_days() {
 	for scope in [
 		calendar::SaveScope::Current,
 		calendar::SaveScope::CurrentAndFuture,
+		calendar::SaveScope::All,
 	] {
 		let mut state = state();
 		let mut event = state.calendar.event("sleep").unwrap().clone();
@@ -301,8 +302,7 @@ fn sleep_scope_success_updates_only_the_selected_weekday_from_the_selected_night
 		let before = sleep::times_for(&state.config.calendar, day);
 		event.start += Duration::minutes(30);
 		event.end += Duration::minutes(15);
-		event.details.sleep.as_mut().unwrap().automatic =
-			scope == calendar::SaveScope::CurrentAndFuture;
+		event.details.sleep.as_mut().unwrap().automatic = scope != calendar::SaveScope::Current;
 		let _ = app::update(
 			&mut state,
 			Message::Event(EventMessage::SleepTimeSaved(
@@ -315,7 +315,7 @@ fn sleep_scope_success_updates_only_the_selected_weekday_from_the_selected_night
 			sleep::times_for(&state.config.calendar, day - Duration::days(7)),
 			before
 		);
-		let expected = if scope == calendar::SaveScope::CurrentAndFuture {
+		let expected = if scope != calendar::SaveScope::Current {
 			sleep::Times {
 				bedtime: event.start.time(),
 				wakeup: event.end.time(),
@@ -329,10 +329,20 @@ fn sleep_scope_success_updates_only_the_selected_weekday_from_the_selected_night
 			expected
 		);
 		assert_eq!(state.config.calendar.sleep_schedule[0], expected);
-		assert_eq!(
-			sleep::times_for(&state.config.calendar, day + Duration::days(1)),
-			sleep::Times::default()
-		);
+		for offset in 1..7 {
+			assert_eq!(
+				sleep::times_for(&state.config.calendar, day + Duration::days(offset)),
+				if scope == calendar::SaveScope::All {
+					expected
+				} else {
+					sleep::Times::default()
+				}
+			);
+			assert_eq!(
+				sleep::times_for(&state.config.calendar, day - Duration::days(offset)),
+				sleep::Times::default()
+			);
+		}
 		assert_eq!(
 			state
 				.calendar
@@ -343,10 +353,52 @@ fn sleep_scope_success_updates_only_the_selected_weekday_from_the_selected_night
 				.as_ref()
 				.unwrap()
 				.automatic,
-			scope == calendar::SaveScope::CurrentAndFuture
+			scope != calendar::SaveScope::Current
 		);
 		let saved: Config = toml::from_str(&toml::to_string(&state.config).unwrap()).unwrap();
-		assert_eq!(sleep::times_for(&saved.calendar, day), expected);
+		for offset in 0..7 {
+			let date = day + Duration::days(offset);
+			assert_eq!(
+				sleep::times_for(&saved.calendar, date),
+				sleep::times_for(&state.config.calendar, date)
+			);
+		}
+	}
+}
+
+#[test]
+fn all_days_sleep_changes_from_a_past_night_start_today() {
+	let mut state = state();
+	let mut event = state.calendar.event("sleep").unwrap().clone();
+	let day = event.details.sleep.as_ref().unwrap().wake_date;
+	let today = day + Duration::days(2);
+	let _clock = timeparagon::clock::freeze(calendar::at_clock(today, 12, 0).to_utc());
+	event.start += Duration::hours(1);
+	event.end += Duration::hours(1);
+	event.details.sleep.as_mut().unwrap().automatic = true;
+	let expected = sleep::Times {
+		bedtime: event.start.time(),
+		wakeup: event.end.time(),
+	};
+	let _ = app::update(
+		&mut state,
+		Message::Event(EventMessage::SleepTimeSaved(
+			event.id.clone(),
+			calendar::SaveScope::All,
+			Ok(event),
+		)),
+	);
+	for offset in -7..0 {
+		assert_eq!(
+			sleep::times_for(&state.config.calendar, today + Duration::days(offset)),
+			sleep::Times::default()
+		);
+	}
+	for offset in 0..14 {
+		assert_eq!(
+			sleep::times_for(&state.config.calendar, today + Duration::days(offset)),
+			expected
+		);
 	}
 }
 
@@ -373,7 +425,7 @@ fn failed_sleep_drag_restores_times_and_leaves_the_schedule_unchanged() {
 		&mut state,
 		Message::Event(EventMessage::SleepTimeSaved(
 			"sleep".into(),
-			calendar::SaveScope::CurrentAndFuture,
+			calendar::SaveScope::All,
 			Err("offline".into()),
 		)),
 	);
@@ -410,6 +462,16 @@ fn sleep_editor_time_changes_use_the_same_scope_prompt() {
 		calendar::at_clock(state.calendar.day, 9, 30)
 	);
 	assert!(!state.calendar.edit_draft.as_ref().unwrap().saving);
+	let config = state.config.calendar.clone();
+	let _ = app::update(
+		&mut state,
+		Message::Event(EventMessage::EventMoveScoped(calendar::SaveScope::All)),
+	);
+	assert!(state.calendar.pending_move.is_none());
+	assert_eq!(
+		state.config.calendar, config,
+		"wait for the save to succeed"
+	);
 }
 
 #[test]

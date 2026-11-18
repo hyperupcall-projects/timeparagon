@@ -273,7 +273,12 @@ pub fn times_for(settings: &CalendarSettings, day: NaiveDate) -> Times {
 /// Share changes made from the grid with Settings while retaining the schedule
 /// before the selected occurrence. A later edit replaces following changes.
 pub fn set_weekday_times(settings: &mut CalendarSettings, from: NaiveDate, times: Times) {
-	let previous = times_for(settings, from);
+	let previous = settings
+		.sleep_schedule_changes
+		.iter()
+		.find(|change| change.from == from)
+		.map(|change| change.previous)
+		.unwrap_or_else(|| times_for(settings, from));
 	settings
 		.sleep_schedule_changes
 		.retain(|change| change.from.weekday() != from.weekday() || change.from < from);
@@ -283,6 +288,14 @@ pub fn set_weekday_times(settings: &mut CalendarSettings, from: NaiveDate, times
 		times,
 	});
 	settings.sleep_schedule[from.weekday().num_days_from_monday() as usize] = times;
+}
+
+/// Apply the same times to every weekday from this night onward, retaining
+/// the schedule before it and replacing any later changes.
+pub fn set_all_times(settings: &mut CalendarSettings, from: NaiveDate, times: Times) {
+	for offset in 0..7 {
+		set_weekday_times(settings, from + Duration::days(offset), times);
+	}
 }
 
 pub fn weekday_label(day: NaiveDate) -> String {
@@ -1005,6 +1018,45 @@ mod tests {
 			Times::default()
 		);
 	}
+
+	#[test]
+	fn all_days_changes_replace_future_plans_and_preserve_each_weekdays_history() {
+		let mut settings = CalendarSettings::default();
+		let from = date() + Duration::days(3);
+		for offset in 0..7 {
+			let day = from + Duration::days(offset);
+			let times = Times {
+				bedtime: NaiveTime::from_hms_opt(22, 0, 0).unwrap(),
+				wakeup: NaiveTime::from_hms_opt(6 + offset as u32, 0, 0).unwrap(),
+			};
+			set_weekday_times(&mut settings, day - Duration::days(7), times);
+			set_weekday_times(&mut settings, day, Times::default());
+			set_weekday_times(&mut settings, day + Duration::days(14), times);
+		}
+		let before = settings.clone();
+		// Replacing the same effective date twice must still keep its history.
+		for hour in [7, 8] {
+			let times = Times {
+				bedtime: NaiveTime::from_hms_opt(23, 30, 0).unwrap(),
+				wakeup: NaiveTime::from_hms_opt(hour, 15, 0).unwrap(),
+			};
+			set_all_times(&mut settings, from, times);
+			assert_eq!(settings.sleep_schedule, [times; 7]);
+			for offset in -14..35 {
+				let day = from + Duration::days(offset);
+				assert_eq!(
+					times_for(&settings, day),
+					if day < from {
+						times_for(&before, day)
+					} else {
+						times
+					},
+					"wrong times for {day}"
+				);
+			}
+		}
+	}
+
 	fn night() -> Event {
 		let mut event = appointment(1);
 		event.calendar_id = "app".into();

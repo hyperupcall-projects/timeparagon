@@ -129,13 +129,14 @@ fn sleep_dragging_moves_the_whole_night_or_either_edge_on_day_and_week_grids() {
 }
 
 #[test]
-fn sleep_scope_prompt_uses_weekday_labels_and_offers_no_all_events_choice() {
+fn sleep_scope_prompt_offers_one_night_matching_weekdays_and_all_days() {
 	for (label, scope) in [
 		("This monday", calendar::SaveScope::Current),
 		(
 			"This and future mondays",
 			calendar::SaveScope::CurrentAndFuture,
 		),
+		("All days of the week", calendar::SaveScope::All),
 	] {
 		let mut state = State::blank();
 		let mut snapshot = calendar::sample_snapshot();

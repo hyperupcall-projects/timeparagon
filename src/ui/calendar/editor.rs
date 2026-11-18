@@ -886,7 +886,7 @@ pub(super) fn sleep_editor<'a>(
         }), metrics),
         text(calendar::sleep::duration(&preview)).size(metrics.label() + 10.0),
         text(if record.automatic {
-            "Planned from your weekly sleep schedule. Save changes for this night or for this and future matching weekdays."
+            "Planned from your weekly sleep schedule. Save changes for this night, this and future matching weekdays, or all days of the week from this night onward."
         } else { "Recorded sleep. These times are preserved when your schedule changes." }).size(metrics.label() - 1.0).style(text::secondary),
         form_section(
             "Scheduling",

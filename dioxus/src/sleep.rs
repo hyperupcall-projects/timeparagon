@@ -234,26 +234,31 @@ pub fn save_weekday(
 	Ok(crate::day::load_config())
 }
 
-/// Makes one night's new times the schedule for that weekday from then on.
-pub fn save_from_night(night: &Event) -> Result<Config, String> {
+/// Makes one night's new times the schedule for its weekday or every day
+/// from then on.
+pub fn save_from_night(night: &Event, scope: calendar::SaveScope) -> Result<Config, String> {
 	let record = night
 		.details
 		.sleep
 		.as_ref()
 		.ok_or("Missing sleep metadata")?;
 	let mut config = crate::day::load_config();
-	let from = sleep::change_from(
-		record.wake_date,
-		timeparagon_core::clock::now().date_naive(),
-	);
-	sleep::set_weekday_times(
-		&mut config.calendar,
-		from,
-		sleep::Times {
-			bedtime: night.start.time(),
-			wakeup: night.end.time(),
-		},
-	);
+	let today = timeparagon_core::clock::now().date_naive();
+	let times = sleep::Times {
+		bedtime: night.start.time(),
+		wakeup: night.end.time(),
+	};
+	match scope {
+		calendar::SaveScope::Current => return Ok(config),
+		calendar::SaveScope::CurrentAndFuture => sleep::set_weekday_times(
+			&mut config.calendar,
+			sleep::change_from(record.wake_date, today),
+			times,
+		),
+		calendar::SaveScope::All => {
+			sleep::set_all_times(&mut config.calendar, record.wake_date.max(today), times);
+		}
+	}
 	save_schedule(&config.calendar)?;
 	Ok(crate::day::load_config())
 }

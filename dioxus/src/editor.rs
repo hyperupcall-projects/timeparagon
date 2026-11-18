@@ -1500,7 +1500,7 @@ fn SleepEditor(
 	let mut busy = use_signal(|| false);
 	let mut closing = use_signal(|| false);
 	let mut error = use_signal(|| None::<String>);
-	// Moving a night's times asks whether its weekday's schedule moves too.
+	// Moving a night's times asks how much of the weekly schedule changes too.
 	let mut pending_scope = use_signal(|| false);
 
 	let close = move |_: ()| {
@@ -1526,7 +1526,7 @@ fn SleepEditor(
 		let new = night.id == calendar::sleep::NEW_ID;
 		// A single night becomes an exception to the schedule; following the
 		// schedule keeps it planned from it.
-		record.automatic = scope == Some(SaveScope::CurrentAndFuture);
+		record.automatic = matches!(scope, Some(SaveScope::CurrentAndFuture | SaveScope::All));
 		if new {
 			record.wake_date = values.end.date_naive();
 		}
@@ -1539,9 +1539,12 @@ fn SleepEditor(
 		spawn(async move {
 			let result = worker(move || {
 				let saved = calendar::sleep::save(&settings, night, new)?;
-				let config = (scope == Some(SaveScope::CurrentAndFuture))
-					.then(|| crate::sleep::save_from_night(&saved))
-					.transpose()?;
+				let config = match scope {
+					Some(scope @ (SaveScope::CurrentAndFuture | SaveScope::All)) => {
+						Some(crate::sleep::save_from_night(&saved, scope)?)
+					}
+					_ => None,
+				};
 				Ok((saved, config))
 			})
 			.await;
@@ -1683,7 +1686,7 @@ fn SleepEditor(
 	let weekday = calendar::sleep::weekday_label(record.wake_date);
 	let footer = if pending_scope() {
 		rsx! {
-			p { class: "editor-status", "Change only this night, or the {weekday} schedule from here on?" }
+			p { class: "editor-status", "Change this night, future {weekday}s, or all days of the week from this night onward?" }
 			button {
 				class: "btn editor-wide",
 				onclick: move |_| write.call(Some(SaveScope::Current)),
@@ -1693,6 +1696,11 @@ fn SleepEditor(
 				class: "btn editor-wide",
 				onclick: move |_| write.call(Some(SaveScope::CurrentAndFuture)),
 				"This and future {weekday}s"
+			}
+			button {
+				class: "btn editor-wide",
+				onclick: move |_| write.call(Some(SaveScope::All)),
+				"All days of the week"
 			}
 			button { class: "btn editor-wide", onclick: move |_| pending_scope.set(false), "Cancel" }
 		}
@@ -1749,7 +1757,7 @@ fn SleepEditor(
 				}
 				p { class: "hint",
 					if record.automatic {
-						"Planned from your weekly sleep schedule. Saving records your times and preserves them when your schedule changes."
+						"Planned from your weekly sleep schedule. Save changes for this night, this and future matching weekdays, or all days of the week from this night onward."
 					} else {
 						"Recorded sleep. These times are preserved when your schedule changes."
 					}

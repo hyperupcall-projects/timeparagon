@@ -311,6 +311,7 @@ pub(crate) fn move_confirmation<'a>(state: &'a State, metrics: &Metrics) -> Elem
 					format!("This and future {day}s"),
 					calendar::SaveScope::CurrentAndFuture,
 				),
+				("All days of the week".into(), calendar::SaveScope::All),
 			]
 		} else {
 			vec![
@@ -322,6 +323,13 @@ pub(crate) fn move_confirmation<'a>(state: &'a State, metrics: &Metrics) -> Elem
 				("All events".into(), calendar::SaveScope::All),
 			]
 		};
+		if event.details.sleep.is_some() {
+			body = body.push(
+				text("Weekly changes apply from this night onward.")
+					.size(metrics.label() - 1.0)
+					.style(text::secondary),
+			);
+		}
 		for (label, scope) in choices {
 			body = body.push(
 				choice(label, EventMessage::EventMoveScoped(scope))

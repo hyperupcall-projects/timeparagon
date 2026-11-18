@@ -392,9 +392,6 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
 			let Some(pending) = state.calendar.pending_move.as_mut() else {
 				return Task::none();
 			};
-			if pending.original.details.sleep.is_some() && scope == calendar::SaveScope::All {
-				return Task::none();
-			}
 			pending.scope = Some(scope);
 			let attendance = &pending.original.details.attendance;
 			if attendance.can_manage() && !attendance.guests.is_empty() {
@@ -438,20 +435,26 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
 			};
 			state.calendar.confirm_time_change(&id);
 			let mut tasks = Vec::new();
-			if scope == calendar::SaveScope::CurrentAndFuture {
+			if scope != calendar::SaveScope::Current {
 				let record = event.details.sleep.as_ref().unwrap();
-				let from = calendar::sleep::change_from(
-					record.wake_date,
-					crate::clock::now().date_naive(),
-				);
-				calendar::sleep::set_weekday_times(
-					&mut state.config.calendar,
-					from,
-					calendar::sleep::Times {
-						bedtime: event.start.time(),
-						wakeup: event.end.time(),
-					},
-				);
+				let today = crate::clock::now().date_naive();
+				let times = calendar::sleep::Times {
+					bedtime: event.start.time(),
+					wakeup: event.end.time(),
+				};
+				if scope == calendar::SaveScope::All {
+					calendar::sleep::set_all_times(
+						&mut state.config.calendar,
+						record.wake_date.max(today),
+						times,
+					);
+				} else {
+					calendar::sleep::set_weekday_times(
+						&mut state.config.calendar,
+						calendar::sleep::change_from(record.wake_date, today),
+						times,
+					);
+				}
 				state.calendar.invalidate_other_days();
 				tasks.push(queue_save(state));
 			}
@@ -623,8 +626,7 @@ fn write_event_time(
 				event.details.sleep = Some(record.clone());
 			}
 		}
-		event.details.sleep.as_mut().unwrap().automatic =
-			scope == calendar::SaveScope::CurrentAndFuture;
+		event.details.sleep.as_mut().unwrap().automatic = scope != calendar::SaveScope::Current;
 		// Only a single-night edit becomes an exception to the shared schedule.
 		let settings = state.config.calendar.clone();
 		state.timeblocking.revision += 1;
