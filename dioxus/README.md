@@ -76,9 +76,15 @@ server, window layout and so on) stay on it; see
 [Settings](../docs/data-model.md#settings).
 
 These stay on the desktop: the dock and panel, global shortcuts, the
-Pomodoro timer, voice input, the
+Pomodoro timer, the
 extra Google accounts, and the Slack and browser integrations, which reach the phone as
 ordinary tasks.
+
+The Add sheet supports voice task input, taking a picture, pasting a copied image,
+and choosing screenshots or photos. Recognition uses the desktop's model settings
+format and extraction code; configure the servers and models in Settings → AI.
+Android voice uses a reachable whisper.cpp server loaded with your desktop Whisper
+model. See [Voice and picture input](../docs/voice-input.md#android-input).
 
 Both apps share data and code via the `timeparagon-core` crate:
 

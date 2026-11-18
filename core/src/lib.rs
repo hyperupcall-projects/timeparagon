@@ -8,6 +8,7 @@
 //! data-only config the Dioxus app reads. The iced application embeds those
 //! same settings in its full config. `settings` keeps both in the database.
 
+pub mod ai_input;
 pub mod alarms;
 pub mod brain_dump;
 pub mod calendar;

@@ -1846,6 +1846,27 @@ pub fn create_task(
 	due: Option<NaiveDate>,
 	metadata: Option<crate::timeblocking::Metadata>,
 ) -> Result<Event, String> {
+	create_task_at(settings, title, notes, due, metadata, None)
+}
+
+/// Creates the complete reviewed draft in one write, including an optional clock time.
+pub fn create_task_at(
+	settings: &CalendarSettings,
+	title: &str,
+	notes: &str,
+	due: Option<NaiveDate>,
+	metadata: Option<crate::timeblocking::Metadata>,
+	schedule: Option<(DateTime<Local>, DateTime<Local>)>,
+) -> Result<Event, String> {
+	let due = if let Some((start, end)) = schedule {
+		if end <= start {
+			return Err("The task must end after it starts".into());
+		}
+		Some(start.date_naive())
+	} else {
+		due
+	};
+
 	let list = settings
 		.inbox_list
 		.as_deref()
@@ -1874,7 +1895,10 @@ pub fn create_task(
 	data.metadata.created_at = Some(crate::clock::utc_now());
 	task.details.task_data = Some(data);
 	if let Some(day) = due {
-		task = super::calendar_tasks::apply(task, settings, &task_edit::Change::Day(day), 0)?;
+		let change = schedule.map_or(task_edit::Change::Day(day), |(start, end)| {
+			task_edit::Change::Time(start, end)
+		});
+		task = super::calendar_tasks::apply(task, settings, &change, 0)?;
 		submit(
 			Job::CreateCalendarTask {
 				task: Box::new(task.clone()),

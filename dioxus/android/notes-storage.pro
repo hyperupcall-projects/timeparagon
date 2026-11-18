@@ -2,3 +2,7 @@
 -keep class dev.kofler.timeparagon.notes.NotesStorage {
     public static java.lang.String run(android.content.Context, java.lang.String);
 }
+
+-keep class dev.kofler.timeparagon.input.MediaInput {
+    public static java.lang.String run(android.content.Context, java.lang.String);
+}

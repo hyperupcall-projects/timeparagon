@@ -24,6 +24,7 @@ use iced_core::Color;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Config {
+	pub voice: crate::ai_input::Settings,
 	pub alarm: crate::alarms::AlarmProfile,
 	pub database_sync: DatabaseSyncSettings,
 	pub notes: NotesSettings,
