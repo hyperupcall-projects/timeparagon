@@ -12,6 +12,7 @@ use crate::config;
 use crate::integrations::accounts;
 
 use super::layout::Metrics;
+pub(super) use timeparagon_core::alarms::repeat_label;
 
 /// Room left for the scrollbar, which is drawn over the content rather than
 /// beside it. Without this the right edge of every control sits underneath
@@ -1189,14 +1190,6 @@ fn day_end_label(hour: u32, time_format: TimeFormat) -> String {
 			"Day ends at {}",
 			calendar::time_format::hour(hour, time_format)
 		)
-	}
-}
-
-pub(super) fn repeat_label(repeats: u8) -> String {
-	match repeats {
-		0 => "Repeat until dismissed".to_owned(),
-		1 => "Play once".to_owned(),
-		count => format!("Play {count} times"),
 	}
 }
 

@@ -187,6 +187,13 @@ for (const [start, end, edge, delta] of [[1380, 1500, 'start', -30], [-60, 60, '
     assert.equal(s.writes[0].start_delta, 25);
 }
 {
+    const s = setup(), mark = new s.source.constructor('alarm-tap alarm-mark');
+    s.first.append(mark);
+    s.down(mark); s.hold(); s.up();
+    assert.equal(s.preview(), undefined, 'holding an alarm needle does not draw a new range');
+    assert.deepEqual(s.writes, [], 'an alarm needle is left for its tap to open');
+}
+{
     const s = setup(); s.source.disabled = true; s.down(); s.hold();
     assert.equal(s.preview(), undefined, 'events with a write in flight stay locked');
 }

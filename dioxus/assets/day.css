@@ -3862,6 +3862,85 @@ textarea {
     font-weight: 600;
     box-shadow: var(--shadow-row);
 }
+/* A saved alarm. Only its dot and pill take a tap above the events. */
+.alarm-mark {
+    position: absolute;
+    left: 0;
+    right: 0;
+    z-index: 34;
+    height: 2px;
+    background: var(--alarm);
+    pointer-events: none;
+}
+.alarm-mark-dot {
+    position: absolute;
+    left: calc(var(--needle-radius) * -1);
+    top: calc(1px - var(--needle-radius));
+    width: calc(var(--needle-radius) * 2);
+    height: calc(var(--needle-radius) * 2);
+    border-radius: 50%;
+    background: var(--alarm);
+    pointer-events: auto;
+    cursor: pointer;
+}
+.alarm-mark-dot::after {
+    content: "";
+    position: absolute;
+    inset: -14px;
+}
+.alarm-mark-pill {
+    appearance: none;
+    position: absolute;
+    right: 10px;
+    bottom: 3px;
+    max-width: calc(100% - 20px);
+    padding: 1px 6px;
+    overflow: hidden;
+    border: none;
+    border-radius: 99px;
+    background: var(--alarm);
+    color: white;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 16px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    pointer-events: auto;
+    cursor: pointer;
+}
+.alarm-mark.below .alarm-mark-pill { top: 4px; bottom: auto; }
+.alarm-line-target {
+    appearance: none;
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 24px;
+    padding: 0;
+    transform: translateY(-50%);
+    border: none;
+    background: none;
+    cursor: pointer;
+}
+.alarm-countdown { display: grid; gap: 2px; }
+.alarm-countdown strong { color: var(--alarm); font-size: 19px; }
+.alarm-field, .alarm-slider { display: grid; gap: 4px; font-size: 14px; }
+.alarm-slider input { width: 100%; min-height: 32px; margin: 0; accent-color: var(--alarm); }
+.alarm-editor-heading { margin: 4px 0 0; font-size: 15px; }
+.alarm-section {
+    display: grid;
+    gap: 8px;
+    padding-left: 12px;
+    border-left: 2px solid var(--hairline);
+}
+.alarm-editor-actions {
+    flex: none;
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 12px 12px max(12px, env(safe-area-inset-bottom, 0px));
+    border-top: 1px solid var(--hairline);
+}
+.alarm-editor-actions .btn { min-height: 44px; min-width: 88px; }
 .placement-bar {
     flex: none;
     display: flex;

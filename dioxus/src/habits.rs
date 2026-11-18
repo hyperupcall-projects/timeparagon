@@ -1438,7 +1438,11 @@ fn hint(text: &'static str) -> Element {
 }
 
 /// A switch with its label, as the desktop's togglers are.
-fn toggle(label: &'static str, on: bool, mut onchange: impl FnMut(bool) + 'static) -> Element {
+pub(crate) fn toggle(
+	label: &'static str,
+	on: bool,
+	mut onchange: impl FnMut(bool) + 'static,
+) -> Element {
 	rsx! {
 		button {
 			class: "habit-toggle",

@@ -14,7 +14,7 @@ use crate::calendar::time_format::TimeFormat;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Local, NaiveDate, NaiveTime, TimeZone, Timelike};
+use chrono::{DateTime, Local};
 use iced::Task;
 use serde::{Deserialize, Serialize};
 
@@ -33,7 +33,11 @@ const MISSED_GRACE_MINUTES: i64 = 5;
 /// otherwise, so it never announces itself as a finished timer.
 const DEFAULT_SUMMARY: &str = "Alarm";
 
-pub use timeparagon_core::alarms::Alarm;
+pub use timeparagon_core::alarms::{
+	Alarm, can_set, compact, countdown_label, minute_of, minutes_between,
+};
+#[cfg(test)]
+use timeparagon_core::alarms::{local_at, parse_time};
 
 /// The popup that edits one alarm.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -149,74 +153,11 @@ impl Alarms {
 	}
 }
 
-/// `when` with the seconds taken off.
-pub fn minute_of(when: DateTime<Local>) -> DateTime<Local> {
-	// Subtracting rather than `with_second`, which gives up on a local time
-	// that happens twice, as it does in the hour the clocks go back.
-	when - chrono::Duration::seconds(i64::from(when.second()))
-		- chrono::Duration::nanoseconds(i64::from(when.nanosecond()))
-}
-
-/// Whole minutes from `now` to `at`, counted between the clock faces rather
-/// than the instants: from 10:00:40, a 10:45 alarm is 45 minutes away, which
-/// is what the clock on the wall says.
-pub fn minutes_between(now: DateTime<Local>, at: DateTime<Local>) -> i64 {
-	(minute_of(at) - minute_of(now)).num_minutes()
-}
-
-/// Whether an alarm may be set for `at`.
-///
-/// It has to be at least a minute ahead of the clock: an alarm for this very
-/// minute is already as good as in the past.
-pub fn can_set(now: DateTime<Local>, at: DateTime<Local>) -> bool {
-	minutes_between(now, at) >= 1
-}
-
-/// A length of time as short as it can be said: `45m`, `2h`, `1h 15m`,
-/// `1d 3h`.
-pub fn compact(minutes: u64) -> String {
-	let (days, hours, minutes) = (minutes / 1_440, minutes % 1_440 / 60, minutes % 60);
-
-	let parts: Vec<String> = [(days, 'd'), (hours, 'h'), (minutes, 'm')]
-		.into_iter()
-		.filter(|(amount, _)| *amount > 0)
-		.map(|(amount, unit)| format!("{amount}{unit}"))
-		.collect();
-
-	// A day and some minutes reads better as "1d 5m" than "1d 0h 5m", and
-	// zero has to say something.
-	if parts.is_empty() {
-		"0m".to_owned()
-	} else {
-		parts.join(" ")
-	}
-}
-
 /// The offset drawn beside the needle: `+45m`, `+2h`, `-30m`.
 pub fn offset_label(minutes: i64) -> String {
 	let sign = if minutes < 0 { '-' } else { '+' };
 
 	format!("{sign}{}", compact(minutes.unsigned_abs()))
-}
-
-/// When an alarm goes off, relative to now: `Goes off in 45m`.
-pub fn countdown_label(minutes: i64) -> String {
-	if minutes >= 1 {
-		format!("Goes off in {}", compact(minutes as u64))
-	} else {
-		"Going off now".to_owned()
-	}
-}
-
-/// Reads `HH:MM` as a time of day.
-pub fn parse_time(text: &str) -> Option<NaiveTime> {
-	NaiveTime::parse_from_str(text.trim(), "%H:%M").ok()
-}
-
-/// The local moment on `date` at `time`, taking the earlier of two when a
-/// clock change makes it ambiguous. `None` when the clock skips it.
-pub fn local_at(date: NaiveDate, time: NaiveTime) -> Option<DateTime<Local>> {
-	Local.from_local_datetime(&date.and_time(time)).earliest()
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -481,22 +422,12 @@ fn edit_alarm(state: &mut State, edit: Edit) {
 /// Applies the time field: the alarm moves when the text is a time that is
 /// still ahead, and the field says why when it is not.
 fn set_time(state: &mut State, id: u64, text: String) {
-	let outcome = match parse_time(&text) {
-		None => Err("Use the 24-hour form, like 07:30".to_owned()),
-		Some(time) => {
-			let date = state
-				.alarms
-				.get(id)
-				.map(|alarm| alarm.at.date_naive())
-				.unwrap_or_default();
-
-			match local_at(date, time) {
-				Some(at) if can_set(crate::clock::now(), at) => Ok(at),
-				Some(_) => Err("That time has already passed".to_owned()),
-				None => Err("That time does not exist on this day".to_owned()),
-			}
-		}
-	};
+	let date = state
+		.alarms
+		.get(id)
+		.map(|alarm| alarm.at.date_naive())
+		.unwrap_or_default();
+	let outcome = timeparagon_core::alarms::retimed(date, &text, crate::clock::now());
 
 	if let Some(editor) = state.alarms.editor.as_mut() {
 		editor.time_text = text;
@@ -576,7 +507,7 @@ pub fn needs_flush(alarms: &Alarms) -> bool {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use chrono::Duration as Span;
+	use chrono::{Duration as Span, NaiveDate, NaiveTime};
 
 	fn at(hour: u32, minute: u32, second: u32) -> DateTime<Local> {
 		local_at(

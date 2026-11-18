@@ -221,6 +221,7 @@ fn Main() -> Element {
 	use_effect(move || calendar_gestures::sync_zoom(calendar_zoom()));
 	let mut alarm_placement = use_signal(|| None::<chrono::NaiveDateTime>);
 	use_context_provider(|| alarms::Placement(alarm_placement));
+	let saved_alarms = alarms::use_shared();
 	let mut draft_range = use_signal(|| None::<calendar_gestures::TimeRange>);
 	use_context_provider(|| calendar_gestures::DraftRange(draft_range));
 	// The confirmed time the Add sheet opens on.
@@ -516,6 +517,7 @@ fn Main() -> Element {
 				habit_names.set(names);
 			}
 			if moved(|c| c.alarms) {
+				saved_alarms.reload();
 				reminders::republish(&config.peek());
 			}
 			notes_store.reload_shared().await;
@@ -1823,6 +1825,7 @@ fn Main() -> Element {
 				on_place: snapshot.as_ref().map(|_| begin_alarm),
 				on_close: move |_| show_alarms.set(false),
 			} }
+			alarms::AlarmEditor { config }
 			{people_sheet}
 			{travel_sheet}
 			if show_log() {
@@ -2316,10 +2319,12 @@ fn timeline(
 							"data-hour-start": model.hour_start,
 							"data-clock": if time_format == TimeFormat::TwelveHour { "12" } else { "24" },
 							{lines.into_iter()}
+							alarms::AlarmLines { day: model.day, hour_start: model.hour_start }
 							{events.into_iter()}
 							{block_tasks.into_iter()}
 							{trips.into_iter()}
 							{now_line}
+							alarms::AlarmMarks { day: model.day, hour_start: model.hour_start, time_format }
 							alarms::AlarmNeedle { day: model.day, hour_start: model.hour_start, time_format }
 							{empty}
 							div {
