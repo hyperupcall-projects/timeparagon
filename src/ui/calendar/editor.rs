@@ -118,8 +118,28 @@ pub fn event_editor<'a>(
 		return loading.into();
 	}
 	let label = |name: &'static str| crate::ui::controls::field_label(name, metrics.label());
+	// Something being added sits inside the creation form, which supplies its
+	// heading and actions.
+	let creating = state
+		.inbox
+		.draft
+		.as_ref()
+		.and_then(|form| form.entry.as_ref())
+		.is_some_and(|entry| entry.id == event.id);
+	let block = event.id == crate::inbox::ENTRY_BLOCK_ID
+		|| crate::timeblocking::is_block(event, &state.config.calendar);
 
-	let title: Element<'a, Message> = if let Some(habit) = state
+	let title: Element<'a, Message> = if creating {
+		let mut input = crate::ui::controls::text_input("Add title", &draft.title)
+			.size(metrics.label() + 6.0)
+			.width(Fill);
+		if !draft.saving {
+			input = input
+				.on_input(|v0| Message::EventEdit(EventEditMessage::EventEditTitleChanged(v0)))
+				.on_submit(Message::Inbox(crate::inbox::Action::Create));
+		}
+		creation_title(state, input, metrics)
+	} else if let Some(habit) = state
 		.habits
 		.habit_of(event)
 		.and_then(|id| state.habits.library.habit(id))
@@ -158,8 +178,7 @@ pub fn event_editor<'a>(
 	};
 	// Habits and time blocks are always timed, so only a plain event can be
 	// switched to whole days.
-	let can_be_all_day =
-		!event.is_habit() && !crate::timeblocking::is_block(event, &state.config.calendar);
+	let can_be_all_day = !event.is_habit() && !block;
 	let mut start = column![label(if event.is_habit() {
 		"Start day"
 	} else if draft.all_day {
@@ -288,8 +307,10 @@ pub fn event_editor<'a>(
 		metrics,
 	)]
 	.spacing(metrics.spacing);
-	let new_habit = event.id == crate::habits::NEW_HABIT_ID;
-	if !new_habit {
+	let new_habit = is_new_habit(event);
+	// Notes and places attach to something that already exists.
+	let unsaved = new_habit || creating || event.id == crate::inbox::NEW_EVENT_ID;
+	if !unsaved {
 		if let Some(target) = crate::notes::target_of(state, event) {
 			information = information.push(super::super::notes::section(state, target, metrics));
 		} else {
@@ -301,7 +322,11 @@ pub fn event_editor<'a>(
 		}
 	}
 	let mut body = column![
-		titled(state, event, title, metrics),
+		if creating {
+			title
+		} else {
+			titled(state, event, title, metrics)
+		},
 		form_section(
 			"Scheduling",
 			super::super::timeblocking::scheduled_by_block(state, event, scheduling, metrics),
@@ -356,7 +381,7 @@ pub fn event_editor<'a>(
 		organization = organization.push(labels);
 	}
 
-	if !new_habit {
+	if !unsaved {
 		let place = crate::travel::place_of(&state.config.travel, event)
 			.and_then(|id| state.config.travel.place(id));
 		if place.is_none() && !event.details.location.is_empty() {
@@ -383,11 +408,11 @@ pub fn event_editor<'a>(
 		for link in super::super::meetings::links(event) {
 			meeting = meeting.push(super::super::meetings::join_button(link, metrics));
 		}
-		if !crate::timeblocking::is_block(event, &state.config.calendar) {
+		if !block {
 			meeting = meeting.push(meeting_section(
 				state,
 				&draft.meeting,
-				Some(event),
+				(!unsaved).then_some(event),
 				metrics,
 				|v| Message::EventEdit(EventEditMessage::EventEditMeeting(v)),
 			));
@@ -412,24 +437,15 @@ pub fn event_editor<'a>(
 		body = body.push(form_section("Meeting", meeting, metrics));
 	}
 
-	if state.calendar.open_event.as_deref() != Some(event.id.as_str()) {
+	if !creating && state.calendar.open_event.as_deref() != Some(event.id.as_str()) {
 		body = body.push(event_save_control(state, event, metrics));
 	}
 	body.into()
 }
 
-/// Combined options for callers that do not lay out separate sections.
-pub(super) fn event_options<'a>(
-	options: &'a calendar::event_options::EventOptions,
-	metrics: &Metrics,
-	message: fn(calendar::event_options::Action) -> Message,
-) -> Element<'a, Message> {
-	column![
-		event_notifications(options, metrics, message),
-		event_presence(options, metrics, message)
-	]
-	.spacing(10)
-	.into()
+/// Whether this is a habit event that has not been added yet.
+fn is_new_habit(event: &Event) -> bool {
+	event.id == crate::habits::NEW_HABIT_ID || event.id == crate::inbox::ENTRY_HABIT_ID
 }
 
 pub(super) fn event_notifications<'a>(
@@ -1094,7 +1110,7 @@ fn event_habit_picker<'a>(
 	if event.is_task() {
 		return super::super::timeblocking::habit_link(state, event, metrics);
 	}
-	let new = event.id == crate::habits::NEW_HABIT_ID;
+	let new = is_new_habit(event);
 	let mut options = vec![HabitChoice {
 		id: None,
 		name: if new {

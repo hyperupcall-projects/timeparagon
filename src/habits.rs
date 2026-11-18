@@ -1394,6 +1394,9 @@ fn refresh_after_event_change() -> Task<Message> {
 /// the choice until it is saved; one that exists is changed straight away, on
 /// its whole series.
 fn event_habit_chosen(state: &mut State, habit_id: Option<String>) -> Task<Message> {
+	if crate::inbox::creation::choose_habit(state, habit_id.clone()) {
+		return Task::none();
+	}
 	if state.calendar.open_event.as_deref() == Some(NEW_HABIT_ID) {
 		if let Some(event) = &mut state.calendar.detail_event {
 			event.details.habit_id = habit_id;

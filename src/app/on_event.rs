@@ -175,11 +175,6 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
 			editor.perform(action);
 			let value = editor.text();
 			match field {
-				FormField::EventDraft => {
-					if let Some(d) = &mut state.calendar.draft {
-						d.description = value;
-					}
-				}
 				FormField::EventEdit => {
 					if let Some(d) = &mut state.calendar.edit_draft {
 						d.description = value;
@@ -253,33 +248,9 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
 				}
 				if is_task {
 					state.timeblocking.editing_title = false;
-					state.timeblocking.editing_due_time = false;
-					state.timeblocking.editing_deadline_time = false;
 					state.timeblocking.title = event.title.clone();
 					state.timeblocking.title_error = None;
-					state.timeblocking.date =
-						if event.start.date_naive() == crate::timeblocking::UNDATED {
-							String::new()
-						} else {
-							event.start.date_naive().to_string()
-						};
-					state.timeblocking.deadline = calendar::deadline::input_text(&event);
-					state.timeblocking.deadline_time = state
-						.timeblocking
-						.deadline
-						.get(11..)
-						.unwrap_or("09:00")
-						.to_owned();
-					state.timeblocking.start_time = if event.all_day {
-						"09:00".into()
-					} else {
-						calendar::clock_label(event.start)
-					};
-					state.timeblocking.end_time = if event.all_day {
-						"09:30".into()
-					} else {
-						calendar::clock_label(event.end)
-					};
+					crate::timeblocking::seed_schedule(state, &event);
 					state.timeblocking.project_query.clear();
 					state.timeblocking.project_picker = None;
 					state.timeblocking.label_draft.clear();

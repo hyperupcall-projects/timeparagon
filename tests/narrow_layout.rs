@@ -2100,7 +2100,6 @@ fn backlog_shows_unscheduled_tasks_with_independent_deadline_and_time_editors() 
 		"Estimate",
 		"Deadline",
 		"Due Date",
-		"Schedule Time",
 		"Move to backlog",
 	] {
 		assert!(ui.find(label).is_ok());
@@ -2329,12 +2328,12 @@ fn task_drag_handles_start_a_drag_and_task_rows_accept_a_drop() -> Result<(), Er
 #[test]
 fn invalid_rescheduling_keeps_the_task_and_reports_the_date_problem() {
 	let mut state = timeblocking_state();
-	state.timeblocking.date = "not a date".into();
 	let before = state.calendar.event("task:backlog").unwrap().clone();
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(timeparagon::timeblocking::Action::Reschedule(
+		Message::TimeBlocking(timeparagon::timeblocking::Action::DueDate(
 			"task:backlog".into(),
+			"not a date".into(),
 		)),
 	);
 	assert_eq!(state.calendar.event("task:backlog"), Some(&before));
@@ -2793,7 +2792,7 @@ fn deadline_and_time_editors_stay_inside_narrow_backlog_windows() -> Result<(), 
 		for label in [
 			"Research outline",
 			"Deadline",
-			"Schedule Time",
+			"Due Date",
 			"Move to backlog",
 		] {
 			let bounds = ui.find(label)?.bounds();

@@ -2,6 +2,19 @@
 
 use super::*;
 
+/// The event behind the draft being edited, which need not be the one open:
+/// something new is filled in by the creation form, over whatever is.
+fn edited_event(state: &State) -> Option<&calendar::Event> {
+	let draft = state.calendar.edit_draft.as_ref()?;
+	state
+		.inbox
+		.draft
+		.as_ref()
+		.and_then(|form| form.entry.as_ref())
+		.filter(|entry| entry.id == draft.id)
+		.or_else(|| state.calendar.event(&draft.id))
+}
+
 pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Message> {
 	match message {
 		EventEditMessage::ColorChanged(value) => {
@@ -61,13 +74,11 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
 			Task::none()
 		}
 		EventEditMessage::EventEditTitleChanged(title) => {
-			if state
-				.calendar
-				.open_event
-				.as_deref()
-				.and_then(|id| state.calendar.event(id))
-				.and_then(|event| state.habits.habit_of(event))
-				.is_some()
+			// A habit event is named after its habit, unless it is still being added.
+			if crate::inbox::creation::entry(state).is_none()
+				&& edited_event(state)
+					.and_then(|event| state.habits.habit_of(event))
+					.is_some()
 			{
 				return Task::none();
 			}
@@ -83,12 +94,7 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
 			Task::none()
 		}
 		EventEditMessage::EventEditDateChanged(text) => {
-			let habit = state
-				.calendar
-				.open_event
-				.as_deref()
-				.and_then(|id| state.calendar.event(id))
-				.is_some_and(|event| event.is_habit());
+			let habit = edited_event(state).is_some_and(|event| event.is_habit());
 			if let Some(draft) = state.calendar.edit_draft.as_mut() {
 				let duration = draft.end - draft.start;
 				draft.set_date_text(text);
@@ -107,12 +113,7 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
 			Task::none()
 		}
 		EventEditMessage::EventEditStartChanged(text) => {
-			let habit = state
-				.calendar
-				.open_event
-				.as_deref()
-				.and_then(|id| state.calendar.event(id))
-				.is_some_and(|event| event.is_habit());
+			let habit = edited_event(state).is_some_and(|event| event.is_habit());
 			if let Some(draft) = state.calendar.edit_draft.as_mut() {
 				let duration = draft.end - draft.start;
 				draft.set_start_text(text);
@@ -149,7 +150,7 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
 				.edit_draft
 				.as_ref()
 				.filter(|draft| !draft.saving && !draft.loading)
-				.and_then(|draft| state.calendar.event(&draft.id))
+				.and_then(|_| edited_event(state))
 				.is_some_and(|event| {
 					state
 						.calendar
@@ -208,21 +209,37 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
 			if draft.loading || draft.saving {
 				return Task::none();
 			}
-			if draft.title.trim().is_empty() {
-				state.calendar.error = Some("Enter a title".into());
+			if let Err(error) = draft.validate() {
+				state.calendar.error = Some(error);
 				return Task::none();
 			}
-			if draft.end <= draft.start {
-				state.calendar.error = Some("The end time has to be after the start".to_owned());
-				return Task::none();
+
+			if draft.id == crate::inbox::NEW_EVENT_ID {
+				if draft.calendar_id.is_empty() {
+					state.calendar.error =
+						Some("Connect Google Calendar in Settings to add events".into());
+					return Task::none();
+				}
+				state.calendar.error = None;
+				if let Some(draft) = &mut state.calendar.edit_draft {
+					draft.saving = true;
+				}
+				let settings = state.config.calendar.clone();
+				let color = state.calendar.calendar_color(&draft.calendar_id);
+				return blocking::run(move || {
+					crate::inbox::creation::write_entry(
+						&settings,
+						draft,
+						calendar::DraftKind::Event,
+						None,
+						color,
+					)
+				})
+				.map(|v0| Message::EventEdit(EventEditMessage::EventEditCreated(v0)));
 			}
 
 			if draft.id == crate::habits::NEW_HABIT_ID {
 				if state.habits.busy {
-					return Task::none();
-				}
-				if let Err(error) = draft.recurrence_lines() {
-					state.calendar.error = Some(error);
 					return Task::none();
 				}
 				let color_id = match calendar::colors::selection(&draft.color_input) {
@@ -252,20 +269,9 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
 			} else {
 				draft.description.clone()
 			};
-			let _color_choice = match calendar::colors::selection(&draft.color_input) {
-				Ok(choice) => choice,
-				Err(error) => {
-					state.calendar.error = Some(error);
-					return Task::none();
-				}
-			};
 			let Some(original) = state.calendar.event(&draft.id).cloned() else {
 				return Task::none();
 			};
-			if let Err(error) = draft.recurrence_lines() {
-				state.calendar.error = Some(error);
-				return Task::none();
-			}
 			state.calendar.error = None;
 			if let Some(draft) = &mut state.calendar.edit_draft {
 				draft.saving = true;
@@ -274,6 +280,36 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
 				calendar::save_event_scope(&original, &draft, scope, &description, None)
 			})
 			.map(|v0| Message::EventEdit(EventEditMessage::EventEditSaved(v0)))
+		}
+		EventEditMessage::EventEditCreated(Ok(event)) => {
+			let new = state
+				.calendar
+				.edit_draft
+				.as_ref()
+				.filter(|draft| draft.id == crate::inbox::NEW_EVENT_ID);
+			let zoom =
+				new.is_some_and(|d| crate::inbox::creation::wants_zoom(&state.config.calendar, d));
+			if new.is_some() {
+				state.calendar.edit_draft = None;
+			}
+			if state.calendar.open_event.as_deref() == Some(crate::inbox::NEW_EVENT_ID) {
+				state.calendar.open_event = None;
+				state.calendar.detail_event = None;
+			}
+			if zoom {
+				open_zoom_setup(state, &event.details.link);
+			}
+			state.calendar.add_event(event);
+			refresh_week_after_write(state)
+		}
+		EventEditMessage::EventEditCreated(Err(error)) => {
+			if let Some(draft) = &mut state.calendar.edit_draft {
+				draft.saving = false;
+			}
+			// The pane stays open so the half-filled event is not lost.
+			log::warn!("could not create the event: {error}");
+			state.calendar.error = Some(error);
+			Task::none()
 		}
 		EventEditMessage::EventEditSaved(Ok(saved)) => {
 			// Only the draft still marked as saving is the one Google just
@@ -318,7 +354,7 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
 
 /// Zoom for Google Workspace only runs inside Google Calendar, so the user is
 /// taken to the event there, signed in as the account that holds it.
-pub(super) fn open_zoom_setup(state: &mut State, link: &str) {
+pub(crate) fn open_zoom_setup(state: &mut State, link: &str) {
 	let account = state
 		.calendar
 		.calendars

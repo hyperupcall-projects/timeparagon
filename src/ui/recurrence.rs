@@ -304,7 +304,7 @@ where
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::app::EventDraftMessage;
+	use crate::app::EventEditMessage;
 	use iced_test::{Simulator, core::Settings};
 
 	#[test]
@@ -318,13 +318,13 @@ mod tests {
 				Settings::default(),
 				size,
 				editor(&rule, day, first_day, &Metrics::of(size), false, |action| {
-					Message::EventDraft(EventDraftMessage::EventDraftRecurrence(action))
+					Message::EventEdit(EventEditMessage::EventEditRecurrence(action))
 				}),
 			);
 			ui.click("Sun").unwrap();
 			assert!(ui.into_messages().any(|message| matches!(
 				message,
-				Message::EventDraft(EventDraftMessage::EventDraftRecurrence(
+				Message::EventEdit(EventEditMessage::EventEditRecurrence(
 					recurrence::Action::ToggleWeekday(6)
 				))
 			)));

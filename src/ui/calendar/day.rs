@@ -209,9 +209,17 @@ pub(super) fn day_canvas<'a>(
 	// then a click there is how the card is dismissed.
 	let can_create =
 		state.calendar.open_event.is_none() && state.calendar.draft.is_none() && !state.alarms.mode;
-	let selection = state.calendar.draft.as_ref().and_then(|draft| {
-		let start = minutes_into_day(draft.start, day, offset);
-		let end = minutes_into_day(draft.end, day, offset).min(DAY_MINUTES);
+	// The range stays marked while the new event is filled in.
+	let new_event = state
+		.calendar
+		.edit_draft
+		.as_ref()
+		.filter(|draft| draft.id == crate::inbox::NEW_EVENT_ID && !draft.all_day)
+		.map(|draft| (draft.start, draft.end));
+	let chosen = state.calendar.draft.as_ref().map(|d| (d.start, d.end));
+	let selection = chosen.or(new_event).and_then(|(start, end)| {
+		let start = minutes_into_day(start, day, offset);
+		let end = minutes_into_day(end, day, offset).min(DAY_MINUTES);
 		(0..DAY_MINUTES)
 			.contains(&start)
 			.then_some((start, end.max(start + 1)))

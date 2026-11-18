@@ -427,47 +427,20 @@ pub enum DraftKind {
 	Task,
 }
 
-/// A new event being filled in before it is written to Google.
+/// A range chosen on the calendar, while the type chooser floats over it.
 ///
-/// It is created by a click or a drag on empty grid space and lives in the
-/// store until it is saved or cancelled. The times are kept both as real
-/// instants and as the text the user is editing, so a half-typed `9:3` does not
-/// throw away the last valid time.
+/// It is created by a click or a drag on empty grid space. Choosing a type hands
+/// the range on: events and habits are filled in on an [`EditDraft`], the same
+/// draft that edits them once they exist.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Draft {
-	pub color_input: String,
-	/// Video call, guests and their permissions.
-	pub meeting: meeting::Form,
-	/// The type chooser has handed this draft to the details pane.
-	pub editor_open: bool,
-	pub options: event_options::EventOptions,
-	pub projects: projects::Selection,
-	/// Whether this is an ordinary event or a time block.
+	/// What the range is being turned into.
 	pub kind: DraftKind,
 	pub title: String,
-	pub description: String,
-	/// The calendar the event will be created on.
+	/// The calendar a new event starts on.
 	pub calendar_id: String,
 	pub start: DateTime<Local>,
 	pub end: DateTime<Local>,
-	/// The `YYYY-MM-DD` text shown in the date field.
-	pub date_text: String,
-	/// The `HH:MM` text shown in the start field.
-	pub start_text: String,
-	/// The `HH:MM` text shown in the end field.
-	pub end_text: String,
-	/// The event covers whole days rather than clock times. `start` and `end`
-	/// are then midnights, with Google's exclusive end: a one-day event on the
-	/// 6th runs from the 6th to the 7th. The clock texts keep the last times
-	/// typed so switching back restores them.
-	pub all_day: bool,
-	/// The `YYYY-MM-DD` text shown in the end date field. For an all-day event
-	/// this is the last day covered, not Google's exclusive end.
-	pub end_date_text: String,
-	/// The shared repeat controls. Events default to not repeating.
-	pub rule: crate::recurrence::Rule,
-	/// Whether the calendar dropdown is open.
-	pub calendar_dropdown_open: bool,
 	/// A write to Google is in flight, so the draft must not be submitted
 	/// again or edited underneath it.
 	pub saving: bool,
@@ -477,101 +450,13 @@ impl Draft {
 	/// A draft on `calendar_id` spanning `start` to `end`.
 	pub fn new(calendar_id: String, start: DateTime<Local>, end: DateTime<Local>) -> Self {
 		Self {
-			color_input: String::new(),
-			meeting: meeting::Form::default(),
-			options: Default::default(),
-			editor_open: false,
 			kind: DraftKind::Event,
-			projects: projects::Selection::default(),
 			title: String::new(),
-			description: String::new(),
 			calendar_id,
 			start,
 			end,
-			date_text: start.date_naive().to_string(),
-			start_text: clock_label(start),
-			end_text: clock_label(end),
-			all_day: false,
-			end_date_text: end.date_naive().to_string(),
-			rule: crate::recurrence::Rule::never(start.date_naive()),
-			calendar_dropdown_open: false,
 			saving: false,
 		}
-	}
-
-	/// Applies the date field's text. A value that does not parse keeps the
-	/// real dates alone, the same forgiving rule the clock fields use. The
-	/// end moves by the same number of days, so a span keeps its length.
-	pub fn set_date_text(&mut self, text: String) {
-		if let Ok(day) = crate::calendar::deadline::parse_date(text.trim()) {
-			(self.start, self.end) = move_start_day(self.start, self.end, day, self.all_day);
-			self.end_date_text = last_day(self.start, self.end, self.all_day).to_string();
-		}
-		self.date_text = text;
-	}
-
-	/// Applies the end date field's text: the last day an all-day event
-	/// covers, or the day a timed event ends on.
-	pub fn set_end_date_text(&mut self, text: String) {
-		if let Ok(day) = crate::calendar::deadline::parse_date(text.trim()) {
-			self.end = end_on_day(self.end, day, self.all_day);
-		}
-		self.end_date_text = text;
-	}
-
-	/// Switches between whole days and clock times, keeping the days covered.
-	pub fn set_all_day(&mut self, all_day: bool) {
-		if self.all_day == all_day {
-			return;
-		}
-		(self.start, self.end) = switch_all_day(
-			self.start,
-			self.end,
-			all_day,
-			&self.start_text,
-			&self.end_text,
-		);
-		self.all_day = all_day;
-		if !all_day {
-			self.start_text = clock_label(self.start);
-			self.end_text = clock_label(self.end);
-		}
-		self.date_text = self.start.date_naive().to_string();
-		self.end_date_text = last_day(self.start, self.end, all_day).to_string();
-	}
-
-	/// The recurrence lines the editor describes, or the reason it cannot be
-	/// written yet.
-	pub fn recurrence_lines(&self) -> Result<Vec<String>, String> {
-		if self.all_day {
-			self.rule.all_day_lines_at(self.start.date_naive())
-		} else {
-			self.rule
-				.lines_at(self.start.date_naive(), self.start.time())
-		}
-	}
-
-	/// Replaces the repeat controls, so the habits editor can take them over
-	/// unchanged when the new-event dialog switches to a habit.
-	pub fn rule(&self) -> &crate::recurrence::Rule {
-		&self.rule
-	}
-
-	/// Applies the start field's text. A value that does not parse as a clock
-	/// time is kept as text but leaves the real start alone.
-	pub fn set_start_text(&mut self, text: String) {
-		if let Some((hour, minute)) = parse_clock(&text) {
-			self.start = at_clock(self.start.date_naive(), hour, minute);
-		}
-		self.start_text = text;
-	}
-
-	/// Applies the end field's text, with the same forgiving parse as the start.
-	pub fn set_end_text(&mut self, text: String) {
-		if let Some((hour, minute)) = parse_clock(&text) {
-			self.end = at_clock(self.end.date_naive(), hour, minute);
-		}
-		self.end_text = text;
 	}
 }
 
@@ -635,6 +520,19 @@ pub struct EditDraft {
 }
 
 impl EditDraft {
+	/// Why this draft cannot be written yet, if there is a reason.
+	pub fn validate(&self) -> Result<(), String> {
+		if self.title.trim().is_empty() {
+			return Err("Enter a title".into());
+		}
+		if self.end <= self.start {
+			return Err("The end time has to be after the start".into());
+		}
+		self.recurrence_lines()?;
+		colors::selection(&self.color_input)?;
+		Ok(())
+	}
+
 	pub fn deadline(&self) -> Result<Option<deadline::Deadline>, String> {
 		if self.deadline_text.trim().is_empty() {
 			Ok(None)
@@ -753,10 +651,12 @@ impl EditDraft {
 		draft
 	}
 
-	/// Applies the date field's text, keeping the clock times.
+	/// Applies the date field's text, keeping the clock times. See
+	/// [`start_on_day`] for what happens to the end.
 	pub fn set_date_text(&mut self, text: String) {
 		if let Ok(day) = crate::calendar::deadline::parse_date(text.trim()) {
-			self.start = at_clock(day, self.start.hour(), self.start.minute());
+			(self.start, self.end) = start_on_day(self.start, self.end, day, self.all_day);
+			self.end_date_text = last_day(self.start, self.end, self.all_day).to_string();
 		}
 		self.date_text = text;
 	}
@@ -854,6 +754,18 @@ pub fn last_day(start: DateTime<Local>, end: DateTime<Local>, all_day: bool) -> 
 
 /// Moves a span to start on `day`, keeping its clock times and its length in
 /// days.
+/// Moves an event's start to `day`. The end stays where it is, unless the start
+/// has gone past it: then the end follows, so the event keeps its length.
+pub fn start_on_day(
+	start: DateTime<Local>,
+	end: DateTime<Local>,
+	day: NaiveDate,
+	all_day: bool,
+) -> (DateTime<Local>, DateTime<Local>) {
+	let (moved, followed) = move_start_day(start, end, day, all_day);
+	(moved, if moved < end { end } else { followed })
+}
+
 pub fn move_start_day(
 	start: DateTime<Local>,
 	end: DateTime<Local>,
@@ -2763,6 +2675,37 @@ pub fn create_event(
 	options: Option<&event_options::EventOptions>,
 	meeting: Option<&meeting::Form>,
 ) -> Result<api::Inserted, String> {
+	submit_new_event(
+		calendar_id,
+		title,
+		description,
+		color_id,
+		start,
+		end,
+		recurrence,
+		projects,
+		&[],
+		all_day,
+		options,
+		meeting,
+	)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn submit_new_event(
+	calendar_id: &str,
+	title: &str,
+	description: &str,
+	color_id: Option<&str>,
+	start: DateTime<Local>,
+	end: DateTime<Local>,
+	recurrence: &[String],
+	projects: &[u64],
+	labels: &[String],
+	all_day: bool,
+	options: Option<&event_options::EventOptions>,
+	meeting: Option<&meeting::Form>,
+) -> Result<api::Inserted, String> {
 	let id = operations::new_id()?;
 	let event = Event {
 		id: id.clone(),
@@ -2778,6 +2721,7 @@ pub fn create_event(
 			color_id: color_id.map(str::to_owned),
 			recurrence: recurrence.to_vec(),
 			projects: projects.to_vec(),
+			labels: labels.to_vec(),
 			options: options.cloned().unwrap_or_default(),
 			..Default::default()
 		},
@@ -2793,6 +2737,7 @@ pub fn create_event(
 			end,
 			recurrence: recurrence.to_vec(),
 			projects: projects.to_vec(),
+			labels: labels.to_vec(),
 			all_day,
 			options: options.cloned(),
 			meeting: meeting.cloned(),
@@ -2832,6 +2777,47 @@ pub fn create_time_block(
 		projects,
 		false,
 		None,
+		None,
+	)?;
+	Ok((inserted.id, calendar.into()))
+}
+
+/// Creates an event on `calendar_id` from the draft its form filled in, the same
+/// draft that edits it once it exists.
+pub fn create_event_from(
+	calendar_id: &str,
+	draft: &EditDraft,
+	description: &str,
+	meeting: Option<&meeting::Form>,
+) -> Result<api::Inserted, String> {
+	let color = colors::selection(&draft.color_input)?;
+	submit_new_event(
+		calendar_id,
+		&draft.title,
+		description,
+		color.as_deref(),
+		draft.start,
+		draft.end,
+		&draft.recurrence_lines()?,
+		&draft.projects.ids,
+		&draft.labels,
+		draft.all_day,
+		Some(&draft.options),
+		meeting,
+	)
+}
+
+/// Creates a time block from the draft its form filled in. Returns its id and
+/// the calendar it landed on.
+pub fn create_time_block_from(
+	known_calendar: Option<&str>,
+	draft: &EditDraft,
+) -> Result<(String, String), String> {
+	let calendar = known_calendar.ok_or("Sync Google once to discover the TimeParagon calendar")?;
+	let inserted = create_event_from(
+		calendar,
+		draft,
+		&event_description(&draft.description),
 		None,
 	)?;
 	Ok((inserted.id, calendar.into()))
@@ -3226,6 +3212,7 @@ pub(crate) mod send {
 		end: DateTime<Local>,
 		recurrence: &[String],
 		projects: &[u64],
+		labels: &[String],
 		all_day: bool,
 		options: Option<&event_options::EventOptions>,
 		meeting: Option<&meeting::Form>,
@@ -3241,6 +3228,7 @@ pub(crate) mod send {
 			end,
 			recurrence,
 			projects,
+			labels,
 			all_day,
 			options,
 			meeting,
@@ -3584,14 +3572,18 @@ mod tests {
 
 	use super::*;
 
+	/// The form's draft of a timed event spanning `start` to `end`.
+	fn timed_draft(start: DateTime<Local>, end: DateTime<Local>) -> EditDraft {
+		let mut event = sample_snapshot().events.remove(1);
+		(event.start, event.end, event.all_day) = (start, end, false);
+		event.details.recurrence.clear();
+		EditDraft::from_event(&event)
+	}
+
 	#[test]
 	fn a_new_draft_can_cover_several_whole_days_and_go_back_to_its_times() {
 		let day = |d: u32| NaiveDate::from_ymd_opt(2026, 11, d).unwrap();
-		let mut draft = Draft::new(
-			"cal".into(),
-			at_clock(day(6), 9, 30),
-			at_clock(day(6), 11, 0),
-		);
+		let mut draft = timed_draft(at_clock(day(6), 9, 30), at_clock(day(6), 11, 0));
 		assert_eq!(draft.end_date_text, "2026-11-06");
 
 		draft.set_all_day(true);
@@ -3625,11 +3617,7 @@ mod tests {
 	#[test]
 	fn a_timed_draft_ending_at_midnight_becomes_one_whole_day() {
 		let day = |d: u32| NaiveDate::from_ymd_opt(2026, 11, d).unwrap();
-		let mut draft = Draft::new(
-			"cal".into(),
-			at_clock(day(6), 22, 0),
-			at_clock(day(7), 0, 0),
-		);
+		let mut draft = timed_draft(at_clock(day(6), 22, 0), at_clock(day(7), 0, 0));
 		draft.set_all_day(true);
 		assert_eq!(
 			(draft.start, draft.end),
@@ -3640,7 +3628,7 @@ mod tests {
 	#[test]
 	fn all_day_drafts_repeat_with_dates_rather_than_instants() {
 		let day = NaiveDate::from_ymd_opt(2026, 11, 6).unwrap();
-		let mut draft = Draft::new("cal".into(), at_clock(day, 9, 0), at_clock(day, 10, 0));
+		let mut draft = timed_draft(at_clock(day, 9, 0), at_clock(day, 10, 0));
 		draft.set_all_day(true);
 		draft.rule.repeat = crate::recurrence::RepeatMode::Daily;
 		draft.rule.ends = crate::recurrence::EndKind::OnDate;
@@ -4779,6 +4767,47 @@ mod tests {
 		assert_ne!(store.event("standup").unwrap().start, start);
 	}
 	#[test]
+	fn the_end_only_moves_when_the_start_date_goes_past_it() {
+		let day = |d: u32| NaiveDate::from_ymd_opt(2026, 11, d).unwrap();
+		let (start, end) = (at_clock(day(10), 9, 0), at_clock(day(12), 10, 30));
+		let mut draft = timed_draft(start, end);
+
+		// Earlier, or later but still before the end: the end stays put.
+		for date in ["2026-11-08", "2026-11-12"] {
+			draft.set_date_text(date.into());
+			assert_eq!(draft.end, end, "{date}");
+			assert_eq!(draft.end_date_text, "2026-11-12");
+		}
+
+		// Past the end: the end follows, and the event keeps its length.
+		let mut draft = timed_draft(start, end);
+		draft.set_date_text("2026-11-15".into());
+		assert_eq!(draft.start, at_clock(day(15), 9, 0));
+		assert_eq!(draft.end, at_clock(day(17), 10, 30));
+		assert_eq!(draft.end_date_text, "2026-11-17");
+	}
+
+	#[test]
+	fn a_later_clock_on_the_end_day_counts_as_going_past_the_end() {
+		let day = |d: u32| NaiveDate::from_ymd_opt(2026, 11, d).unwrap();
+		let mut draft = timed_draft(at_clock(day(10), 14, 0), at_clock(day(12), 13, 0));
+		draft.set_date_text("2026-11-12".into());
+		assert_eq!(draft.start, at_clock(day(12), 14, 0));
+		assert_eq!(draft.end, at_clock(day(14), 13, 0));
+	}
+
+	#[test]
+	fn an_all_day_event_may_start_on_its_last_day_without_moving_the_end() {
+		let day = |d: u32| NaiveDate::from_ymd_opt(2026, 11, d).unwrap();
+		let mut draft = timed_draft(at_clock(day(6), 9, 0), at_clock(day(6), 10, 0));
+		draft.set_all_day(true);
+		draft.set_end_date_text("2026-11-08".into());
+		draft.set_date_text("2026-11-08".into());
+		assert_eq!(draft.end, at_clock(day(9), 0, 0));
+		assert_eq!(draft.end_date_text, "2026-11-08");
+	}
+
+	#[test]
 	fn editing_event_dates_keeps_the_other_endpoint_and_clock_times() {
 		let mut event = sample_snapshot().events.remove(1);
 		event.start = at_clock(NaiveDate::from_ymd_opt(2026, 10, 29).unwrap(), 22, 0);
@@ -4813,7 +4842,7 @@ mod tests {
 	#[test]
 	fn a_new_event_defaults_to_not_repeating_and_can_turn_repeating_on() {
 		let start = at_clock(NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(), 9, 0);
-		let mut draft = Draft::new("work".into(), start, start + chrono::Duration::minutes(30));
+		let mut draft = timed_draft(start, start + chrono::Duration::minutes(30));
 		assert!(draft.recurrence_lines().unwrap().is_empty());
 		draft.rule.apply_action(
 			crate::recurrence::Action::Repeat(crate::recurrence::RepeatMode::Daily),

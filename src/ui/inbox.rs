@@ -848,7 +848,10 @@ fn creation_form<'a>(
 			super::timeblocking::fields(state, task, metrics)
 		}
 		(None, calendar::DraftKind::Task) => Space::new().into(),
-		_ => super::calendar::draft_fields(state, metrics),
+		_ => draft.entry.as_ref().map_or_else(
+			|| Space::new().into(),
+			|entry| super::calendar::event_editor(state, entry, metrics),
+		),
 	};
 	// Room on the right keeps the scrollbar off the fields' own controls.
 	form = form.push(
@@ -1545,6 +1548,49 @@ mod tests {
 				editor.find(heading).is_err(),
 				"{label} stays in the sidebar"
 			);
+		}
+	}
+
+	#[test]
+	fn a_new_time_block_has_the_same_fields_as_an_existing_one() {
+		let mut state = sidebar_state();
+		let _ = crate::app::update(
+			&mut state,
+			msg(Action::KindSelected(calendar::DraftKind::TimeBlock)),
+		);
+		let mut ui = simulator_of(&state, Size::new(400.0, 2400.0));
+		for label in [
+			"New time block",
+			"Title",
+			"Scheduling",
+			"Start Time",
+			"End Time",
+			"Repeat",
+			"Notifications",
+			"Information",
+			"Add description",
+			"Organization",
+			"Labels",
+			"Meeting",
+			"Availability",
+			"Add",
+		] {
+			assert!(ui.find(label).is_ok(), "{label}");
+		}
+		// Blocks are always timed, and what needs a saved block waits for one.
+		for label in ["All day", "Location", "Save", "Save current event"] {
+			assert!(ui.find(label).is_err(), "{label}");
+		}
+	}
+
+	#[test]
+	fn a_new_task_has_regular_date_fields_rather_than_scheduling_buttons() {
+		let state = sidebar_state();
+		let mut ui = simulator_of(&state, Size::new(400.0, 2400.0));
+		assert!(ui.find("Due Date").is_ok());
+		assert!(ui.find("Deadline").is_ok());
+		for label in ["Schedule Day", "Schedule Time", "Reset Time"] {
+			assert!(ui.find(label).is_err(), "{label}");
 		}
 	}
 

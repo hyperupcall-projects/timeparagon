@@ -311,12 +311,9 @@ pub(super) fn range_layers<'a>(
 	content: Element<'a, Message>,
 ) -> Element<'a, Message> {
 	let mut layers: Vec<Element<'a, Message>> = vec![content];
-	let draft_open = state.calendar.draft.as_ref().is_some_and(|d| d.editor_open);
-	if state.calendar.open_event.is_some() || draft_open || state.timeblocking.block.is_some() {
-		let details = state.calendar.open_event.is_some() || draft_open;
-		let dismiss = if draft_open {
-			Message::EventDraft(EventDraftMessage::EventDraftCancelled)
-		} else if details {
+	if state.calendar.open_event.is_some() || state.timeblocking.block.is_some() {
+		let details = state.calendar.open_event.is_some();
+		let dismiss = if details {
 			Message::Event(EventMessage::EventClosed)
 		} else {
 			Message::TimeBlocking(crate::timeblocking::Action::Close)
@@ -357,12 +354,7 @@ pub(super) fn range_layers<'a>(
 			.into(),
 		);
 	}
-	let overlay = if state
-		.calendar
-		.draft
-		.as_ref()
-		.is_some_and(|d| !d.editor_open)
-	{
+	let overlay = if state.calendar.draft.is_some() {
 		draft_overlay(state, metrics)
 	} else if state.overview_month_open {
 		month_overlay(state, MonthPicker::Overview, metrics)

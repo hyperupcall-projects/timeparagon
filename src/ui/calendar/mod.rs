@@ -142,12 +142,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 		} else {
 			Space::new().width(0).height(0).into()
 		}
-	} else if state
-		.calendar
-		.draft
-		.as_ref()
-		.is_some_and(|d| !d.editor_open)
-	{
+	} else if state.calendar.draft.is_some() {
 		draft_overlay(state, metrics)
 	} else if state.alarms.editor.is_some() {
 		super::alarms::editor_overlay(state, metrics)

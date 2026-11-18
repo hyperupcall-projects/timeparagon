@@ -499,8 +499,8 @@ pub fn fields<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
 				state,
 				task,
 				column![
-					date_field(state, task, metrics, false),
-					date_field(state, task, metrics, true),
+					due_fields(state, task, metrics),
+					deadline_field(state, task, metrics),
 				]
 				.spacing(12),
 				metrics,
@@ -624,124 +624,88 @@ fn organization_fields<'a>(
 	.into()
 }
 
-/// Due date and deadline share the same layout and optional date picker.
-fn date_field<'a>(
+/// When the task is due, in the same fields an event's times use. Times only
+/// mean something once there is a day to put them on.
+fn due_fields<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Element<'a, Message> {
+	let busy = schedule_busy(state, task);
+	let schedule = &state.timeblocking;
+	let time_format = state.config.appearance.time_format;
+	let size = metrics.label();
+	let dated = !schedule.date.trim().is_empty();
+	let mut body = column![field_label("Due Date", metrics)]
+		.spacing(6)
+		.width(Fill);
+	if dated {
+		let mut all_day = crate::ui::controls::checkbox(task.all_day)
+			.label("All day")
+			.text_size(size);
+		if !busy {
+			let id = task.id.clone();
+			all_day = all_day.on_toggle(move |value| msg(Action::DueAllDay(id.clone(), value)));
+		}
+		body = body.push(all_day);
+	}
+	let id = task.id.clone();
+	body = body.push(super::controls::date(
+		time_format,
+		&schedule.date,
+		true,
+		false,
+		!busy,
+		size,
+		move |value| msg(Action::DueDate(id.clone(), value)),
+	));
+	if dated && !task.all_day {
+		let (start, end) = (task.id.clone(), task.id.clone());
+		body = body
+			.push(field_label("Start Time", metrics))
+			.push(super::controls::time(
+				time_format,
+				&schedule.start_time,
+				!busy,
+				size,
+				move |value| msg(Action::DueStart(start.clone(), value)),
+			))
+			.push(field_label("End Time", metrics))
+			.push(super::controls::time(
+				time_format,
+				&schedule.end_time,
+				!busy,
+				size,
+				move |value| msg(Action::DueEnd(end.clone(), value)),
+			));
+	}
+	body.into()
+}
+
+/// The day a task has to be done by, with an optional time.
+fn deadline_field<'a>(
 	state: &'a State,
 	task: &'a Event,
 	metrics: &Metrics,
-	deadline: bool,
 ) -> Element<'a, Message> {
-	let busy = state.timeblocking.busy.contains_task(&task.id)
-		|| (task.id == crate::inbox::DRAFT_ID
-			&& state.inbox.draft.as_ref().is_some_and(|d| d.saving));
-	let value = if deadline {
-		&state.timeblocking.deadline
-	} else {
-		&state.timeblocking.date
-	};
-	let mut day = crate::ui::controls::action_button(
-		text("Schedule Day")
-			.size(metrics.label())
-			.center()
-			.width(Fill),
-	)
-	.width(Fill);
-	let mut time = crate::ui::controls::action_button(
-		text("Schedule Time")
-			.size(metrics.label())
-			.center()
-			.width(Fill),
-	)
-	.width(Fill);
-	let mut reset = button(
-		text("Reset Time")
-			.size(metrics.label())
-			.center()
-			.width(Fill),
-	)
-	.width(Fill)
-	.style(super::controls::secondary);
-	if !busy {
-		day = day.on_press(msg(if deadline {
-			Action::DeadlineDay(task.id.clone())
-		} else {
-			Action::Reschedule(task.id.clone())
-		}));
-		time = time.on_press(msg(Action::EditScheduleTime(deadline)));
-		reset = reset.on_press(msg(if deadline {
-			Action::DeadlineDay(task.id.clone())
-		} else {
-			Action::Reschedule(task.id.clone())
-		}));
-	}
-	let mut body = column![
-		field_label(if deadline { "Deadline" } else { "Due Date" }, metrics),
+	let id = task.id.clone();
+	column![
+		field_label("Deadline", metrics),
 		super::controls::date(
 			state.config.appearance.time_format,
-			value,
+			&state.timeblocking.deadline,
 			true,
-			false,
-			!busy,
+			true,
+			!schedule_busy(state, task),
 			metrics.label(),
-			move |v| msg(if deadline {
-				Action::Deadline(v)
-			} else {
-				Action::Date(v)
-			})
+			move |value| msg(Action::Deadline(id.clone(), value)),
 		),
-		day,
-		row![time, reset].spacing(8),
 	]
 	.spacing(6)
-	.width(Fill);
-	let editing = if deadline {
-		state.timeblocking.editing_deadline_time
-	} else {
-		state.timeblocking.editing_due_time
-	};
-	if editing {
-		let times: Element<'a, Message> = if deadline {
-			super::controls::time(
-				state.config.appearance.time_format,
-				&state.timeblocking.deadline_time,
-				!busy,
-				metrics.label(),
-				|v| msg(Action::DeadlineTime(v)),
-			)
-		} else {
-			row![
-				container(super::controls::time(
-					state.config.appearance.time_format,
-					&state.timeblocking.start_time,
-					!busy,
-					metrics.label(),
-					|v| msg(Action::StartTime(v))
-				))
-				.width(Fill),
-				container(super::controls::time(
-					state.config.appearance.time_format,
-					&state.timeblocking.end_time,
-					!busy,
-					metrics.label(),
-					|v| msg(Action::EndTime(v))
-				))
-				.width(Fill),
-			]
-			.spacing(6)
-			.into()
-		};
-		let mut save =
-			crate::ui::controls::action_button(text("Save time").size(metrics.label())).width(Fill);
-		if !busy {
-			save = save.on_press(msg(if deadline {
-				Action::DeadlineWithTime(task.id.clone())
-			} else {
-				Action::ScheduleEntered(task.id.clone())
-			}));
-		}
-		body = body.push(times).push(save);
-	}
-	body.into()
+	.width(Fill)
+	.into()
+}
+
+fn schedule_busy(state: &State, task: &Event) -> bool {
+	state.timeblocking.busy.contains_task(&task.id)
+		|| (task.id == crate::inbox::DRAFT_ID
+			&& state.inbox.draft.as_ref().is_some_and(|d| d.saving))
 }
 
 fn field_label<'a>(label: &'a str, metrics: &Metrics) -> Element<'a, Message> {
@@ -2064,6 +2028,7 @@ mod tests {
 				..Default::default()
 			},
 		});
+		state.timeblocking.date = "2026-10-29".into();
 		let reason = "Scheduled by its time block. Change it from the time block.";
 		let size = Size::new(450.0, 1400.0);
 		let metrics = Metrics::of(size);
@@ -2074,7 +2039,7 @@ mod tests {
 			fields(&state, task, &metrics),
 		);
 		assert!(ui.find(reason).is_err());
-		let _ = ui.click("Schedule Day").unwrap();
+		let _ = ui.click("Oct 29, 2026").unwrap();
 		assert!(ui.into_messages().next().is_some());
 
 		let task = state.calendar.event_mut("task:deep").unwrap();
@@ -2087,7 +2052,7 @@ mod tests {
 		);
 		assert!(ui.find(reason).is_ok());
 		assert!(ui.find("Repeat from this day").is_err());
-		let _ = ui.click("Schedule Day");
+		let _ = ui.click("Oct 29, 2026");
 		assert!(
 			ui.into_messages()
 				.all(|message| matches!(message, Message::Ignored))
@@ -2301,8 +2266,7 @@ mod tests {
 		);
 	}
 
-	#[test]
-	fn both_date_sections_offer_clear_and_matching_scheduling_actions() {
+	fn dated_task_state() -> State {
 		let mut state = State::blank();
 		state.calendar = crate::calendar::Store::with_snapshot(crate::calendar::sample_snapshot());
 		let task = state.calendar.event_mut("deep").unwrap();
@@ -2310,38 +2274,77 @@ mod tests {
 		task.calendar_id = "tasks:list".into();
 		state.timeblocking.date = "2026-10-29".into();
 		state.timeblocking.deadline = "2026-10-30".into();
+		state.timeblocking.start_time = "09:00".into();
+		state.timeblocking.end_time = "09:30".into();
+		state
+	}
+
+	#[test]
+	fn a_task_is_scheduled_with_regular_date_and_time_fields() {
+		let mut state = dated_task_state();
+		state.calendar.event_mut("task:deep").unwrap().all_day = false;
 		let metrics = Metrics::of(Size::new(450.0, 900.0));
-		for deadline in [false, true] {
-			let task = state.calendar.event("task:deep").unwrap();
+		let task = state.calendar.event("task:deep").unwrap();
+		let mut ui = iced_test::Simulator::with_size(
+			iced_test::core::Settings::default(),
+			Size::new(450.0, 900.0),
+			due_fields(&state, task, &metrics),
+		);
+		for label in ["Due Date", "All day", "Start Time", "End Time"] {
+			assert!(ui.find(label).is_ok(), "{label}");
+		}
+		for gone in ["Schedule Day", "Schedule Time", "Reset Time", "Save time"] {
+			assert!(ui.find(gone).is_err(), "{gone}");
+		}
+		ui.click("All day").unwrap();
+		assert!(ui.into_messages().any(|m| matches!(
+			m,
+			Message::TimeBlocking(Action::DueAllDay(id, true)) if id == "task:deep"
+		)));
+
+		// A task for the whole day has no clock times to set.
+		state.calendar.event_mut("task:deep").unwrap().all_day = true;
+		let task = state.calendar.event("task:deep").unwrap();
+		let mut ui = iced_test::Simulator::with_size(
+			iced_test::core::Settings::default(),
+			Size::new(450.0, 900.0),
+			due_fields(&state, task, &metrics),
+		);
+		assert!(ui.find("Start Time").is_err());
+		drop(ui);
+
+		// Nor does one without a day.
+		state.timeblocking.date.clear();
+		let task = state.calendar.event("task:deep").unwrap();
+		let mut ui = iced_test::Simulator::with_size(
+			iced_test::core::Settings::default(),
+			Size::new(450.0, 900.0),
+			due_fields(&state, task, &metrics),
+		);
+		assert!(ui.find("All day").is_err());
+		assert!(ui.find("Choose date").is_ok());
+	}
+
+	#[test]
+	fn both_date_fields_can_be_cleared_and_only_the_deadline_picks_a_time() {
+		let state = dated_task_state();
+		let metrics = Metrics::of(Size::new(450.0, 900.0));
+		let task = state.calendar.event("task:deep").unwrap();
+		for (field, day, with_time) in [
+			(due_fields(&state, task, &metrics), "Oct 29, 2026", false),
+			(deadline_field(&state, task, &metrics), "Oct 30, 2026", true),
+		] {
 			let mut ui = iced_test::Simulator::with_size(
 				iced_test::core::Settings::default(),
 				Size::new(450.0, 900.0),
-				date_field(&state, task, &metrics, deadline),
+				field,
 			);
-			assert!(
-				ui.find(if deadline { "Deadline" } else { "Due Date" })
-					.is_ok()
-			);
-			assert!(ui.find("Schedule Day").is_ok());
-			assert!(ui.find("Reset Time").is_ok());
-			ui.click("Schedule Time").unwrap();
-			assert!(ui.into_messages().any(
-				|m| matches!(m, Message::TimeBlocking(Action::EditScheduleTime(value)) if value == deadline)
-			));
-			let mut ui = iced_test::Simulator::with_size(
-				iced_test::core::Settings::default(),
-				Size::new(450.0, 900.0),
-				date_field(&state, task, &metrics, deadline),
-			);
-			ui.click(if deadline {
-				"Oct 30, 2026"
-			} else {
-				"Oct 29, 2026"
-			})
-			.unwrap();
-			assert!(ui.into_messages().any(
-				|m| matches!(m, Message::Picker(super::super::controls::Action::Open(p)) if p.optional)
-			));
+			ui.click(day).unwrap();
+			assert!(ui.into_messages().any(|m| matches!(
+				m,
+				Message::Picker(super::super::controls::Action::Open(p))
+					if p.optional && p.with_time == with_time
+			)));
 		}
 	}
 

@@ -1834,6 +1834,7 @@ pub fn insert_event(
 	end: DateTime<Local>,
 	recurrence: &[String],
 	projects: &[u64],
+	labels: &[String],
 	all_day: bool,
 	options: Option<&super::event_options::EventOptions>,
 	meeting: Option<&super::meeting::Form>,
@@ -1849,6 +1850,11 @@ pub fn insert_event(
 	}
 	body["description"] = serde_json::Value::String(description.to_owned());
 	super::projects::write(&mut body, projects)?;
+	if !labels.is_empty() {
+		body["extendedProperties"]["private"]["ttLabels"] = serde_json::to_string(labels)
+			.map_err(|error| format!("Could not save the labels: {error}"))?
+			.into();
+	}
 	// Display defaults belong to TimeParagon. Omitting colorId also preserves
 	// any explicit Google color when editing an existing event.
 	colors::write(&mut body, color_id);
@@ -3400,6 +3406,7 @@ mod tests {
 				start,
 				start + chrono::Duration::hours(1),
 				recurrence,
+				&[],
 				&[],
 				false,
 				None,

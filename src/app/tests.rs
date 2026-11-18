@@ -65,18 +65,82 @@ fn choosing_an_event_opens_the_creation_pane_without_saving() {
 			calendar::DraftKind::Event,
 		)),
 	);
-	let draft = state.calendar.draft.as_ref().unwrap();
-	assert!(draft.editor_open);
+	// The chooser hands over to the form that edits events.
+	assert!(state.calendar.draft.is_none());
 	assert!(state.details_pane_open);
+	assert_eq!(
+		state.calendar.open_event.as_deref(),
+		Some(crate::inbox::NEW_EVENT_ID)
+	);
+	let draft = state.calendar.edit_draft.as_ref().unwrap();
 	assert_eq!(draft.title, "Planning");
 	assert_eq!((draft.start, draft.end), (start, end));
-	assert_eq!(draft.kind, calendar::DraftKind::Event);
+	assert_eq!(draft.calendar_id, "primary");
+	assert!(draft.editing_title && draft.meeting.can_manage);
+	let _ = update(&mut state, Message::Event(EventMessage::EventClosed));
+	assert!(state.calendar.edit_draft.is_none());
+	assert!(state.calendar.detail_event.is_none());
+	assert!(!state.details_pane_open);
+}
+
+#[test]
+fn a_new_event_from_the_calendar_saves_through_the_edit_form() {
+	let mut state = State::blank();
+	let start = calendar::at_clock(chrono::NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(), 9, 0);
+	let end = start + chrono::Duration::minutes(45);
+	state.calendar.begin_draft("primary".into(), start, end);
 	let _ = update(
 		&mut state,
-		Message::EventDraft(EventDraftMessage::EventDraftCancelled),
+		Message::EventDraft(EventDraftMessage::EventDraftKindSelected(
+			calendar::DraftKind::Event,
+		)),
 	);
-	assert!(state.calendar.draft.is_none());
-	assert!(!state.details_pane_open);
+
+	// Checked the same way as an event that already exists.
+	let _ = update(
+		&mut state,
+		Message::EventEdit(EventEditMessage::EventEditSaveRequested),
+	);
+	assert_eq!(state.calendar.error.as_deref(), Some("Enter a title"));
+	assert!(!state.calendar.edit_draft.as_ref().unwrap().saving);
+
+	let _ = update(
+		&mut state,
+		Message::EventEdit(EventEditMessage::EventEditTitleChanged("Planning".into())),
+	);
+	let _ = update(
+		&mut state,
+		Message::EventEdit(EventEditMessage::EventEditSaveRequested),
+	);
+	assert!(state.calendar.edit_draft.as_ref().unwrap().saving);
+
+	// A refusal leaves the half-filled event open.
+	let _ = update(
+		&mut state,
+		Message::EventEdit(EventEditMessage::EventEditCreated(Err("Offline".into()))),
+	);
+	assert_eq!(state.calendar.error.as_deref(), Some("Offline"));
+	assert!(!state.calendar.edit_draft.as_ref().unwrap().saving);
+
+	let event = calendar::Event {
+		id: "created".into(),
+		calendar_id: "primary".into(),
+		title: "Planning".into(),
+		start,
+		end,
+		all_day: false,
+		color: calendar::colors::DEFAULT_EVENT,
+		completed: false,
+		details: calendar::Details::default(),
+	};
+	let _ = update(
+		&mut state,
+		Message::EventEdit(EventEditMessage::EventEditCreated(Ok(event))),
+	);
+	assert!(state.calendar.open_event.is_none());
+	assert!(state.calendar.edit_draft.is_none());
+	assert!(state.calendar.detail_event.is_none());
+	assert!(state.calendar.event("created").is_some());
 }
 
 #[test]
@@ -103,7 +167,7 @@ fn choosing_a_time_block_starts_the_block_write_instead_of_the_event_form() {
 	assert_eq!(draft.calendar_id, "timeparagon");
 	assert!(draft.saving, "the block write is already in flight");
 	assert!(
-		!draft.editor_open,
+		state.calendar.open_event.is_none(),
 		"a time block is planned in the panel, not the event form"
 	);
 }
@@ -1031,22 +1095,6 @@ fn event_project_changes_are_staged_and_cancelled_without_changing_the_event() {
 			.projects
 			.is_empty()
 	);
-
-	let event = state.calendar.event("standup").unwrap();
-	state.calendar.draft = Some(calendar::Draft::new(
-		"primary".into(),
-		event.start,
-		event.end,
-	));
-	let _ = update(
-		&mut state,
-		Message::EventDraft(EventDraftMessage::EventDraftProjects(Action::Add(ids[0]))),
-	);
-	let _ = update(
-		&mut state,
-		Message::EventDraft(EventDraftMessage::EventDraftProjects(Action::Add(ids[1]))),
-	);
-	assert_eq!(state.calendar.draft.as_ref().unwrap().projects.ids.len(), 2);
 }
 
 #[test]
@@ -2150,7 +2198,6 @@ fn choosing_habit_opens_the_shared_details_editor() {
 		start + chrono::Duration::minutes(45),
 	);
 	draft.title = "Stretch".into();
-	draft.description = "Slow and steady".into();
 	state.calendar.draft = Some(draft);
 
 	let _ = update(
@@ -2168,7 +2215,6 @@ fn choosing_habit_opens_the_shared_details_editor() {
 		.as_ref()
 		.expect("the shared editor opens");
 	assert_eq!(habit.title, "Stretch");
-	assert_eq!(habit.description, "Slow and steady");
 	assert_eq!(habit.date_text, "2026-10-28");
 	assert_eq!(habit.start_text, "09:00");
 	assert_eq!(habit.end_text, "09:45");
@@ -2567,7 +2613,7 @@ fn quick_create_cycles_types_without_committing_and_escape_dismisses() {
 		);
 		assert_eq!(state.draft_kind_focus, Some(expected));
 		let draft = state.calendar.draft.as_ref().unwrap();
-		assert!(!draft.editor_open && !draft.saving);
+		assert!(!draft.saving);
 	}
 	let _ = update(
 		&mut state,

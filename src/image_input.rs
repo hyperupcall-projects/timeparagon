@@ -14,7 +14,7 @@ pub struct Session {
 	pub menu: bool,
 	pub busy: bool,
 	pub error: Option<String>,
-	pub events: Vec<calendar::Draft>,
+	pub events: Vec<calendar::EditDraft>,
 	pub selected: Option<usize>,
 	generation: u64,
 }
@@ -52,10 +52,10 @@ pub(crate) fn stash(state: &mut State) {
 			.draft
 			.as_ref()
 			.is_some_and(|d| d.kind == Some(calendar::DraftKind::Event))
-		&& let Some(draft) = state.calendar.draft.as_ref()
+		&& let Some(draft) = inbox::creation::entry(state).cloned()
 		&& let Some(slot) = state.inbox.image.events.get_mut(i)
 	{
-		*slot = draft.clone();
+		*slot = draft;
 	}
 }
 fn select(state: &mut State, i: usize) {
@@ -64,9 +64,12 @@ fn select(state: &mut State, i: usize) {
 		return;
 	}
 	let _ = inbox::creation::select(state, calendar::DraftKind::Event);
+	// The form may not have been able to take the event on just yet.
+	if state.inbox.draft.as_ref().and_then(|d| d.kind) != Some(calendar::DraftKind::Event) {
+		return;
+	}
 	if let Some(draft) = state.inbox.image.events.get(i).cloned() {
-		state.calendar.draft = Some(draft);
-		state.inbox.draft.as_mut().unwrap().kind = Some(calendar::DraftKind::Event);
+		state.calendar.edit_draft = Some(draft);
 		state.inbox.image.selected = Some(i);
 		state.calendar.error = None;
 	}
@@ -151,14 +154,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			state.inbox.image.events.remove(i);
 			state.inbox.image.selected = None;
 			if state.inbox.image.events.is_empty() {
-				state.calendar.draft = Some(calendar::Draft::new(
-					state
-						.calendar
-						.default_calendar_id(&state.config.calendar)
-						.unwrap_or_default(),
-					crate::clock::now(),
-					crate::clock::now() + chrono::Duration::hours(1),
-				));
+				inbox::creation::reset_event_entry(state);
 			} else {
 				let next = selected
 					.map(|s| if s > i { s - 1 } else { s })
@@ -217,7 +213,9 @@ pub fn review(state: &State) -> Element<'_, Message> {
 	.spacing(4);
 	for (i, cached) in state.inbox.image.events.iter().enumerate() {
 		let d = if state.inbox.image.selected == Some(i) {
-			state.calendar.draft.as_ref().unwrap_or(cached)
+			inbox::creation::entry(state)
+				.filter(|entry| entry.id == inbox::ENTRY_EVENT_ID)
+				.unwrap_or(cached)
 		} else {
 			cached
 		};
@@ -353,7 +351,7 @@ fn import(source: Source, settings: &crate::voice::Settings) -> anyhow::Result<O
 	timeparagon_core::ai_input::image::extract(&bytes, settings).map(Some)
 }
 
-fn draft(f: Found, calendar_id: String) -> Result<calendar::Draft, String> {
+fn draft(f: Found, calendar_id: String) -> Result<calendar::EditDraft, String> {
 	use chrono::{NaiveDate, NaiveTime, TimeZone};
 	let parse_date = |s: &str| {
 		NaiveDate::parse_from_str(s, "%Y-%m-%d")
@@ -392,16 +390,11 @@ fn draft(f: Found, calendar_id: String) -> Result<calendar::Draft, String> {
 	if end <= start {
 		return Err("Image model returned an event ending before it starts".into());
 	}
-	let mut d = calendar::Draft::new(calendar_id, start, end);
+	let mut d = inbox::creation::picture_draft(calendar_id, start, end, all_day);
 	d.title = f.title;
 	d.description = f.description.unwrap_or_default();
 	if let Some(location) = f.location.filter(|s| !s.is_empty()) {
 		d.description.push_str(&format!("\nLocation: {location}"));
-	}
-	d.editor_open = true;
-	d.all_day = all_day;
-	if all_day {
-		d.end_date_text = end_day.to_string();
 	}
 	if f.date.is_none() {
 		d.date_text.clear();
@@ -463,23 +456,23 @@ mod tests {
 	#[test]
 	fn edits_survive_selection_and_removal() {
 		let mut s = state();
-		s.calendar.draft.as_mut().unwrap().title = "Edited".into();
+		s.calendar.edit_draft.as_mut().unwrap().title = "Edited".into();
 		let _ = update(&mut s, Action::Select(1));
 		let _ = update(&mut s, Action::Select(0));
-		assert_eq!(s.calendar.draft.as_ref().unwrap().title, "Edited");
+		assert_eq!(s.calendar.edit_draft.as_ref().unwrap().title, "Edited");
 		let _ = update(&mut s, Action::Remove(0));
 		assert_eq!(s.inbox.image.events.len(), 1);
-		assert_eq!(s.calendar.draft.as_ref().unwrap().title, "Two");
+		assert_eq!(s.calendar.edit_draft.as_ref().unwrap().title, "Two");
 		let _ = update(&mut s, Action::Remove(0));
 		assert!(s.inbox.image.events.is_empty());
-		assert!(s.calendar.draft.as_ref().unwrap().title.is_empty());
+		assert!(s.calendar.edit_draft.as_ref().unwrap().title.is_empty());
 	}
 	#[test]
 	fn saving_one_keeps_other_proposals() {
 		let mut s = state();
 		s.inbox.draft.as_mut().unwrap().saving = true;
 		assert!(saved(&mut s));
-		assert_eq!(s.calendar.draft.as_ref().unwrap().title, "Two");
+		assert_eq!(s.calendar.edit_draft.as_ref().unwrap().title, "Two");
 		assert!(!s.inbox.draft.as_ref().unwrap().saving);
 		assert!(!saved(&mut s));
 	}

@@ -9,9 +9,6 @@ use iced::widget::column;
 /// column of its own rather than over the calendar, so the day grid and the
 /// backlog both keep their full width.
 pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-	if state.inbox.draft.is_none() && state.calendar.draft.as_ref().is_some_and(|d| d.editor_open) {
-		return draft_editor(state, metrics);
-	}
 	let Some(event) = state
 		.calendar
 		.open_event
@@ -34,7 +31,7 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
 	}
 
 	let details = &event.details;
-	let new_habit = event.id == crate::habits::NEW_HABIT_ID;
+	let unsaved = event.id == crate::habits::NEW_HABIT_ID || event.id == crate::inbox::NEW_EVENT_ID;
 
 	// The action buttons sit outside the scrollable, so they stay reachable
 	// however long the description above them runs.
@@ -68,7 +65,7 @@ pub fn details_pane<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
 	}
 	if event.task_ref().is_none() {
 		buttons.push(event_save_control(state, event, metrics));
-		if !new_habit {
+		if !unsaved {
 			buttons.push(event_scope_control(state, event, metrics, true));
 		}
 	}

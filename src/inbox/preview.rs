@@ -195,12 +195,9 @@ pub fn from_form(state: &State) -> Vec<Proposal> {
 	let Some(draft) = &state.inbox.draft else {
 		return Vec::new();
 	};
-	if draft.kind.is_some_and(|kind| kind != DraftKind::Task) {
-		return state
-			.calendar
-			.draft
-			.as_ref()
-			.map(|entry| vec![from_calendar_draft(state, entry)])
+	if let Some(kind) = draft.kind.filter(|kind| *kind != DraftKind::Task) {
+		return creation::entry(state)
+			.map(|entry| vec![from_entry(state, kind, entry)])
 			.unwrap_or_default();
 	}
 	let tokens = draft.quick_tokens(&state.config.projects);
@@ -223,10 +220,10 @@ pub fn from_form(state: &State) -> Vec<Proposal> {
 	}]
 }
 
-/// A proposal for an event, time block, habit or sleep being filled in.
-pub fn from_calendar_draft(state: &State, draft: &calendar::Draft) -> Proposal {
+/// A proposal for the event, time block or habit being filled in.
+fn from_entry(state: &State, kind: DraftKind, draft: &calendar::EditDraft) -> Proposal {
 	let settings = &state.config.calendar;
-	let color = match draft.kind {
+	let color = match kind {
 		DraftKind::Event => settings
 			.calendar_colors
 			.get(&draft.calendar_id)
@@ -239,13 +236,9 @@ pub fn from_calendar_draft(state: &State, draft: &calendar::Draft) -> Proposal {
 		DraftKind::Sleep => settings.sleep_color(),
 		DraftKind::Task => settings.task_event_color(),
 	};
-	let title = match draft.kind {
-		DraftKind::Sleep => "Sleep".to_owned(),
-		_ => draft.title.trim().to_owned(),
-	};
 	Proposal {
-		kind: draft.kind,
-		title,
+		kind,
+		title: draft.title.trim().to_owned(),
 		when: Some(When {
 			start: draft.start,
 			end: draft.end.max(draft.start + Duration::minutes(15)),

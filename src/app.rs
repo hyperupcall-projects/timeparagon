@@ -25,6 +25,7 @@ mod on_calendar;
 mod on_event;
 mod on_event_draft;
 mod on_event_edit;
+pub(crate) use on_event_edit::open_zoom_setup;
 mod on_navigation;
 mod on_notepad;
 mod on_settings;
@@ -94,7 +95,6 @@ pub enum BorderLayer {
 /// The multi-line text fields of the event and habit forms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FormField {
-	EventDraft,
 	EventEdit,
 	HabitNotes,
 }
@@ -102,7 +102,6 @@ pub enum FormField {
 /// One editor per [`FormField`]. Each keeps its cursor and selection between
 /// redraws, while the form's draft holds the saved copy of the text.
 pub struct FormEditors {
-	pub event_draft: text_editor::Content,
 	pub event_edit: text_editor::Content,
 	pub habit_notes: text_editor::Content,
 }
@@ -110,7 +109,6 @@ pub struct FormEditors {
 impl FormEditors {
 	fn new() -> Self {
 		Self {
-			event_draft: text_editor::Content::new(),
 			event_edit: text_editor::Content::new(),
 			habit_notes: text_editor::Content::new(),
 		}
@@ -118,7 +116,6 @@ impl FormEditors {
 
 	fn get_mut(&mut self, field: FormField) -> &mut text_editor::Content {
 		match field {
-			FormField::EventDraft => &mut self.event_draft,
 			FormField::EventEdit => &mut self.event_edit,
 			FormField::HabitNotes => &mut self.habit_notes,
 		}
@@ -825,49 +822,26 @@ pub enum EventMessage {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum EventDraftMessage {
-	ColorChanged(String),
-	/// A click or drag on empty grid space asked for a new event. The popup
+	/// A click or drag on empty grid space asked for a new event. The chooser
 	/// opens on the default calendar, spanning these times.
 	EventDraftStarted {
 		start: DateTime<Local>,
 		end: DateTime<Local>,
 	},
-	/// The new event's title was edited.
+	/// The title typed into the chooser changed.
 	EventDraftTitleChanged(String),
 	EventDraftCycleKind {
 		reverse: bool,
 		title_focused: bool,
 	},
-	EventDraftOptions(calendar::event_options::Action),
-	EventDraftProjects(calendar::projects::Action),
-	/// The new event's description was edited.
-	EventDraftDescriptionChanged(String),
-	/// The new event's date was edited, as `YYYY-MM-DD`.
-	EventDraftDateChanged(String),
-	/// The start field was edited, as `HH:MM`.
-	EventDraftStartChanged(String),
-	/// The end field was edited, as `HH:MM`.
-	EventDraftEndChanged(String),
-	/// The end date field was edited, as `YYYY-MM-DD`: the last day an
-	/// all-day event covers, or the day a timed one ends.
-	EventDraftEndDateChanged(String),
-	/// The new event was switched between all-day and timed.
-	EventDraftAllDayToggled(bool),
-	/// The new entry's kind was switched between an event and a time block.
+	/// What the chosen range becomes was picked.
 	EventDraftKindSelected(calendar::DraftKind),
-	/// A change was made in the new event's shared repeat controls.
-	EventDraftRecurrence(crate::recurrence::Action),
-	/// The new event was moved to another calendar.
-	EventDraftCalendarSelected(String),
-	/// The calendar dropdown in the add-event popup was opened or closed.
-	EventDraftCalendarDropdownToggled,
-	/// The add-event popup was dismissed without saving.
+	/// The chooser was dismissed without saving.
 	EventDraftCancelled,
-	/// Write the new event to Google.
+	/// Write the chosen range to Google as a time block.
 	EventDraftSaveRequested,
-	/// Google's answer to creating the event, carrying the chip to draw.
+	/// Google's answer to creating the time block, carrying the chip to draw.
 	EventDraftSaved(Result<calendar::Event, String>),
-	EventDraftMeeting(calendar::meeting::Action),
 }
 
 /// The form for editing an event.
@@ -907,6 +881,8 @@ pub enum EventEditMessage {
 	EventEditSaveScoped(calendar::SaveScope),
 	/// Google's answer to updating the event.
 	EventEditSaved(Result<calendar::api::Saved, String>),
+	/// The answer to creating the event being filled in.
+	EventEditCreated(Result<calendar::Event, String>),
 	EventEditMeeting(calendar::meeting::Action),
 }
 
@@ -1417,13 +1393,8 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 	// before them finishes.
 	let routine = crate::routines::pump(state);
 	crate::routines::sync_editors(state);
-	let draft = state.calendar.draft.as_ref();
 	let edit = state.calendar.edit_draft.as_ref();
 	for (editor, value) in [
-		(
-			&mut state.form_editors.event_draft,
-			draft.map(|d| d.description.as_str()),
-		),
 		(
 			&mut state.form_editors.event_edit,
 			edit.map(|d| d.description.as_str()),
@@ -1497,11 +1468,7 @@ fn reconcile_editor_window(state: &mut State) -> Task<Message> {
 }
 
 fn detail_pane_visible(state: &State) -> bool {
-	(state.calendar.open_event.is_some()
-		|| (state.inbox.draft.is_none()
-			&& state.calendar.draft.as_ref().is_some_and(|d| d.editor_open)))
-		&& shows_details(state.screen)
-		&& !state.range_view_active()
+	state.calendar.open_event.is_some() && shows_details(state.screen) && !state.range_view_active()
 }
 
 fn range_view_transition(
@@ -1673,12 +1640,7 @@ pub fn subscription(state: &State) -> Subscription<Message> {
 		window::close_events().map(|v0| Message::System(SystemMessage::WindowClosed(v0))),
 		window::resize_events()
 			.map(|(id, size)| Message::System(SystemMessage::WindowResized(id, size))),
-		if state
-			.calendar
-			.draft
-			.as_ref()
-			.is_some_and(|draft| !draft.editor_open)
-		{
+		if state.calendar.draft.is_some() {
 			// Text inputs capture Escape when focused. The popup must still close.
 			iced::event::listen_with(|event, status, _| match event {
 				iced::Event::Keyboard(event)
@@ -1882,13 +1844,7 @@ fn on_key(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> Task<M
 			Task::none()
 		};
 	}
-	if state
-		.calendar
-		.draft
-		.as_ref()
-		.is_some_and(|draft| !draft.editor_open)
-		&& key == Key::Named(keyboard::key::Named::Tab)
-	{
+	if state.calendar.draft.is_some() && key == Key::Named(keyboard::key::Named::Tab) {
 		return iced::widget::operation::is_focused("calendar-draft-title").map(
 			move |title_focused| {
 				Message::EventDraft(EventDraftMessage::EventDraftCycleKind {
@@ -1898,11 +1854,7 @@ fn on_key(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> Task<M
 			},
 		);
 	}
-	if state
-		.calendar
-		.draft
-		.as_ref()
-		.is_some_and(|draft| !draft.editor_open)
+	if state.calendar.draft.is_some()
 		&& matches!(
 			key.as_ref(),
 			Key::Named(keyboard::key::Named::Enter) | Key::Named(keyboard::key::Named::Space)
@@ -1976,12 +1928,7 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
 			_ => None,
 		};
 	}
-	if state
-		.calendar
-		.draft
-		.as_ref()
-		.is_some_and(|draft| !draft.editor_open)
-	{
+	if state.calendar.draft.is_some() {
 		return match key.as_ref() {
 			Key::Named(Named::Escape) => {
 				Some(Message::EventDraft(EventDraftMessage::EventDraftCancelled))

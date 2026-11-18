@@ -164,10 +164,7 @@ pub fn editor_window(state: &State) -> Element<'_, Message> {
 			let metrics = Metrics::of(Size::new(width, size.height));
 			panes = panes.push(container(timeblocking::panel(state, &metrics)).width(width));
 		}
-		if state.calendar.open_event.is_some()
-			|| (state.inbox.draft.is_none()
-				&& state.calendar.draft.as_ref().is_some_and(|d| d.editor_open))
-		{
+		if state.calendar.open_event.is_some() {
 			let block = if state.timeblocking.block.is_some() {
 				state.config.views.time_block_width()
 			} else {
@@ -307,6 +304,9 @@ pub fn view(state: &State) -> Element<'_, Message> {
 			let mut layers = vec![inbox::add_something_overlay(state, &metrics)];
 			if state.timeblocking.estimate_task.is_some() {
 				layers.push(timeblocking::estimate_overlay(state, &metrics));
+			}
+			if state.description_popup.is_some() {
+				layers.push(description::overlay(state, &metrics));
 			}
 			if let Some(picker) = &state.picker {
 				layers.push(controls::overlay(

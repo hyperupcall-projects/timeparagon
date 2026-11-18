@@ -166,9 +166,6 @@ pub struct Workspace {
 	/// The name being edited for the open task, before it is saved.
 	pub title: String,
 	pub editing_title: bool,
-	pub editing_due_time: bool,
-	pub editing_deadline_time: bool,
-	pub deadline_time: String,
 	pub title_error: Option<String>,
 	/// The task whose rename is in flight, so a failure stays on the name field.
 	pub renaming: Option<String>,
@@ -279,16 +276,18 @@ pub enum Action {
 	/// Take back the focused block's latest distraction.
 	UndoDistraction,
 	HideOverdue(bool),
-	Deadline(String),
-	StartTime(String),
-	EndTime(String),
-	ScheduleEntered(String),
+	/// This task's due date field changed. Empty clears it.
+	DueDate(String, String),
+	/// This task's "All day" box changed.
+	DueAllDay(String, bool),
+	/// This task's start time field changed.
+	DueStart(String, String),
+	/// This task's end time field changed.
+	DueEnd(String, String),
+	/// This task's deadline field changed. Empty clears it.
+	Deadline(String, String),
 	SaveDeadline(String),
 	EditTitle,
-	EditScheduleTime(bool),
-	DeadlineTime(String),
-	DeadlineDay(String),
-	DeadlineWithTime(String),
 	Schedule(String, DateTime<Local>, DateTime<Local>),
 	DropTime(DateTime<Local>),
 	RefreshBlock(String),
@@ -308,7 +307,6 @@ pub enum Action {
 	EditEstimate(String),
 	CloseEstimate,
 	Estimate(String),
-	Date(String),
 	SaveEstimate(String),
 	/// Give this task an estimate in minutes, without the estimate popup.
 	SetEstimate(String, u32),
@@ -330,7 +328,6 @@ pub enum Action {
 	BacklogQuery(String),
 	/// Restrict the backlog to one task list, or all lists when `None`.
 	BacklogList(Option<String>),
-	Reschedule(String),
 	/// Plan the task for this day, keeping its list.
 	ScheduleDay(String, NaiveDate),
 	Assign(String, String),
@@ -946,27 +943,57 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			state.config.calendar.hide_overdue_tasks = hide;
 			return crate::app::queue_save(state);
 		}
-		Action::StartTime(value) => {
-			state.timeblocking.start_time = value;
-			return Task::none();
-		}
-		Action::EndTime(value) => {
-			state.timeblocking.end_time = value;
-			return Task::none();
-		}
-		Action::ScheduleEntered(id) => {
-			let range = task_edit::schedule_range(
-				&state.timeblocking.date,
-				&state.timeblocking.start_time,
-				&state.timeblocking.end_time,
-			);
-			return match range {
-				Ok((start, end)) => update(state, Action::Schedule(id, start, end)),
-				Err(error) => {
-					state.calendar.error = Some(error);
-					Task::none()
-				}
+		Action::DueDate(id, value) => {
+			if schedule_locked(state, &id) {
+				return Task::none();
+			}
+			state.timeblocking.date = value;
+			let timed = due_is_timed(state, &id);
+			let Some(change) = due_change(state, timed) else {
+				return Task::none();
 			};
+			(id, change)
+		}
+		Action::DueAllDay(id, all_day) => {
+			if schedule_locked(state, &id) {
+				return Task::none();
+			}
+			let schedule = &mut state.timeblocking;
+			if calendar::parse_clock(&schedule.start_time).is_none()
+				|| calendar::parse_clock(&schedule.end_time).is_none()
+			{
+				schedule.start_time = "09:00".into();
+				schedule.end_time = "09:30".into();
+			}
+			let Some(change) = due_change(state, !all_day) else {
+				return Task::none();
+			};
+			(id, change)
+		}
+		Action::DueStart(id, value) => {
+			if schedule_locked(state, &id) {
+				return Task::none();
+			}
+			let schedule = &mut state.timeblocking;
+			if let Some(end) = end_keeping_length(&schedule.start_time, &schedule.end_time, &value)
+			{
+				schedule.end_time = end;
+			}
+			schedule.start_time = value;
+			let Some(change) = due_change(state, true) else {
+				return Task::none();
+			};
+			(id, change)
+		}
+		Action::DueEnd(id, value) => {
+			if schedule_locked(state, &id) {
+				return Task::none();
+			}
+			state.timeblocking.end_time = value;
+			let Some(change) = due_change(state, true) else {
+				return Task::none();
+			};
+			(id, change)
 		}
 		Action::EditTitle => {
 			if state
@@ -982,31 +1009,12 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			state.timeblocking.editing_title = true;
 			return iced::widget::operation::focus(iced::widget::Id::new("task-title"));
 		}
-		Action::EditScheduleTime(deadline) => {
-			if deadline {
-				state.timeblocking.editing_deadline_time =
-					!state.timeblocking.editing_deadline_time;
-			} else {
-				state.timeblocking.editing_due_time = !state.timeblocking.editing_due_time;
+		Action::Deadline(id, value) => {
+			if schedule_locked(state, &id) {
+				return Task::none();
 			}
-			return Task::none();
-		}
-		Action::DeadlineTime(value) => {
-			state.timeblocking.deadline_time = value;
-			return Task::none();
-		}
-		Action::DeadlineDay(id) => {
-			state.timeblocking.deadline.truncate(10);
-			return update(state, Action::SaveDeadline(id));
-		}
-		Action::DeadlineWithTime(id) => {
-			let day = state.timeblocking.deadline.get(..10).unwrap_or("");
-			state.timeblocking.deadline = format!("{day} {}", state.timeblocking.deadline_time);
-			return update(state, Action::SaveDeadline(id));
-		}
-		Action::Deadline(value) => {
 			state.timeblocking.deadline = value;
-			return Task::none();
+			return update(state, Action::SaveDeadline(id));
 		}
 		Action::SaveDeadline(id) => {
 			let input = state.timeblocking.deadline.trim();
@@ -1092,10 +1100,6 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 		}
 		Action::Details(id) => {
 			state.calendar.open_event = Some(id);
-			return Task::none();
-		}
-		Action::Date(value) => {
-			state.timeblocking.date = value;
 			return Task::none();
 		}
 		Action::BacklogQuery(query) => {
@@ -1274,6 +1278,14 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 				.keep_open
 				.take_if(|task| *task == id)
 				.is_some();
+			let showing = keep_open && state.calendar.open_event.as_deref() == Some(id);
+			if showing
+				&& result.is_err()
+				&& let Some(task) = event(state, id).cloned()
+			{
+				// The fields go back to what the task still says.
+				seed_schedule(state, &task);
+			}
 			match result {
 				Ok(event) => {
 					let saved_id = event.id.clone();
@@ -1290,9 +1302,8 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 					if event.is_calendar_task() && state.config.calendar.app_calendar.is_none() {
 						state.config.calendar.app_calendar = Some(event.calendar_id.clone());
 					}
-					if keep_open && state.calendar.open_event.as_deref() == Some(id) {
-						state.timeblocking.editing_due_time = false;
-						state.timeblocking.editing_deadline_time = false;
+					if showing {
+						seed_schedule(state, &event);
 					}
 					let key = task_key(&event);
 					state
@@ -1407,14 +1418,6 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 		}
 		Action::Triage(id) => (id, Change::Triaged),
 		Action::Unassign(id) => (id, Change::Unassign),
-		Action::Reschedule(id) if state.timeblocking.date.is_empty() => (id, Change::ClearSchedule),
-		Action::Reschedule(id) => {
-			let Ok(day) = NaiveDate::parse_from_str(&state.timeblocking.date, "%Y-%m-%d") else {
-				state.calendar.error = Some("Enter a date as YYYY-MM-DD".into());
-				return Task::none();
-			};
-			(id, Change::Day(day))
-		}
 		Action::ScheduleDay(id, day) => (id, Change::Day(day)),
 		Action::Assign(id, block) => {
 			let Some(event) = event(state, &block).filter(|e| is_block(e, &state.config.calendar))
@@ -1754,7 +1757,8 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 				task.start = start;
 				task.end = end;
 				task.all_day = false;
-				state.timeblocking.editing_due_time = false;
+				state.timeblocking.start_time = calendar::clock_label(start);
+				state.timeblocking.end_time = calendar::clock_label(end);
 			}
 			_ => {}
 		}
@@ -1817,6 +1821,79 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 		join_series(changed, &settings, join)
 	})
 	.map(move |result| Message::TimeBlocking(Action::SavedMany(id.clone().into(), result)))
+}
+
+/// Fills the schedule fields from the task they describe.
+pub(crate) fn seed_schedule(state: &mut State, task: &Event) {
+	let schedule = &mut state.timeblocking;
+	schedule.date = if task.start.date_naive() == UNDATED {
+		String::new()
+	} else {
+		task.start.date_naive().to_string()
+	};
+	schedule.deadline = calendar::deadline::input_text(task);
+	schedule.start_time = if task.all_day {
+		"09:00".into()
+	} else {
+		calendar::clock_label(task.start)
+	};
+	schedule.end_time = if task.all_day {
+		"09:30".into()
+	} else {
+		calendar::clock_label(task.end)
+	};
+}
+
+/// Another write holds the queue, so a change to this existing task could not
+/// be sent. Leaving the field alone keeps it saying what the task says.
+fn schedule_locked(state: &State, id: &str) -> bool {
+	id != crate::inbox::DRAFT_ID && !state.timeblocking.busy.is_empty()
+}
+
+fn due_is_timed(state: &State, id: &str) -> bool {
+	let task = if id == crate::inbox::DRAFT_ID {
+		state.inbox.draft.as_ref().and_then(|d| d.event.as_ref())
+	} else {
+		event(state, id)
+	};
+	task.is_some_and(|task| !task.all_day)
+}
+
+/// What the due fields say now, as a change to the task. A problem with them is
+/// reported, and leaves the task as it is.
+fn due_change(state: &mut State, timed: bool) -> Option<Change> {
+	let schedule = &state.timeblocking;
+	let date = schedule.date.trim();
+	let change = if date.is_empty() {
+		Ok(Change::ClearSchedule)
+	} else {
+		match NaiveDate::parse_from_str(date, "%Y-%m-%d") {
+			Err(_) => Err("Enter a date as YYYY-MM-DD".to_owned()),
+			Ok(day) if !timed => Ok(Change::Day(day)),
+			Ok(_) => task_edit::schedule_range(date, &schedule.start_time, &schedule.end_time)
+				.and_then(|(start, end)| {
+					if end > start {
+						Ok(Change::Time(start, end))
+					} else {
+						Err("The task must end after it starts".to_owned())
+					}
+				}),
+		}
+	};
+	change
+		.map_err(|error| state.calendar.error = Some(error))
+		.ok()
+}
+
+/// The end time that keeps a task's length when its start moves to `moved`.
+fn end_keeping_length(start: &str, end: &str, moved: &str) -> Option<String> {
+	const DAY: i64 = 24 * 60;
+	let minutes = |clock: &str| {
+		calendar::parse_clock(clock).map(|(hour, minute)| i64::from(hour) * 60 + i64::from(minute))
+	};
+	let length = (minutes(end)? - minutes(start)?).rem_euclid(DAY);
+	let total = (minutes(moved)? + length).rem_euclid(DAY);
+	Some(format!("{:02}:{:02}", total / 60, total % 60))
 }
 
 /// Timed tasks and calendar events, with locally saved board placement applied.
@@ -2578,25 +2655,66 @@ mod tests {
 	}
 
 	#[test]
-	fn deadline_day_removes_time_and_time_save_requires_a_date() {
+	fn a_changed_deadline_is_saved_and_keeps_the_task_open() {
 		let mut state = estimate_state();
-		state.timeblocking.deadline = "2026-10-29 14:45".into();
-		let _ = update(&mut state, Action::DeadlineDay("task:deep".into()));
-		assert_eq!(state.timeblocking.deadline, "2026-10-29");
+		let _ = update(
+			&mut state,
+			Action::Deadline("task:deep".into(), "2026-10-29 14:45".into()),
+		);
+		assert_eq!(state.timeblocking.deadline, "2026-10-29 14:45");
+		assert!(state.timeblocking.busy.contains_task("task:deep"));
+		assert_eq!(state.timeblocking.keep_open.as_deref(), Some("task:deep"));
+	}
+
+	#[test]
+	fn the_due_fields_save_a_day_or_a_time_as_they_change() {
+		let mut state = estimate_state();
+		let task = state.calendar.event("task:deep").unwrap().clone();
+		seed_schedule(&mut state, &task);
+		let _ = update(
+			&mut state,
+			Action::DueDate("task:deep".into(), "2026-10-29".into()),
+		);
+		assert!(state.calendar.error.is_none());
+		assert!(state.timeblocking.busy.contains_task("task:deep"));
 		assert_eq!(state.timeblocking.keep_open.as_deref(), Some("task:deep"));
 
+		// A second change waits for the first, and does not claim to have happened.
+		let _ = update(
+			&mut state,
+			Action::DueDate("task:deep".into(), "2026-11-01".into()),
+		);
+		assert_eq!(state.timeblocking.date, "2026-10-29");
+
 		let mut state = estimate_state();
-		state.timeblocking.deadline_time = "14:45".into();
-		let _ = update(&mut state, Action::DeadlineWithTime("task:deep".into()));
-		assert!(state.calendar.error.is_some());
-		assert!(state.timeblocking.busy.is_empty());
+		state.timeblocking.date = "2026-10-29".into();
+		state.timeblocking.start_time = String::new();
+		let _ = update(&mut state, Action::DueAllDay("task:deep".into(), false));
+		assert_eq!(state.timeblocking.start_time, "09:00");
+		assert_eq!(state.timeblocking.end_time, "09:30");
+		assert!(state.timeblocking.busy.contains_task("task:deep"));
+	}
+
+	#[test]
+	fn moving_a_due_start_keeps_the_tasks_length() {
+		assert_eq!(
+			end_keeping_length("09:00", "09:45", "14:30").as_deref(),
+			Some("15:15")
+		);
+		assert_eq!(
+			end_keeping_length("09:00", "10:00", "23:30").as_deref(),
+			Some("00:30")
+		);
+		assert_eq!(end_keeping_length("", "10:00", "11:00"), None);
 	}
 
 	#[test]
 	fn clearing_a_due_date_keeps_the_editor_and_the_task_list() {
 		let mut state = estimate_state();
-		state.timeblocking.date.clear();
-		let _ = update(&mut state, Action::Reschedule("task:deep".into()));
+		let _ = update(
+			&mut state,
+			Action::DueDate("task:deep".into(), String::new()),
+		);
 		assert!(state.calendar.error.is_none());
 		assert!(state.timeblocking.busy.contains_task("task:deep"));
 		assert_eq!(state.timeblocking.keep_open.as_deref(), Some("task:deep"));

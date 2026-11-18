@@ -4,27 +4,6 @@ use super::*;
 
 pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Message> {
 	match message {
-		EventDraftMessage::ColorChanged(value) => {
-			if let Some(draft) = &mut state.calendar.draft {
-				if !draft.saving {
-					draft.color_input = value;
-				}
-			}
-			Task::none()
-		}
-		EventDraftMessage::EventDraftMeeting(action) => {
-			let Some(draft) = state.calendar.draft.as_mut().filter(|draft| !draft.saving) else {
-				return Task::none();
-			};
-			let search = match &action {
-				calendar::meeting::Action::Query(query) => Some(query.clone()),
-				_ => None,
-			};
-			draft.meeting.update(action);
-			search.map_or_else(Task::none, |query| {
-				crate::people::search_guests(state, &query)
-			})
-		}
 		EventDraftMessage::EventDraftStarted { start, end } => {
 			// The sidebar owns the active creation draft until Add or Cancel.
 			if state.inbox.draft.is_some() {
@@ -43,33 +22,11 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
 			state.calendar.day = calendar::day_at(start, state.config.calendar.day_start_hour());
 			iced::widget::operation::focus("calendar-draft-title")
 		}
-		EventDraftMessage::EventDraftProjects(action) => {
-			if let calendar::projects::Action::Add(id) = &action
-				&& state.config.projects.get(*id).is_none()
-			{
-				return Task::none();
-			}
-			if let Some(draft) = &mut state.calendar.draft {
-				draft.projects.update(action);
-			}
-			Task::none()
-		}
-		EventDraftMessage::EventDraftOptions(action) => {
-			if let Some(draft) = &mut state.calendar.draft {
-				draft.options.update(action);
-			}
-			Task::none()
-		}
 		EventDraftMessage::EventDraftCycleKind {
 			reverse,
 			title_focused,
 		} => {
-			if !state
-				.calendar
-				.draft
-				.as_ref()
-				.is_some_and(|draft| !draft.editor_open)
-			{
+			if state.calendar.draft.is_none() {
 				return Task::none();
 			}
 			let kinds = [
@@ -98,48 +55,6 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
 			state.draft_kind_focus = None;
 			if let Some(draft) = state.calendar.draft.as_mut() {
 				draft.title = title;
-			}
-			Task::none()
-		}
-		EventDraftMessage::EventDraftDescriptionChanged(description) => {
-			if let Some(draft) = state.calendar.draft.as_mut() {
-				draft.description = description;
-			}
-			Task::none()
-		}
-		EventDraftMessage::EventDraftDateChanged(text) => {
-			if let Some(draft) = state.calendar.draft.as_mut() {
-				draft.set_date_text(text);
-			}
-			Task::none()
-		}
-		EventDraftMessage::EventDraftRecurrence(action) => {
-			if let Some(draft) = state.calendar.draft.as_mut() {
-				draft.rule.apply_action(action, draft.start.date_naive());
-			}
-			Task::none()
-		}
-		EventDraftMessage::EventDraftStartChanged(text) => {
-			if let Some(draft) = state.calendar.draft.as_mut() {
-				draft.set_start_text(text);
-			}
-			Task::none()
-		}
-		EventDraftMessage::EventDraftEndChanged(text) => {
-			if let Some(draft) = state.calendar.draft.as_mut() {
-				draft.set_end_text(text);
-			}
-			Task::none()
-		}
-		EventDraftMessage::EventDraftEndDateChanged(text) => {
-			if let Some(draft) = state.calendar.draft.as_mut() {
-				draft.set_end_date_text(text);
-			}
-			Task::none()
-		}
-		EventDraftMessage::EventDraftAllDayToggled(all_day) => {
-			if let Some(draft) = state.calendar.draft.as_mut().filter(|draft| !draft.saving) {
-				draft.set_all_day(all_day);
 			}
 			Task::none()
 		}
@@ -185,26 +100,16 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
 			let Some(draft) = state.calendar.draft.take() else {
 				return Task::none();
 			};
-			let color_choice = match calendar::colors::selection(&draft.color_input) {
-				Ok(choice) => choice,
-				Err(error) => {
-					state.calendar.error = Some(error);
-					return Task::none();
-				}
-			};
+			let rule = crate::recurrence::Rule::never(draft.start.date_naive());
 			let habit = crate::habits::Draft::for_calendar_with_rule(
 				draft.start,
 				draft.end,
 				draft.title,
-				draft.description,
-				color_choice,
-				draft.rule.clone(),
+				String::new(),
+				None,
+				rule,
 			);
-			let task = crate::habits::open_new(state, habit);
-			if let Some(edit) = &mut state.calendar.edit_draft {
-				edit.options = draft.options;
-			}
-			task
+			crate::habits::open_new(state, habit)
 		}
 		EventDraftMessage::EventDraftKindSelected(calendar::DraftKind::TimeBlock) => {
 			// A time block is planned in the block panel, not filled in as an
@@ -220,137 +125,47 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
 			if let Some(calendar_id) = app_calendar {
 				draft.calendar_id = calendar_id;
 			}
-			draft.calendar_dropdown_open = false;
 			update(state, EventDraftMessage::EventDraftSaveRequested)
 		}
-		EventDraftMessage::EventDraftKindSelected(kind) => {
-			let default_calendar = state.calendar.default_calendar_id(&state.config.calendar);
-			if let Some(draft) = state.calendar.draft.as_mut() {
-				if draft.saving {
-					return Task::none();
-				}
-				draft.kind = kind;
-				draft.editor_open = true;
-				if kind == calendar::DraftKind::Event {
-					draft.calendar_id = default_calendar.clone().unwrap_or_default();
-				}
-				// An ordinary event uses the normal default calendar.
-				if let Some(calendar_id) = match kind {
-					calendar::DraftKind::Event
-					| calendar::DraftKind::Habit
-					| calendar::DraftKind::Task => default_calendar,
-					calendar::DraftKind::Sleep | calendar::DraftKind::TimeBlock => None,
-				} {
-					draft.calendar_id = calendar_id;
-				}
-				draft.calendar_dropdown_open = false;
+		EventDraftMessage::EventDraftKindSelected(calendar::DraftKind::Event) => {
+			if state.calendar.draft.as_ref().is_some_and(|d| d.saving) {
+				return Task::none();
 			}
-			Task::none()
-		}
-		EventDraftMessage::EventDraftCalendarSelected(id) => {
-			if let Some(draft) = state.calendar.draft.as_mut() {
-				draft.calendar_id = id;
-				draft.calendar_dropdown_open = false;
-			}
-			Task::none()
-		}
-		EventDraftMessage::EventDraftCalendarDropdownToggled => {
-			if let Some(draft) = state.calendar.draft.as_mut() {
-				draft.calendar_dropdown_open = !draft.calendar_dropdown_open;
-			}
-			Task::none()
+			let Some(draft) = state.calendar.draft.take() else {
+				return Task::none();
+			};
+			open_new_event(state, draft)
 		}
 		EventDraftMessage::EventDraftCancelled => {
 			state.draft_kind_focus = None;
 			state.calendar.draft = None;
 			Task::none()
 		}
+		// Only a time block is written straight from the chooser: it is planned
+		// in its own panel afterwards.
 		EventDraftMessage::EventDraftSaveRequested => {
-			if let Some(draft) = state.calendar.draft.as_mut().filter(|draft| !draft.saving) {
-				draft.meeting.add_typed_address();
-			}
-			let Some(draft) = state.calendar.draft.clone() else {
+			let Some(draft) = state.calendar.draft.as_mut().filter(|draft| !draft.saving) else {
 				return Task::none();
 			};
-			if draft.saving {
-				return Task::none();
-			}
-
 			if draft.end <= draft.start {
-				state.calendar.error = Some(if draft.all_day {
-					"The end date has to be on or after the start".to_owned()
-				} else {
-					"The end time has to be after the start".to_owned()
-				});
+				state.calendar.error = Some("The end time has to be after the start".to_owned());
 				return Task::none();
 			}
-
-			// Time blocks use the app calendar; ordinary events use a regular calendar.
-			let is_block = draft.kind == calendar::DraftKind::TimeBlock;
-			let all_day = draft.all_day && draft.kind != calendar::DraftKind::TimeBlock;
-			let color = if is_block {
-				state.config.calendar.time_block_color()
-			} else {
-				state.calendar.calendar_color(&draft.calendar_id)
-			};
-			let description = if is_block {
-				calendar::event_description(&draft.description)
-			} else {
-				draft.description.clone()
-			};
-			let color_choice = match calendar::colors::selection(&draft.color_input) {
-				Ok(choice) => choice,
-				Err(error) => {
-					state.calendar.error = Some(error);
-					return Task::none();
-				}
-			};
-			let recurrence = match draft.recurrence_lines() {
-				Ok(lines) => lines,
-				Err(error) => {
-					state.calendar.error = Some(error);
-					return Task::none();
-				}
-			};
+			draft.saving = true;
+			let draft = draft.clone();
+			let color = state.config.calendar.time_block_color();
 			let known_app = state.config.calendar.app_calendar.clone();
-			if let Some(draft) = state.calendar.draft.as_mut() {
-				draft.saving = true;
-			}
 			state.calendar.error = None;
-
 			blocking::run(move || {
-				let (mut link, mut meeting_link) = (String::new(), String::new());
-				// A block resolves (and, if need be, creates) the app's own
-				// calendar; an event is written to the calendar it was given.
-				let (id, calendar_id) = if draft.kind == calendar::DraftKind::TimeBlock {
-					calendar::create_time_block(
-						known_app.as_deref(),
-						&draft.title,
-						&description,
-						color_choice.as_deref(),
-						draft.start,
-						draft.end,
-						&draft.projects.ids,
-					)?
-				} else {
-					let created = calendar::create_event(
-						&draft.calendar_id,
-						&draft.title,
-						&description,
-						color_choice.as_deref(),
-						draft.start,
-						draft.end,
-						&recurrence,
-						&draft.projects.ids,
-						all_day,
-						Some(&draft.options),
-						(!is_block).then_some(&draft.meeting),
-					)?;
-					link = created.link;
-					meeting_link = created.meeting;
-					(created.id, draft.calendar_id.clone())
-				};
-
+				let (id, calendar_id) = calendar::create_time_block(
+					known_app.as_deref(),
+					&draft.title,
+					"",
+					None,
+					draft.start,
+					draft.end,
+					&[],
+				)?;
 				Ok(calendar::Event {
 					id,
 					calendar_id,
@@ -361,68 +176,32 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
 					},
 					start: draft.start,
 					end: draft.end,
-					all_day,
+					all_day: false,
 					color,
 					completed: false,
-					details: calendar::Details {
-						options: draft.options.clone(),
-						projects: draft.projects.ids.clone(),
-						description,
-						recurrence: recurrence.clone(),
-						link,
-						meeting: meeting_link,
-						attendance: calendar::meeting::Attendance {
-							guests: if is_block {
-								Vec::new()
-							} else {
-								draft.meeting.guests.clone()
-							},
-							permissions: draft.meeting.permissions,
-							organizer: true,
-							own_email: None,
-						},
-						..calendar::Details::default()
-					},
+					details: calendar::Details::default(),
 				})
 			})
 			.map(|v0| Message::EventDraft(EventDraftMessage::EventDraftSaved(v0)))
 		}
 		EventDraftMessage::EventDraftSaved(Ok(event)) => {
-			let was_block = state
-				.calendar
-				.draft
-				.as_ref()
-				.is_some_and(|draft| draft.kind == calendar::DraftKind::TimeBlock);
-			let zoom = state.calendar.draft.as_ref().is_some_and(|draft| {
-				!was_block
-					&& state.config.calendar.app_calendar.as_deref()
-						!= Some(draft.calendar_id.as_str())
-					&& draft.meeting.zoom_wanted()
-					&& !calendar::meeting::has_zoom_link(&draft.description)
-			});
 			state.calendar.draft = None;
-			if zoom {
-				on_event_edit::open_zoom_setup(state, &event.details.link);
-			}
 			// A block that had to create the TimeParagon calendar makes that
 			// calendar the remembered app calendar.
-			let remember = was_block && state.config.calendar.app_calendar.is_none();
+			let remember = state.config.calendar.app_calendar.is_none();
 			if remember {
 				state.config.calendar.app_calendar = Some(event.calendar_id.clone());
 			}
-			let block = was_block.then(|| event.id.clone());
+			let block = event.id.clone();
 			state.calendar.add_event(event);
 			let mut tasks = vec![refresh_week_after_write(state)];
 			if remember {
 				tasks.push(crate::app::queue_save(state));
 			}
-			if let Some(id) = block {
-				// The block is planned in the right-hand panel, not on the
-				// event form it was never sent to.
-				tasks.push(Task::done(Message::TimeBlocking(
-					crate::timeblocking::Action::Plan(id),
-				)));
-			}
+			// The block is planned in the right-hand panel.
+			tasks.push(Task::done(Message::TimeBlocking(
+				crate::timeblocking::Action::Plan(block),
+			)));
 			Task::batch(tasks)
 		}
 		EventDraftMessage::EventDraftSaved(Err(error)) => {
@@ -430,9 +209,47 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
 			if let Some(draft) = state.calendar.draft.as_mut() {
 				draft.saving = false;
 			}
-			log::warn!("could not create the event: {error}");
+			log::warn!("could not create the time block: {error}");
 			state.calendar.error = Some(error);
 			Task::none()
 		}
 	}
+}
+
+/// Opens the range chosen on the calendar as a new event, in the form that edits
+/// events.
+fn open_new_event(state: &mut State, draft: calendar::Draft) -> Task<Message> {
+	let event = calendar::Event {
+		id: crate::inbox::NEW_EVENT_ID.into(),
+		color: state.calendar.calendar_color(&draft.calendar_id),
+		calendar_id: draft.calendar_id,
+		title: draft.title,
+		start: draft.start,
+		end: draft.end,
+		all_day: false,
+		completed: false,
+		details: calendar::Details::default(),
+	};
+	let mut edit = calendar::EditDraft::from_event(&event);
+	edit.meeting = calendar::meeting::Form::default();
+	edit.editing_title = true;
+	let close_block = state
+		.timeblocking
+		.block
+		.is_some()
+		.then(|| crate::timeblocking::close(state));
+	state.calendar.error = None;
+	state.calendar.menu_open = false;
+	state.calendar.search.open = false;
+	state.calendar.actions_open = false;
+	state.calendar.detail_event = Some(event);
+	state.calendar.edit_draft = Some(edit);
+	state.calendar.open_event = Some(crate::inbox::NEW_EVENT_ID.into());
+	Task::batch(
+		close_block
+			.into_iter()
+			.chain([iced::widget::operation::focus(iced::widget::Id::new(
+				"event-title",
+			))]),
+	)
 }

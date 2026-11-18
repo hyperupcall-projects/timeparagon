@@ -1444,7 +1444,7 @@ impl<M> Widget<M, Theme, Renderer> for ArrowWhenIdle<'_, M> {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::app::EventDraftMessage;
+	use crate::app::EventEditMessage;
 	use iced::advanced::renderer::Headless;
 
 	#[test]
@@ -1523,9 +1523,7 @@ mod tests {
 			value: value.into(),
 			month: crate::calendar::first_of_month(day),
 			focus: day,
-			change: Arc::new(|v0| {
-				Message::EventDraft(EventDraftMessage::EventDraftDateChanged(v0))
-			}),
+			change: Arc::new(|v0| Message::EventEdit(EventEditMessage::EventEditDateChanged(v0))),
 			optional: true,
 			with_time,
 			time: NaiveTime::from_hms_opt(23, 47, 0),

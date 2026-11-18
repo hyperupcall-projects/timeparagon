@@ -92,6 +92,9 @@ pub enum Job {
 		end: DateTime<Local>,
 		recurrence: Vec<String>,
 		projects: Vec<u64>,
+		// Jobs queued before labels were sent have none.
+		#[serde(default)]
+		labels: Vec<String>,
 		all_day: bool,
 		options: Option<event_options::EventOptions>,
 		meeting: Option<meeting::Form>,
@@ -1646,6 +1649,7 @@ fn execute(
 			end,
 			recurrence,
 			projects,
+			labels,
 			all_day,
 			options,
 			meeting,
@@ -1661,6 +1665,7 @@ fn execute(
 				end,
 				&recurrence,
 				&projects,
+				&labels,
 				all_day,
 				options.as_ref(),
 				meeting.as_ref(),
@@ -2853,6 +2858,7 @@ mod tests {
 			end: event.end,
 			recurrence: vec![],
 			projects: vec![],
+			labels: vec![],
 			all_day: true,
 			options: None,
 			meeting: None,

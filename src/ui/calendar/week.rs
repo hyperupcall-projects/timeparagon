@@ -124,9 +124,7 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 		.into()
 	};
 
-	let draft_open = state.calendar.draft.as_ref().is_some_and(|d| d.editor_open);
-	let panel_open =
-		draft_open || state.calendar.open_event.is_some() || state.timeblocking.block.is_some();
+	let panel_open = state.calendar.open_event.is_some() || state.timeblocking.block.is_some();
 	let mut grid_layers: Vec<Element<'a, Message>> = vec![grid];
 	if panel_open && let Some(index) = days.iter().position(|day| *day == state.calendar.day) {
 		let viewport = (metrics.size.width - metrics.padding * 2.0).max(1.0);
@@ -136,9 +134,7 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 		let x = index as f32 * width - scroll_x;
 		let left = x.clamp(0.0, viewport);
 		let right = (x + width).clamp(0.0, viewport);
-		let dismiss = if draft_open {
-			Message::EventDraft(EventDraftMessage::EventDraftCancelled)
-		} else if state.calendar.open_event.is_some() {
+		let dismiss = if state.calendar.open_event.is_some() {
 			Message::Event(EventMessage::EventClosed)
 		} else {
 			Message::TimeBlocking(crate::timeblocking::Action::Close)
@@ -165,7 +161,7 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 			.into(),
 		);
 
-		let requested_width = if draft_open || state.calendar.open_event.is_some() {
+		let requested_width = if state.calendar.open_event.is_some() {
 			state.config.views.detail_width()
 		} else {
 			state.config.views.time_block_width()
@@ -185,7 +181,7 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 			(left - panel_width).max(0.0)
 		};
 		let pane = responsive(move |size| {
-			if draft_open || state.calendar.open_event.is_some() {
+			if state.calendar.open_event.is_some() {
 				let height = size.height.max(480.0);
 				let panel_metrics = Metrics::of(Size::new(panel_width, height));
 				crate::ui::controls::scrollable(
@@ -238,12 +234,7 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 	if let Some(dismiss) = dismiss_bar(state, metrics) {
 		content = content.push(dismiss);
 	}
-	let overlay = if state
-		.calendar
-		.draft
-		.as_ref()
-		.is_some_and(|d| !d.editor_open)
-	{
+	let overlay = if state.calendar.draft.is_some() {
 		draft_overlay(state, metrics)
 	} else if state.alarms.editor.is_some() {
 		super::super::alarms::editor_overlay(state, metrics)

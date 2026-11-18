@@ -46,9 +46,14 @@ fn event_options_show_fields_and_emit_notification_changes() {
 	let mut ui = iced_test::Simulator::with_size(
 		iced_test::core::Settings::default(),
 		Size::new(360.0, 700.0),
-		event_options(&options, &metrics, |v0| {
-			Message::EventEdit(EventEditMessage::EventEditOptions(v0))
-		}),
+		iced::widget::column![
+			event_notifications(&options, &metrics, |v0| {
+				Message::EventEdit(EventEditMessage::EventEditOptions(v0))
+			}),
+			event_presence(&options, &metrics, |v0| {
+				Message::EventEdit(EventEditMessage::EventEditOptions(v0))
+			}),
+		],
 	);
 	assert!(ui.find("Availability").is_ok());
 	assert!(ui.find("Visibility").is_ok());
@@ -936,19 +941,24 @@ fn the_new_event_pane_shows_the_shared_repeat_controls() {
 		start,
 		start + chrono::Duration::minutes(45),
 	));
-	let metrics = Metrics::of(Size::new(800.0, 600.0));
-	// Tall enough that the repeat controls are on screen below the Meeting section.
+	let _ = crate::app::update(
+		&mut state,
+		Message::EventDraft(EventDraftMessage::EventDraftKindSelected(
+			calendar::DraftKind::Event,
+		)),
+	);
+	let metrics = Metrics::of(Size::new(800.0, 2400.0));
 	let mut ui = iced_test::Simulator::with_size(
 		iced_test::core::Settings::default(),
-		Size::new(800.0, 1400.0),
-		draft_editor(&state, &metrics),
+		Size::new(800.0, 2400.0),
+		details_pane(&state, &metrics),
 	);
 	assert!(ui.find("Repeat").is_ok());
 	assert!(ui.find("Does not repeat").is_ok());
 	ui.click("Weekly").unwrap();
 	assert!(ui.into_messages().any(|message| matches!(
 		message,
-		Message::EventDraft(EventDraftMessage::EventDraftRecurrence(
+		Message::EventEdit(EventEditMessage::EventEditRecurrence(
 			crate::recurrence::Action::Repeat(crate::recurrence::RepeatMode::Weekly)
 		))
 	)));
@@ -2902,12 +2912,17 @@ fn the_new_event_pane_has_a_meeting_section() {
 	state
 		.calendar
 		.begin_draft("primary".into(), start, start + chrono::Duration::hours(1));
-	state.calendar.draft.as_mut().unwrap().editor_open = true;
-	let metrics = Metrics::of(Size::new(800.0, 600.0));
+	let _ = crate::app::update(
+		&mut state,
+		Message::EventDraft(EventDraftMessage::EventDraftKindSelected(
+			calendar::DraftKind::Event,
+		)),
+	);
+	let metrics = Metrics::of(Size::new(800.0, 2400.0));
 	let mut ui = iced_test::Simulator::with_size(
 		iced_test::core::Settings::default(),
-		Size::new(800.0, 1400.0),
-		draft_editor(&state, &metrics),
+		Size::new(800.0, 2400.0),
+		details_pane(&state, &metrics),
 	);
 	// The simulator can't read a toggler's own label, so the toggles themselves
 	// are covered by the form's tests in core.

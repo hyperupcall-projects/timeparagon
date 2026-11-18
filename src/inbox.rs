@@ -31,8 +31,12 @@ pub struct Inbox {
 	pub voice: crate::voice::Session,
 	pub image: crate::image_input::Session,
 	/// Inactive creation forms, retained while another type is selected.
-	pub(crate) entry_drafts: Vec<calendar::Draft>,
+	pub(crate) entry_drafts: Vec<calendar::EditDraft>,
 	previous_calendar_draft: Option<calendar::Draft>,
+	/// The draft of whatever was open behind the form. A new event, time block
+	/// or habit borrows its place, because each is filled in by the form that
+	/// edits it.
+	pub(crate) outer_edit_draft: Option<calendar::EditDraft>,
 	/// The add something popup, while it is open.
 	pub draft: Option<Draft>,
 	/// "View in calendar": what is about to be created, over its day or week.
@@ -63,6 +67,11 @@ pub struct Draft {
 	pub kind: Option<calendar::DraftKind>,
 	pub title: String,
 	pub event: Option<Event>,
+	/// The event, time block or habit being created, as the form that edits
+	/// them reads it.
+	pub entry: Option<Event>,
+	/// The habit picked for a new habit event, if it is not to match the title.
+	pub chosen_habit: Option<String>,
 	pub deadline: String,
 	pub due: String,
 	/// Where the task came from, once a link has been recognized.
@@ -478,6 +487,12 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 }
 
 pub const DRAFT_ID: &str = "task:new-draft";
+/// What is still being filled in. None of these ever enter the calendar.
+pub const ENTRY_EVENT_ID: &str = "timeparagon:add-event";
+pub const ENTRY_BLOCK_ID: &str = "timeparagon:add-time-block";
+pub const ENTRY_HABIT_ID: &str = "timeparagon:add-habit";
+/// An event being filled in from a range chosen on the calendar.
+pub const NEW_EVENT_ID: &str = "timeparagon:new-event";
 
 fn blank_event() -> Event {
 	let start = calendar::at_clock(UNDATED, 0, 0);
@@ -506,6 +521,7 @@ fn close_draft(state: &mut State) {
 	state.inbox.preview = None;
 	state.calendar.draft = state.inbox.previous_calendar_draft.take();
 	state.inbox.entry_drafts.clear();
+	creation::release_edit_draft(state);
 	state.inbox.draft = None;
 	state.travel.picker = None;
 	state.picker = None;
@@ -712,12 +728,19 @@ pub(crate) fn validate(draft: &Draft) -> Result<NewTask, String> {
 		.source
 		.clone()
 		.or_else(|| integrations::recognize(&title));
+	// A time chosen before the title named another day lands on that day.
+	let mut event = draft.event.clone();
+	if let (Some(day), Some(event)) = (due, event.as_mut().filter(|event| !event.all_day)) {
+		let shift = day - event.start.date_naive();
+		event.start += shift;
+		event.end += shift;
+	}
 	Ok(NewTask {
 		title,
 		deadline,
 		due,
 		source,
-		event: draft.event.clone(),
+		event,
 	})
 }
 
@@ -852,8 +875,12 @@ fn created(state: &mut State, result: Result<Event, String>) -> Task<Message> {
 			if event.is_task() {
 				state.inbox.created_list = Some(event.calendar_id.clone());
 			}
+			let zoom = creation::entry_wants_zoom(state).then(|| event.details.link.clone());
 			if !crate::image_input::saved(state) {
 				close_draft(state);
+			}
+			if let Some(link) = zoom {
+				crate::app::open_zoom_setup(state, &link);
 			}
 			state.timeblocking.revision += 1;
 			state.calendar.events.retain(|other| other.id != event.id);
@@ -865,7 +892,7 @@ fn created(state: &mut State, result: Result<Event, String>) -> Task<Message> {
 			Task::done(Message::Calendar(CalendarMessage::CalendarSyncRequested))
 		}
 		Err(error) => {
-			if let Some(draft) = state.calendar.draft.as_mut() {
+			if let Some(draft) = creation::entry_mut(state) {
 				draft.saving = false;
 			}
 			if let Some(draft) = state.inbox.draft.as_mut() {
@@ -918,7 +945,6 @@ pub(crate) fn new_something_at(
 	state.timeblocking.date = day;
 	state.timeblocking.start_time = start.format("%H:%M").to_string();
 	state.timeblocking.end_time = end.format("%H:%M").to_string();
-	state.timeblocking.editing_due_time = false;
 	if let Some(event) = draft.event.as_mut() {
 		event.start = start;
 		event.end = end;
@@ -1003,7 +1029,6 @@ pub(crate) fn apply_voice(state: &mut State, patch: crate::voice::Patch) {
 			} else {
 				end.format("%H:%M").to_string()
 			};
-			state.timeblocking.editing_due_time = false;
 		}
 		if let Some(value) = patch.description {
 			event.details.description = value.clone();
@@ -1238,14 +1263,11 @@ mod tests {
 			T::AddLabel(DRAFT_ID.into(), "study".into()),
 			T::Priority(DRAFT_ID.into(), Some(tb::Priority::P1)),
 			T::Location(DRAFT_ID.into(), Some(7)),
-			T::Date("2026-11-03".into()),
-			T::Reschedule(DRAFT_ID.into()),
-			T::StartTime("10:00".into()),
-			T::EndTime("11:00".into()),
-			T::ScheduleEntered(DRAFT_ID.into()),
-			T::Deadline("2026-11-04".into()),
-			T::DeadlineTime("14:00".into()),
-			T::DeadlineWithTime(DRAFT_ID.into()),
+			T::DueDate(DRAFT_ID.into(), "2026-11-03".into()),
+			T::DueAllDay(DRAFT_ID.into(), false),
+			T::DueStart(DRAFT_ID.into(), "10:00".into()),
+			T::DueEnd(DRAFT_ID.into(), "11:00".into()),
+			T::Deadline(DRAFT_ID.into(), "2026-11-04 14:00".into()),
 		] {
 			let _ = tb::update(&mut state, action);
 		}
