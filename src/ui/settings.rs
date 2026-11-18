@@ -11,13 +11,15 @@ use crate::calendar;
 use crate::config;
 use crate::integrations::accounts;
 
-use super::layout::Metrics;
+use super::layout::{Breakpoint, Metrics};
 pub(super) use timeparagon_core::alarms::repeat_label;
 
 /// Room left for the scrollbar, which is drawn over the content rather than
 /// beside it. Without this the right edge of every control sits underneath
 /// it, which at 200px means visibly clipped labels.
 const SCROLLBAR_GUTTER: f32 = 14.0;
+
+const SHORTCUTS_INFO: &str = "Global shortcuts. Each action can have several, and any of them triggers it. Combine Ctrl, Alt, Shift or Meta with a letter, number or named key (e.g. Space or F2).";
 
 /// A calendar offered in the default-calendar picker. The name is shown to
 /// the user; the id is what gets saved as the default.
@@ -69,18 +71,14 @@ fn number_dropdown<'a>(
 		.into()
 }
 
-fn week_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-	let settings = &state.config.calendar;
-	column![choice(
-		"Days shown",
+fn days_shown<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+	choice(
+		"Days shown in week view",
 		config::WeekRange::ALL.to_vec(),
-		Some(settings.week_range()),
+		Some(state.config.calendar.week_range()),
 		|range| Message::Settings(SettingsMessage::CalendarWeekRangeChanged(range)),
 		metrics,
-	),]
-	.spacing(metrics.spacing)
-	.width(Fill)
-	.into()
+	)
 }
 
 pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
@@ -88,6 +86,11 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 	// from the same place.
 	let content = column![
         section("Preferences", preferences(state, metrics), metrics),
+        section(
+            "Desktop appearance",
+            desktop_appearance(state, metrics),
+            metrics
+        ),
         section(
             "Reminders",
             super::reminders::settings_section(state, metrics),
@@ -121,17 +124,19 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
             ].spacing(metrics.spacing),
             text("To see the same notes on mobile, sync this folder and choose its copy there. Colors and connections use database sync.").size(metrics.label()),
         ].spacing(metrics.spacing).into(), metrics),
-        section("Appearance", appearance(state, metrics), metrics),
-        section("Dock", dock(state, metrics), metrics),
-        section("Side panel", panel(state, metrics), metrics),
-        section("Keyboard shortcuts", shortcuts(state, metrics), metrics),
+        card(
+            super::controls::section_heading("Keyboard shortcuts", None, metrics.label() + 1.0)
+                .push(super::controls::info_tip(SHORTCUTS_INFO, metrics.label()))
+                .into(),
+            shortcuts(state, metrics),
+            metrics
+        ),
         section(
             "Calendar view order",
             calendar_order(state, metrics),
             metrics
         ),
         section("Google Calendar", calendar(state, metrics), metrics),
-        section("Google Tasks", google_tasks(state, metrics), metrics),
         section("Tasks", tasks(state, metrics), metrics),
         section(
             "Distraction habits",
@@ -191,7 +196,15 @@ fn section<'a>(
 	body: Element<'a, Message>,
 	metrics: &Metrics,
 ) -> Element<'a, Message> {
-	container(column![heading(label, metrics), body].spacing(metrics.spacing))
+	card(heading(label, metrics), body, metrics)
+}
+
+fn card<'a>(
+	heading: Element<'a, Message>,
+	body: Element<'a, Message>,
+	metrics: &Metrics,
+) -> Element<'a, Message> {
+	container(column![heading, body].spacing(metrics.spacing))
 		.padding(metrics.padding)
 		.width(Fill)
 		.style(super::controls::card_surface)
@@ -297,6 +310,7 @@ fn preferences<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
 				|v0| Message::Settings(SettingsMessage::FirstDayOfWeekSelected(v0)),
 				metrics,
 			),
+			days_shown(state, metrics),
 			field(
 				day_end_label(
 					settings.day_start_hour(),
@@ -324,6 +338,24 @@ fn preferences<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
 				|unit| Message::Settings(SettingsMessage::DistanceUnitSelected(unit)),
 				metrics,
 			),
+			choice(
+				"Theme",
+				crate::theme::picker_names(&state.catalog),
+				Some(crate::theme::selected_name(
+					&state.catalog,
+					&state.config.appearance.theme,
+				)),
+				|v0| Message::Settings(SettingsMessage::ThemeSelected(v0)),
+				metrics,
+			),
+			container(switch(
+				"Dock hour lines",
+				state.config.views.dock_hour_lines,
+				|v0| Message::Settings(SettingsMessage::DockHourLinesToggled(v0)),
+				metrics,
+			))
+			.id("dock-hour-lines")
+			.width(Fill),
 		]
 		.spacing(metrics.spacing),
 	)
@@ -332,19 +364,69 @@ fn preferences<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
 	.into()
 }
 
-fn appearance<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+fn desktop_appearance<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+	column![
+		subsection("Reserve space", reserve_space(state, metrics), metrics),
+		subsection("Desktop transition", windowing(state, metrics), metrics),
+		subsection("Borders", borders(state, metrics), metrics),
+		subsection("Dock", dock(state, metrics), metrics),
+		subsection("Side panel", panel(state, metrics), metrics),
+	]
+	.spacing(metrics.spacing * 2.0)
+	.into()
+}
+
+fn subsection<'a>(
+	label: &'a str,
+	body: Element<'a, Message>,
+	metrics: &Metrics,
+) -> Element<'a, Message> {
+	column![
+		text(label).size(metrics.label() + 1.0).font(iced::Font {
+			weight: iced::font::Weight::Bold,
+			..iced::Font::DEFAULT
+		}),
+		body,
+	]
+	.spacing(metrics.spacing)
+	.width(Fill)
+	.into()
+}
+
+fn reserve_space<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+	let views = &state.config.views;
+
+	column![
+		container(switch(
+			"Reserve screen space for the dock",
+			views.dock_reserve_space,
+			|v0| Message::Settings(SettingsMessage::DockReserveSpaceToggled(v0)),
+			metrics,
+		))
+		.id("dock-reservation")
+		.width(Fill),
+		text("Enabling prevents maximized windows from overlapping the dock.")
+			.size(metrics.label())
+			.style(text::secondary),
+		container(switch(
+			"Reserve screen space for the side panel",
+			views.panel_reserve_space,
+			|v0| Message::Settings(SettingsMessage::PanelReserveSpaceToggled(v0)),
+			metrics,
+		))
+		.id("panel-reservation")
+		.width(Fill),
+		text("Enabling prevents maximized windows from overlapping the panel.")
+			.size(metrics.label())
+			.style(text::secondary),
+	]
+	.spacing(metrics.spacing)
+	.into()
+}
+
+fn borders<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 	let views = &state.config.views;
 	column![
-		choice(
-			"Theme",
-			crate::theme::picker_names(&state.catalog),
-			Some(crate::theme::selected_name(
-				&state.catalog,
-				&state.config.appearance.theme,
-			)),
-			|v0| Message::Settings(SettingsMessage::ThemeSelected(v0)),
-			metrics,
-		),
 		layout_number(
 			"Outer border depth (px, 0–5)",
 			LayoutField::PanelBorderOuterWidth,
@@ -371,60 +453,28 @@ fn appearance<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 			state,
 			metrics
 		),
-		windowing(state, metrics),
 	]
 	.spacing(metrics.spacing)
 	.into()
 }
 
-fn subsection<'a>(label: &'a str, metrics: &Metrics) -> Element<'a, Message> {
-	text(label)
-		.size(metrics.label() + 1.0)
-		.font(iced::Font {
-			weight: iced::font::Weight::Bold,
-			..iced::Font::DEFAULT
-		})
-		.into()
-}
-
 fn dock<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-	let views = &state.config.views;
-
 	column![
-		container(switch(
-			"Reserve screen space",
-			views.dock_reserve_space,
-			|v0| Message::Settings(SettingsMessage::DockReserveSpaceToggled(v0)),
-			metrics,
-		))
-		.id("dock-reservation")
-		.width(Fill),
-		text("Enabling prevents maximized windows from overlapping the dock.")
+		text("Change the appearance of the dock.")
 			.size(metrics.label())
 			.style(text::secondary),
+		choice(
+			"Screen edge",
+			crate::config::DockSide::ALL.to_vec(),
+			Some(state.config.views.dock_side),
+			|v0| Message::Settings(SettingsMessage::DockSideSelected(v0)),
+			metrics,
+		),
 		layout_number(
 			"Corner radius (px, 0–30)",
 			LayoutField::DockBorderRadius,
 			state,
 			metrics
-		),
-		text("Change the appearance of the dock.")
-			.size(metrics.label())
-			.style(text::secondary),
-		container(switch(
-			"Dock hour lines",
-			views.dock_hour_lines,
-			|v0| Message::Settings(SettingsMessage::DockHourLinesToggled(v0)),
-			metrics,
-		))
-		.id("dock-hour-lines")
-		.width(Fill),
-		choice(
-			"Screen edge",
-			crate::config::DockSide::ALL.to_vec(),
-			Some(views.dock_side),
-			|v0| Message::Settings(SettingsMessage::DockSideSelected(v0)),
-			metrics,
 		),
 		layout_number(
 			"Dock width (px, 2–40)",
@@ -450,20 +500,7 @@ fn dock<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 }
 
 fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-	let views = &state.config.views;
-
 	column![
-		container(switch(
-			"Reserve screen space",
-			views.panel_reserve_space,
-			|v0| Message::Settings(SettingsMessage::PanelReserveSpaceToggled(v0)),
-			metrics,
-		))
-		.id("panel-reservation")
-		.width(Fill),
-		text("Enabling prevents maximized windows from overlapping the panel.")
-			.size(metrics.label())
-			.style(text::secondary),
 		layout_number(
 			"Screen margin (px, 0–30)",
 			LayoutField::ScreenMargin,
@@ -476,8 +513,6 @@ fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 			state,
 			metrics
 		),
-		subsection("Week", metrics),
-		week_view(state, metrics),
 	]
 	.spacing(metrics.spacing)
 	.into()
@@ -657,10 +692,7 @@ fn layout_number<'a>(
 }
 
 fn shortcuts<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-	let mut section = column![
-        text("Global shortcuts. Each action can have several, and any of them triggers it. Combine Ctrl, Alt, Shift or Meta with a letter, number or named key (e.g. Space or F2).")
-            .size(metrics.label()).style(text::secondary),
-    ].spacing(metrics.spacing * 1.5);
+	let mut section = column![].spacing(metrics.spacing);
 	for action in crate::panel::Action::ALL {
 		section = section.push(shortcut_action(state, action, metrics));
 	}
@@ -675,52 +707,30 @@ fn shortcut_action<'a>(
 	let editor = &state.shortcut_editors[action.index()];
 	let bound = state.config.panel.shortcuts(action);
 
-	let mut section = column![
+	let name = row![
 		text(action.label()).size(metrics.label()),
-		text(action.description())
-			.size(metrics.label())
-			.style(text::secondary),
+		super::controls::info_tip(action.description(), metrics.label()),
 	]
-	.spacing(metrics.spacing);
+	.spacing(4)
+	.align_y(Center);
+	let mut current = row![name].spacing(6).align_y(Center);
 
 	if bound.is_empty() {
-		section = section.push(
+		current = current.push(
 			text("No shortcut")
 				.size(metrics.label())
 				.style(text::secondary),
 		);
 	}
 	for (index, shortcut) in bound.iter().enumerate() {
-		let mut remove =
-			button(text("Remove").size(metrics.label())).style(crate::ui::controls::secondary);
-		if !editor.busy {
-			remove = remove.on_press(Message::Settings(SettingsMessage::ShortcutRemoved(
-				action, index,
-			)));
-		}
-		section = section.push(
-			row![
-				text(shortcut.as_str()).size(metrics.label()).width(Fill),
-				remove
-			]
-			.spacing(metrics.spacing)
-			.align_y(Center),
-		);
+		current = current.push(shortcut_chip(action, index, shortcut, editor.busy, metrics));
 	}
 
 	let mut input =
 		crate::ui::controls::text_input("e.g. Meta+F", &editor.input).size(metrics.label());
 	let mut add = crate::ui::controls::action_button(
-		text(if editor.busy {
-			"Applying…"
-		} else {
-			"Add shortcut"
-		})
-		.size(metrics.label())
-		.center()
-		.width(Fill),
-	)
-	.width(Fill);
+		text(if editor.busy { "Applying…" } else { "Add" }).size(metrics.label()),
+	);
 	if !editor.busy {
 		input = input
 			.on_input(move |value| {
@@ -731,10 +741,27 @@ fn shortcut_action<'a>(
 			add = add.on_press(Message::Settings(SettingsMessage::ShortcutAdded(action)));
 		}
 	}
-	section = section
-		.push(field("New shortcut", input.into(), metrics))
-		.push(add);
+	let adder = row![input, add].spacing(4).align_y(Center);
 
+	// Side by side once there is room, so each action takes a single line.
+	let entry: Element<'a, Message> = if metrics.breakpoint == Breakpoint::Wide {
+		row![
+			current
+				.width(Length::FillPortion(3))
+				.wrap()
+				.vertical_spacing(4),
+			adder.width(Length::FillPortion(2)),
+		]
+		.spacing(metrics.spacing)
+		.align_y(Center)
+		.into()
+	} else {
+		column![current.wrap().vertical_spacing(4), adder]
+			.spacing(4)
+			.into()
+	};
+
+	let mut section = column![entry].spacing(4);
 	if let Some(result) = &editor.result {
 		section = section.push(match result {
 			Ok(message) => text(message).size(metrics.label()).style(text::success),
@@ -742,6 +769,41 @@ fn shortcut_action<'a>(
 		});
 	}
 	section.into()
+}
+
+/// A bound shortcut as a pill, with its remove button inside.
+fn shortcut_chip<'a>(
+	action: crate::panel::Action,
+	index: usize,
+	shortcut: &'a str,
+	busy: bool,
+	metrics: &Metrics,
+) -> Element<'a, Message> {
+	let remove = iced::widget::tooltip(
+		button(text("×").size(metrics.label()).center())
+			.padding([0, 4])
+			.style(crate::ui::controls::ghost)
+			.on_press_maybe((!busy).then_some(Message::Settings(
+				SettingsMessage::ShortcutRemoved(action, index),
+			))),
+		text("Remove").size(12),
+		iced::widget::tooltip::Position::Bottom,
+	)
+	.style(crate::ui::controls::surface);
+
+	container(
+		row![text(shortcut).size(metrics.label()), remove]
+			.spacing(2)
+			.align_y(Center),
+	)
+	.padding(iced::Padding {
+		top: 1.0,
+		right: 2.0,
+		bottom: 1.0,
+		left: 8.0,
+	})
+	.style(crate::ui::controls::tag)
+	.into()
 }
 
 fn calendar_order<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
@@ -1072,11 +1134,12 @@ fn google_tasks<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message>
 		metrics,
 	));
 
-	indent(section.into(), metrics)
+	section.into()
 }
 
-/// What a task needs before it can leave the Inbox. A task cannot be triaged
-/// until every field switched on here has been filled in.
+/// What a task needs before it can leave the Inbox, and the Google Tasks lists
+/// tasks are filed into. A task cannot be triaged until every field switched
+/// on here has been filled in.
 fn tasks<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 	let settings = &state.config.calendar;
 	let mut section = column![
@@ -1105,7 +1168,15 @@ fn tasks<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 		|required| Message::TimeBlocking(crate::timeblocking::Action::RequirePriority(required)),
 		metrics,
 	));
-	indent(section.into(), metrics)
+	indent(
+		column![
+			section,
+			subsection("Google Tasks", google_tasks(state, metrics), metrics),
+		]
+		.spacing(metrics.spacing * 2.0)
+		.into(),
+		metrics,
+	)
 }
 
 /// The habits a time block's "I got distracted" button asks about.
@@ -1377,9 +1448,20 @@ mod tests {
 		let size = iced::Size::new(420.0, 2400.0);
 		let metrics = Metrics::of(size);
 
-		// The default Google Tasks lists belong to the Google Tasks section.
-		let mut ui =
-			Simulator::with_size(Settings::default(), size, google_tasks(&state, &metrics));
+		// The default Google Tasks lists are a subsection of Tasks, below the
+		// triage requirements.
+		let mut ui = Simulator::with_size(Settings::default(), size, tasks(&state, &metrics));
+		let triage_hint =
+			"A task cannot leave the Inbox until every field switched on here has been filled in.";
+		let positions: Vec<_> = [
+			triage_hint,
+			"Google Tasks",
+			"Google Tasks list for backlog tasks",
+		]
+		.into_iter()
+		.map(|label| ui.find(label).unwrap().bounds().y)
+		.collect();
+		assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
 		for label in [
 			"Google Tasks list for backlog tasks",
 			"Google Tasks list for triaged tasks",
@@ -1392,12 +1474,6 @@ mod tests {
 			ui.find("Google Tasks list for time-blocked and scheduled tasks")
 				.is_err()
 		);
-
-		// The triage requirements belong to the Tasks section.
-		let mut ui = Simulator::with_size(Settings::default(), size, tasks(&state, &metrics));
-		let triage_hint =
-			"A task cannot leave the Inbox until every field switched on here has been filled in.";
-		assert!(ui.find(triage_hint).is_ok(), "missing {triage_hint}");
 
 		// Neither is in Google Calendar, and the day end control moved out.
 		let mut ui = Simulator::with_size(Settings::default(), size, calendar(&state, &metrics));
@@ -1469,7 +1545,7 @@ mod tests {
 			state.config.calendar.set_week_range(range);
 			let label = range.to_string();
 			let mut ui =
-				Simulator::with_size(Settings::default(), size, week_view(&state, &metrics));
+				Simulator::with_size(Settings::default(), size, days_shown(&state, &metrics));
 			ui.click(label.as_str()).unwrap();
 			assert!(ui.into_messages().any(|message| matches!(
 				message, Message::Settings(SettingsMessage::CalendarWeekRangeChanged(value)) if value == next
@@ -1486,7 +1562,8 @@ mod tests {
 			let mut state = State::blank();
 			let size = iced::Size::new(width, 400.0);
 			let metrics = Metrics::of(size);
-			let mut ui = Simulator::with_size(Settings::default(), size, dock(&state, &metrics));
+			let mut ui =
+				Simulator::with_size(Settings::default(), size, reserve_space(&state, &metrics));
 			ui.click(iced::widget::Id::from("dock-reservation"))
 				.unwrap();
 			for message in ui.into_messages() {
@@ -1495,7 +1572,8 @@ mod tests {
 			assert!(state.config.views.dock_reserve_space);
 			assert!(!state.config.views.panel_reserve_space);
 
-			let mut ui = Simulator::with_size(Settings::default(), size, panel(&state, &metrics));
+			let mut ui =
+				Simulator::with_size(Settings::default(), size, reserve_space(&state, &metrics));
 			ui.click(iced::widget::Id::from("panel-reservation"))
 				.unwrap();
 			for message in ui.into_messages() {
@@ -1512,7 +1590,7 @@ mod tests {
 		let state = State::blank();
 		let size = iced::Size::new(420.0, 1800.0);
 		let metrics = Metrics::of(size);
-		let mut ui = Simulator::with_size(Settings::default(), size, appearance(&state, &metrics));
+		let mut ui = Simulator::with_size(Settings::default(), size, borders(&state, &metrics));
 		assert!(ui.find("Screen margin (px, 0–30)").is_err());
 		assert!(ui.find("Border radius (px, 0–30)").is_err());
 		let mut ui = Simulator::with_size(Settings::default(), size, panel(&state, &metrics));
@@ -1523,7 +1601,7 @@ mod tests {
 	}
 
 	#[test]
-	fn dock_hour_lines_live_in_the_dock_section() {
+	fn dock_hour_lines_live_in_preferences() {
 		use crate::app;
 		use iced_test::{Simulator, core::Settings};
 
@@ -1531,15 +1609,136 @@ mod tests {
 		let size = iced::Size::new(420.0, 800.0);
 		let metrics = Metrics::of(size);
 
-		let mut ui = Simulator::with_size(Settings::default(), size, dock(&state, &metrics));
+		let mut ui = Simulator::with_size(Settings::default(), size, preferences(&state, &metrics));
 		ui.click(iced::widget::Id::from("dock-hour-lines")).unwrap();
 		for message in ui.into_messages() {
 			let _ = app::update(&mut state, message);
 		}
 		assert!(!state.config.views.dock_hour_lines);
 
-		let mut ui = Simulator::with_size(Settings::default(), size, appearance(&state, &metrics));
+		let mut ui = Simulator::with_size(
+			Settings::default(),
+			size,
+			desktop_appearance(&state, &metrics),
+		);
 		assert!(ui.find(iced::widget::Id::from("dock-hour-lines")).is_err());
+	}
+
+	#[test]
+	fn shortcut_descriptions_are_tucked_behind_info_symbols() {
+		use crate::panel::Action;
+		use iced_test::{Simulator, core::Settings};
+
+		let state = State::blank();
+		for width in [180.0, 300.0, 420.0, 800.0] {
+			let size = iced::Size::new(width, 800.0);
+			let metrics = Metrics::of(size);
+			let mut ui =
+				Simulator::with_size(Settings::default(), size, shortcuts(&state, &metrics));
+			for action in Action::ALL {
+				assert!(
+					ui.find(action.label()).is_ok(),
+					"missing {}",
+					action.label()
+				);
+				assert!(ui.find(action.description()).is_err());
+			}
+			assert!(ui.find(SHORTCUTS_INFO).is_err());
+		}
+	}
+
+	#[test]
+	fn a_shortcut_is_removed_from_its_pill() {
+		use crate::panel::Action;
+		use iced_test::{Simulator, core::Settings};
+
+		let state = State::blank();
+		for width in [180.0, 420.0] {
+			let size = iced::Size::new(width, 300.0);
+			let metrics = Metrics::of(size);
+			let mut ui = Simulator::with_size(
+				Settings::default(),
+				size,
+				shortcut_action(&state, Action::ToggleVisibility, &metrics),
+			);
+			assert!(ui.find("Meta+F").is_ok());
+			ui.click("×").unwrap();
+			assert!(ui.into_messages().any(|message| matches!(
+				message,
+				Message::Settings(SettingsMessage::ShortcutRemoved(
+					Action::ToggleVisibility,
+					0
+				))
+			)));
+		}
+	}
+
+	#[test]
+	fn theme_and_days_shown_live_in_preferences() {
+		use iced_test::{Simulator, core::Settings};
+
+		let state = State::blank();
+		let size = iced::Size::new(420.0, 800.0);
+		let metrics = Metrics::of(size);
+
+		let mut ui = Simulator::with_size(Settings::default(), size, preferences(&state, &metrics));
+		for label in ["Theme", "Days shown in week view"] {
+			assert!(ui.find(label).is_ok(), "missing {label}");
+		}
+
+		let mut ui = Simulator::with_size(
+			Settings::default(),
+			size,
+			desktop_appearance(&state, &metrics),
+		);
+		for label in ["Theme", "Days shown in week view"] {
+			assert!(ui.find(label).is_err(), "{label} should have moved");
+		}
+	}
+
+	#[test]
+	fn desktop_appearance_keeps_every_control_in_subsection_order() {
+		use iced_test::{Simulator, core::Settings};
+
+		let state = State::blank();
+		let size = iced::Size::new(420.0, 2400.0);
+		let metrics = Metrics::of(size);
+		let mut ui = Simulator::with_size(
+			Settings::default(),
+			size,
+			desktop_appearance(&state, &metrics),
+		);
+
+		let positions: Vec<_> = [
+			"Reserve space",
+			"Desktop transition",
+			"Borders",
+			"Dock",
+			"Side panel",
+		]
+		.into_iter()
+		.map(|label| ui.find(label).unwrap().bounds().y)
+		.collect();
+		assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+
+		for id in ["dock-reservation", "panel-reservation"] {
+			assert!(ui.find(iced::widget::Id::from(id)).is_ok(), "missing {id}");
+		}
+		for label in [
+			"When the window appears",
+			"Outer border depth (px, 0–5)",
+			"Outer border color",
+			"Inner border depth (px, 0–5)",
+			"Inner border color",
+			"Screen edge",
+			"Corner radius (px, 0–30)",
+			"Dock width (px, 2–40)",
+			"Left margin (px, 0–100)",
+			"Right margin (px, 0–100)",
+			"Screen margin (px, 0–30)",
+		] {
+			assert!(ui.find(label).is_ok(), "missing {label}");
+		}
 	}
 
 	#[test]

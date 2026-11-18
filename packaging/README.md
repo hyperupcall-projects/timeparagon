@@ -161,8 +161,8 @@ reshape the panel and the dock. There are two actions:
 
 Each action can have **several** shortcuts, and any of them triggers it. Open
 **Settings → Keyboard shortcuts**, type a combination such as `Meta+J` or
-`Ctrl+Alt+T` under the action, and select **Add shortcut**; **Remove** drops
-one. Changes take effect immediately and KDE remembers them across restarts.
+`Ctrl+Alt+T` beside the action, and select **Add**; the **×** on a shortcut
+drops it. Changes take effect immediately and KDE remembers them across restarts.
 The actions also appear in KDE **System Settings → Shortcuts**. The daemon must
 be running for the shortcuts to exist:
 
@@ -205,8 +205,8 @@ by the compositor. It needs no KWin position rule. The ordinary application
 window continues to use the standard Iced window backend. On X11 the panel
 uses that backend too, and the installer supplies its legacy KWin rule.
 
-In Settings, **Dock → Reserve screen space** and **Side panel → Reserve
-screen space** independently choose whether each surface reduces the work
+In Settings, the two switches under **Desktop appearance → Reserve space**
+independently choose whether the dock and the side panel reduce the work
 area available to maximized/tiled windows. Both default to off, preserving
 the overlay behavior. These reservations require Wayland layer-shell support.
 
@@ -242,9 +242,9 @@ Hyprland, niri and COSMIC provide that protocol; GNOME does not.
   description, and for a time block every task assigned to it). It stays when
   the pointer leaves; click the span again to close it.
 - A faint gray line marks each hour across the strip. Turn this off in
-  Settings → Windowing.
-- Settings → Windowing sets how the dock appears: the desktop default, a fade
-  in (with a duration in ms), or instantly. The dock does this itself; the side
+  Settings → Preferences.
+- Settings → Desktop appearance → Desktop transition sets how the dock appears:
+  the desktop default, a fade in (with a duration in ms), or instantly. The dock does this itself; the side
   panel loads a temporary KWin script effect (so it needs KDE) and carries the
   mode in its application ID, which means it loses its desktop-file icon.
 - The **+** at the end of the strip opens a task form beside it. Add a title
@@ -274,8 +274,8 @@ popup_gap = 6        # space between strip and card
 ```
 
 The strip's edge, width, left/right margin, and its two borders (each 0–5px
-with its own colour) are set from **Settings → Dock** and apply the next time
-the dock opens.
+with its own colour) are set from **Settings → Desktop appearance** and apply
+the next time the dock opens.
 
 It shares the main app's config, theme, sign-in and day cache, and syncs today
 itself every `sync_minutes`.
