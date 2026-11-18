@@ -79,11 +79,12 @@ pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message>
 			if config.stored_same(&state.disk_config) {
 				return Task::none();
 			}
-			state.disk_config = config.clone();
+			let disk_before = std::mem::replace(&mut state.disk_config, config.clone());
 			if config.stored_same(&state.config) {
 				return Task::none();
 			}
 			let previous = std::mem::replace(&mut state.config, config);
+			let adopted = crate::travel::adopt_routes(state, &disk_before.travel.routes);
 			if previous.notes != state.config.notes {
 				if let Err(error) = state.notes.configure(state.config.notes.path()) {
 					state.notes.error = Some(error);
@@ -122,7 +123,7 @@ pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message>
 				state.calendar.set_day(day, day);
 				state.calendar.forget_cached_days();
 			}
-			let mut tasks = Vec::new();
+			let mut tasks = vec![adopted];
 			let pane_widths_changed =
 				previous.views.calendar_width != state.config.views.calendar_width;
 			let views_changed = pane_widths_changed

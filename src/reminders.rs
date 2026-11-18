@@ -169,6 +169,7 @@ fn poll(state: &mut State) -> Task<Message> {
 		places: travel.places.clone(),
 		event_places: travel.event_places.clone(),
 		default_mode: travel.default_mode,
+		map_app: travel.map_app,
 		modes: travel.modes.clone(),
 		show: travel.show,
 		routes: travel.routes.clone(),

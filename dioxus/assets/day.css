@@ -1817,6 +1817,104 @@ textarea {
     gap: 8px;
 }
 
+.travel-body {
+    gap: 16px;
+}
+
+.travel-section,
+.travel-field {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.travel-field {
+    gap: 4px;
+}
+
+.travel-heading {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    margin: 0;
+    font-size: 15px;
+}
+
+.travel-count {
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--muted);
+}
+
+.travel-day {
+    margin: -4px 0 0;
+}
+
+.travel-card {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding: 8px 10px;
+    background: var(--card);
+    border: 1px solid var(--edge);
+    border-radius: var(--radius-row);
+    box-shadow: var(--shadow-row);
+}
+
+.travel-rename {
+    flex-direction: column;
+    align-items: stretch;
+}
+
+.travel-text,
+.travel-open {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    overflow-wrap: anywhere;
+}
+
+.travel-open {
+    appearance: none;
+    min-height: 44px;
+    justify-content: center;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.travel-name {
+    font-size: 14px;
+}
+
+.travel-mode {
+    flex: none;
+    width: auto;
+    padding: 4px 6px;
+    font-size: 14px;
+}
+
+.travel-time {
+    font-size: 17px;
+}
+
+.travel-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.travel-actions .btn {
+    flex: 1;
+}
+
 .linklike {
     padding: 0;
     border: none;

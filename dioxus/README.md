@@ -55,6 +55,10 @@ own screen and the rest of the app in sheets over it:
   finished.
 - Reminders for events, tasks, time blocks, habits, sleep and travel, with a
   sound per kind (see [docs/reminders.md](../docs/reminders.md)).
+- Travel (**More → Travel**), with the desktop's Travel page: the saved locations,
+  which can be renamed, the day's connections and all connections. Each trip has a
+  walk, bike or car method, and tapping it shows its route time, **Recalculate** and
+  **Open in Maps**. Trips are worked out with Mapbox and shared with the desktop.
 - People (**More → People**): search the contacts of the Google account the
   calendar is signed in with, and its Workspace directory, then edit a
   contact's name, company, emails, phones, addresses, websites, labels and
@@ -247,7 +251,7 @@ the Month button above the schedule returns to the full month. **Tasks** shows t
 lists beneath the navigation. The lists take the same tasks as the desktop's and save the same
 sort settings; Backlog has a picker on each task for its planning horizon in
 place of dragging. At widths above 820px, Tasks keeps the grid beside
-its list. **More** starts with **Notepad**, followed by Habits, Notes, People, Brain
+its list. **More** starts with **Notepad**, followed by Travel, Habits, Notes, People, Brain
 dump, Alarms, and Log (each change sent to Google, and whether it was
 saved). Life stays on the desktop.
 

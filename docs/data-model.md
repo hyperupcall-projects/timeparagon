@@ -704,11 +704,11 @@ Shared between devices, in tables of their own (see [Settings](#settings)):
 | `places` | `{id, name, address, provider_id, lat, lng, favorite}` | `provider_id` is Mapbox's ID (older entries hold a Google ID), which keeps one place from being saved twice. `name` can be renamed freely |
 | `event_places` | `{event_id, place_id}` | Links a calendar event to a saved place |
 | `travel_modes` | `{from_place, to_place, mode}` | Per-trip overrides of the default mode |
-| `travel_routes` | `{from_place, to_place, mode, seconds, meters}` | Trips the desktop has calculated, for devices that do not |
+| `travel_routes` | `{from_place, to_place, mode, seconds, meters}` | Trips any device has calculated, so the others need not ask Mapbox again |
 
 and the settings `travel.api_key` (Mapbox token), `travel.home` (place ID),
 `travel.default_mode` (`walk` / `bike` / `car`), `travel.show` (show travel
-on the calendar) and `travel.map_app` (desktop only: which map to open).
+on the calendar) and `travel.map_app` (which map to open, chosen on the desktop).
 
 Tasks refer to places with `metadata.location`, and time blocks pass a place
 down with `ChildMetadata.location`. The desktop app also caches calculated

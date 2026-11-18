@@ -18,22 +18,19 @@ use std::path::{Path, PathBuf};
 use chrono::NaiveDate;
 use iced::Task;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::app::{Message, State, queue_save};
 use crate::blocking;
 use crate::calendar::Event;
-use crate::config::{MapApp, Place, SavedRoute, TravelMode, TravelSettings};
+use crate::config::{MapApp, SavedRoute, TravelMode, TravelSettings};
 use crate::timeblocking as tb;
-use timeparagon_core::places::get;
 #[cfg(test)]
 use timeparagon_core::places::search_url;
+use timeparagon_core::places::unique_legs;
 pub use timeparagon_core::places::{
-	Found, Hop, Leg, Route, START_OF_DAY, Stop, distance_label, duration_label, location_text,
-	parse_places, route_label, saved_matches, search_places,
+	Found, Hop, Leg, Route, START_OF_DAY, Stop, compute_route, distance_label, duration_label,
+	location_text, parse_places, parse_route, route_label, route_url, saved_matches, search_places,
 };
-
-const DIRECTIONS_URL: &str = "https://api.mapbox.com/directions/v5/mapbox";
 
 /// What a chosen place is for.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -575,6 +572,35 @@ fn publish_routes(state: &mut State) {
 	}
 }
 
+/// Takes in the trips another device worked out since the settings were last
+/// read, such as one recalculated on the phone. Without this `publish_routes`
+/// would put this device's older answer back.
+pub fn adopt_routes(state: &mut State, before: &[SavedRoute]) -> Task<Message> {
+	let mut adopted = false;
+	for saved in &state.config.travel.routes {
+		if before.contains(saved) {
+			continue;
+		}
+		state.travel.routes.insert(
+			RouteKey {
+				from: saved.from,
+				to: saved.to,
+				mode: saved.mode,
+			},
+			RouteState::Ready(Route {
+				seconds: saved.seconds,
+				meters: saved.meters,
+			}),
+		);
+		adopted = true;
+	}
+	if adopted {
+		save_cache(state)
+	} else {
+		Task::none()
+	}
+}
+
 /// Asks Mapbox for each trip that has not been asked for.
 fn fetch_missing(state: &mut State, legs: impl IntoIterator<Item = Leg>) -> Task<Message> {
 	let Some(key) = state.config.travel.key() else {
@@ -668,28 +694,18 @@ pub fn day_hops(state: &State, day: NaiveDate) -> Vec<Hop> {
 
 /// The different trips the day in view makes, in the order it makes them.
 pub fn day_connections(state: &State) -> Vec<Leg> {
-	unique(day_hops(state, state.calendar.day))
+	unique_legs(day_hops(state, state.calendar.day))
 }
 
 /// The different trips every loaded day makes, earliest day first.
 pub fn all_connections(state: &State) -> Vec<Leg> {
-	unique(
+	unique_legs(
 		state
 			.calendar
 			.loaded_days()
 			.into_iter()
 			.flat_map(|day| day_hops(state, day)),
 	)
-}
-
-fn unique(hops: impl IntoIterator<Item = Hop>) -> Vec<Leg> {
-	let mut legs: Vec<Leg> = Vec::new();
-	for hop in hops {
-		if !legs.contains(&hop.leg) {
-			legs.push(hop.leg);
-		}
-	}
-	legs
 }
 
 // ---------------------------------------------------------------------------
@@ -737,78 +753,17 @@ pub fn short_label(state: &State, leg: Leg) -> String {
 	}
 }
 
-/// A page of the chosen map showing the trip. Mapbox has no page of its own
-/// to send someone to. Both pages are given coordinates, as that is what a
-/// place is known by here.
+/// A page of the chosen map showing the trip.
 fn maps_url(travel: &TravelSettings, leg: Leg) -> Option<String> {
 	let from = travel.place(leg.from)?;
 	let to = travel.place(leg.to)?;
 	let mode = travel.mode_for(leg.from, leg.to);
-
-	Some(match travel.map_app {
-		MapApp::OpenStreetMap => format!(
-			"https://www.openstreetmap.org/directions?engine={}&route={}%2C{}%3B{}%2C{}",
-			mode.osm_engine(),
-			from.lat,
-			from.lng,
-			to.lat,
-			to.lng,
-		),
-		MapApp::GoogleMaps => format!(
-			"https://www.google.com/maps/dir/?api=1&origin={}%2C{}&destination={}%2C{}&travelmode={}",
-			from.lat,
-			from.lng,
-			to.lat,
-			to.lng,
-			mode.google_travelmode(),
-		),
-	})
-}
-
-// ---------------------------------------------------------------------------
-// Talking to Mapbox
-// ---------------------------------------------------------------------------
-
-/// How long and how far a trip is, from Mapbox Directions. Blocking: call it
-/// from [`crate::blocking::run`].
-pub fn compute_route(
-	key: &str,
-	from: &Place,
-	to: &Place,
-	mode: TravelMode,
-) -> Result<Route, String> {
-	parse_route(&get(&route_url(key, from, to, mode))?)
-}
-
-/// The Directions request for a trip. Mapbox takes coordinates only, as
-/// `longitude,latitude` pairs. Its route distance is always returned in meters;
-/// display units must not affect this request or the cache key.
-pub fn route_url(key: &str, from: &Place, to: &Place, mode: TravelMode) -> String {
-	format!(
-		"{DIRECTIONS_URL}/{}/{},{};{},{}?overview=false&access_token={}",
-		mode.profile(),
-		from.lng,
-		from.lat,
-		to.lng,
-		to.lat,
-		urlencoding::encode(key),
-	)
-}
-
-pub fn parse_route(response: &Value) -> Result<Route, String> {
-	let route = response["routes"]
-		.as_array()
-		.and_then(|routes| routes.first())
-		.ok_or("Mapbox found no route between these places")?;
-
-	let seconds = route["duration"]
-		.as_f64()
-		.ok_or("Mapbox did not say how long the trip takes")?;
-
-	Ok(Route {
-		seconds: seconds.round().max(0.0) as u32,
-		meters: route["distance"].as_f64().unwrap_or(0.0).round().max(0.0) as u32,
-	})
+	Some(timeparagon_core::places::maps_url(
+		travel.map_app,
+		mode,
+		from,
+		to,
+	))
 }
 
 // ---------------------------------------------------------------------------
@@ -1627,6 +1582,39 @@ mod tests {
 
 		let _ = reconcile(&mut state);
 		assert_eq!(state.config.travel.routes.len(), 1);
+	}
+
+	#[test]
+	fn a_trip_recalculated_on_another_device_is_not_put_back() {
+		let mut state = state();
+		let key = RouteKey {
+			from: 1,
+			to: 2,
+			mode: TravelMode::Car,
+		};
+		let saved = |seconds| SavedRoute {
+			from: 1,
+			to: 2,
+			mode: TravelMode::Car,
+			seconds,
+			meters: 5000,
+		};
+		state.travel.routes.insert(
+			key,
+			RouteState::Ready(Route {
+				seconds: 600,
+				meters: 5000,
+			}),
+		);
+		let _ = reconcile(&mut state);
+		let before = state.config.travel.routes.clone();
+		assert_eq!(before, [saved(600)]);
+
+		state.config.travel.routes = vec![saved(900)];
+		let _ = adopt_routes(&mut state, &before);
+		let _ = reconcile(&mut state);
+
+		assert_eq!(state.config.travel.routes, [saved(900)]);
 	}
 
 	#[test]
