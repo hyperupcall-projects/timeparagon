@@ -401,7 +401,7 @@ fetch deletes it, so the item shows what Google has.
 **The log.** Each write is logged when it is sent, saved, or refused
 (`operations::log_since`; also `log::info!`/`log::warn!`). The desktop shows
 these in **Logs** at the bottom left of the panel, the phone under
-**More → Log**. While writes are in flight, the desktop's activity label reads
+**More → Logs**. While writes are in flight, the desktop's activity label reads
 "Saving to cloud (n)" and the phone shows "Saving…".
 
 **Offline.** With no connection, or signed out, a write fails at once and the

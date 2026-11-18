@@ -17,6 +17,7 @@ mod editor;
 mod habits;
 mod habits_charts;
 mod media_input;
+mod more;
 mod notes;
 mod people;
 mod plan;
@@ -39,6 +40,7 @@ use timeparagon_core::calendar::search::Search;
 use timeparagon_core::calendar::time_format::{self, TimeFormat};
 use timeparagon_core::calendar::{self, Event};
 use timeparagon_core::config::CalendarSettings;
+use timeparagon_core::more_menu::Item;
 use timeparagon_core::theme as look;
 use timeparagon_core::timeblocking as tb;
 
@@ -1262,83 +1264,26 @@ fn Main() -> Element {
 	});
 
 	let more_sheet = show_more().then(|| {
-        rsx! {
-            div {
-                class: "modal-backdrop",
-                onclick: move |_| show_more.set(false),
-                div {
-                    class: "modal",
-                    role: "dialog",
-                    aria_label: "More",
-                    onclick: move |event| event.stop_propagation(),
-                    div { class: "modal-head",
-                        h2 { class: "modal-title", "More" }
-                        div { class: "spacer" }
-                        button {
-                            class: "modal-close",
-                            title: "Close",
-                            onclick: move |_| show_more.set(false),
-                            "×"
-                        }
-                    }
-                    // The desktop's More menu, less what stays on the desktop.
-                    div { class: "modal-body more-body",
-                        button {
-                            class: "btn",
-                            onclick: move |_| {
-                                show_more.set(false);
-                                show_scratch.set(Some(scratch::Page::Notepad));
-                            },
-                            "Notepad"
-                        }
-                        button {
-                            class: "btn",
-                            onclick: move |_| {
-                                show_more.set(false);
-                                show_travel.set(true);
-                            },
-                            "Travel"
-                        }
-                        button {
-                            class: "btn",
-                            onclick: move |_| {
-                                show_more.set(false);
-                                page.set(Page::Habits);
-                            },
-                            "Habits"
-                        }
-                        button {
-                            class: "btn",
-                            onclick: move |_| {
-                                show_more.set(false);
-                                show_notes.set(true);
-                            },
-                            "Notes"
-                        }
-                        button {
-                            class: "btn",
-                            onclick: move |_| {
-                                show_more.set(false);
-                                show_people.set(true);
-                            },
-                            "People"
-                        }
-                        button {
-                            class: "btn",
-                            onclick: move |_| {
-                                show_more.set(false);
-                                show_scratch.set(Some(scratch::Page::BrainDump));
-                            },
-                            "Brain dump"
-                        }
-                        button { class: "btn", onclick: move |_| { show_more.set(false); show_alarms.set(true); }, "Alarms" }
-                        button { class: "btn", onclick: move |_| {show_more.set(false);show_log.set(true);}, "Log" }
-                        p { class: "hint", "{database_sync_status}" }
-                    }
-                }
-            }
-        }
-    });
+		rsx! {
+			more::MoreSheet {
+				status: database_sync_status(),
+				on_close: move |()| show_more.set(false),
+				on_open: move |item| {
+					show_more.set(false);
+					match item {
+						Item::Notepad => show_scratch.set(Some(scratch::Page::Notepad)),
+						Item::Habits => page.set(Page::Habits),
+						Item::Notes => show_notes.set(true),
+						Item::People => show_people.set(true),
+						Item::Travel => show_travel.set(true),
+						Item::BrainDump => show_scratch.set(Some(scratch::Page::BrainDump)),
+						Item::Alarms => show_alarms.set(true),
+						Item::Logs => show_log.set(true),
+					}
+				},
+			}
+		}
+	});
 
 	let travel_sheet = show_travel().then(|| {
 		let connections = travel::connections(

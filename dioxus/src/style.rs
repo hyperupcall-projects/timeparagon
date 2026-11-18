@@ -8,6 +8,7 @@ use std::sync::LazyLock;
 
 use timeparagon_core::Color;
 use timeparagon_core::calendar::colors;
+use timeparagon_core::more_menu::PHONE_ROWS;
 use timeparagon_core::theme::{self as look, Elevation, Scheme};
 
 use crate::css_color;
@@ -107,6 +108,23 @@ fn scheme_variables(scheme: Scheme) -> String {
 		let _ = write!(css, "--{name}:{};", shadow(elevation, dark));
 	}
 	css.push_str(&habit_variables(dark));
+	css.push_str(&more_variables(dark));
+	css
+}
+
+/// Each More tile's color for one scheme, and the ink drawn on it.
+fn more_variables(dark: bool) -> String {
+	let mut css = String::new();
+	for item in PHONE_ROWS.iter().flat_map(|row| row.iter()) {
+		let color = item.color(dark);
+		let slug = item.slug();
+		let _ = write!(
+			css,
+			"--more-{slug}:{};--more-ink-{slug}:{};",
+			css_color(color),
+			css_color(colors::on_color(color))
+		);
+	}
 	css
 }
 
@@ -146,7 +164,8 @@ fn habit_variables(dark: bool) -> String {
 /// What does not change with the theme.
 fn fixed_variables() -> String {
 	let [(near_y, near_alpha), (far_y, far_alpha)] = look::EVENT_DROPS;
-	let mut css = String::from(":root{");
+	// Each More tile replaces these with its own color.
+	let mut css = String::from(":root{--tile:var(--accent);--tile-ink:var(--on-accent);");
 	for (name, value) in [
 		("radius-card", look::RADIUS_CARD),
 		("radius-row", look::RADIUS_ROW),

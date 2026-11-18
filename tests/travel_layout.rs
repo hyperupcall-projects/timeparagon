@@ -128,7 +128,7 @@ fn toggling_travel_turns_the_day_view_trips_on_and_off() {
 	assert!(!state.travel.show);
 }
 
-/// Travel and Habits live together in the More menu, with Travel first, and
+/// Travel and Habits live together in the More menu, with Habits first, and
 /// clicking Travel opens the Travel screen.
 #[test]
 fn the_travel_item_is_in_the_more_menu() -> Result<(), Error> {
@@ -139,7 +139,7 @@ fn the_travel_item_is_in_the_more_menu() -> Result<(), Error> {
 
 		let travel = ui.find("Travel").expect("Travel item").bounds();
 		let habits = ui.find("Habits").expect("Habits item").bounds();
-		assert!(travel.y + travel.height <= habits.y, "order at {width}px");
+		assert!(habits.y + habits.height <= travel.y, "order at {width}px");
 
 		let _ = ui.click("Travel")?;
 		assert!(

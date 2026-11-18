@@ -1101,6 +1101,40 @@ fn the_notepad_is_first_under_more() {
 	}
 }
 
+/// More reads top to bottom as Notepad, Habits and Notes, People, Travel and
+/// Brain dump, then Alarms, and every tile stays inside the window.
+#[test]
+fn the_more_menu_is_laid_out_in_rows_of_tiles() {
+	for width in WIDTHS {
+		let mut state = state();
+		state.more_menu_open = true;
+		let mut ui = render(&state, Size::new(width, 480.0));
+		let mut at = |label: &str| ui.find(label).expect(label).bounds();
+		let rows = [
+			vec![at("Notepad")],
+			vec![at("Habits"), at("Notes")],
+			vec![at("People")],
+			vec![at("Travel"), at("Brain dump")],
+			vec![at("Alarms")],
+		];
+		for pair in rows.windows(2) {
+			let bottom = pair[0].iter().map(|b| b.y + b.height).fold(0.0, f32::max);
+			assert!(pair[1].iter().all(|b| bottom <= b.y), "rows at {width}px");
+		}
+		for row in &rows {
+			for label in row {
+				assert!(
+					label.x >= 0.0 && label.x + label.width <= width,
+					"at {width}px"
+				);
+			}
+			if let [left, right] = row[..] {
+				assert!(left.x + left.width <= right.x, "columns at {width}px");
+			}
+		}
+	}
+}
+
 /// The habits item lives in the More menu and opens the Habits screen.
 #[test]
 fn the_habits_item_opens_the_habits() -> Result<(), Error> {

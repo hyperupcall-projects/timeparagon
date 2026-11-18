@@ -23,6 +23,7 @@ pub mod hex;
 mod legacy_name;
 pub mod life;
 pub mod local_changes;
+pub mod more_menu;
 pub mod notes;
 pub mod people;
 pub mod places;

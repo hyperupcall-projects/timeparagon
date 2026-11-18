@@ -251,9 +251,9 @@ the Month button above the schedule returns to the full month. **Tasks** shows t
 lists beneath the navigation. The lists take the same tasks as the desktop's and save the same
 sort settings; Backlog has a picker on each task for its planning horizon in
 place of dragging. At widths above 820px, Tasks keeps the grid beside
-its list. **More** starts with **Notepad**, followed by Travel, Habits, Notes, People, Brain
-dump, Alarms, and Log (each change sent to Google, and whether it was
-saved). Life stays on the desktop.
+its list. **More** is a set of picture tiles: **Notepad**, **Habits** beside **Notes**,
+**People**, **Travel** beside **Brain dump**, **Alarms**, and **Logs** (each change sent to
+Google, and whether it was saved). Life stays on the desktop.
 
 ## What the day view shows
 

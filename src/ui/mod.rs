@@ -20,6 +20,7 @@ pub mod layout;
 pub mod life;
 pub mod links;
 mod meetings;
+mod more_menu;
 mod nav_icon;
 pub mod notepad;
 pub mod notes;
@@ -415,7 +416,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
 			layers.push(view_menu(state, &nav_metrics));
 		}
 		if state.more_menu_open {
-			layers.push(more_menu(state, &nav_metrics));
+			layers.push(more_menu::view(state, &nav_metrics));
 		}
 		if state.activity.open {
 			layers.push(activity_log(state, &nav_metrics));
@@ -640,10 +641,10 @@ pub const TASKS_LABELS: [&str; 4] = ["Unfinished", "Inbox", "Today", "Backlog"];
 /// The destinations kept inside the More menu.
 pub const MORE_LABELS: [&str; 7] = [
 	"Notepad",
-	"Travel",
 	"Habits",
 	"Notes",
 	"People",
+	"Travel",
 	"Brain dump",
 	"Alarms",
 ];
@@ -1055,53 +1056,6 @@ fn view_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 		container(row![iced::widget::opaque(card), Space::new().width(Fill)])
 			.padding(Padding {
 				left: metrics.padding,
-				..Default::default()
-			})
-			.width(Fill),
-	]
-	.width(Fill)
-	.align_x(Alignment::Start);
-
-	let layers: Vec<Element<'a, Message>> = vec![dismiss.into(), aligned.into()];
-	iced::widget::stack(layers).into()
-}
-
-/// The More destinations, in a card below the menu bar.
-fn more_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-	let dismiss = mouse_area(container(Space::new()).width(Fill).height(Fill))
-		.on_press(Message::Navigation(NavigationMessage::MoreMenuToggled));
-
-	let mut panel = column![].spacing(2.0).width(Fill);
-	for (label, screen) in MORE_LABELS.iter().zip([
-		Screen::Notepad,
-		Screen::Travel,
-		Screen::Habits,
-		Screen::Notes,
-		Screen::People,
-		Screen::BrainDump,
-		Screen::Alarms,
-	]) {
-		panel = panel.push(
-			button(text(*label).size(metrics.label()).center().width(Fill))
-				.width(Fill)
-				.on_press(Message::Navigation(NavigationMessage::ScreenSelected(
-					screen,
-				)))
-				.style(crate::ui::controls::nav(state.screen == screen)),
-		);
-	}
-
-	let width = (metrics.size.width - metrics.padding * 2.0).clamp(96.0, 180.0);
-	let card = container(panel)
-		.width(Length::Fixed(width))
-		.padding(6.0)
-		.style(crate::ui::controls::surface);
-
-	let aligned = column![
-		Space::new().height(tabs_height(state, metrics) + metrics.spacing),
-		container(row![Space::new().width(Fill), iced::widget::opaque(card)])
-			.padding(Padding {
-				right: metrics.padding,
 				..Default::default()
 			})
 			.width(Fill),
