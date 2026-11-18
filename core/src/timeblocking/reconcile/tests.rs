@@ -388,15 +388,45 @@ fn a_task_series_on_the_wrong_rule_is_put_back_from_today() {
 
 #[test]
 fn a_block_running_past_midnight_keeps_its_small_hours_tasks() {
+	for (hour, start_hour) in [(0, 23), (4, 23), (4, 3)] {
+		let mut google = FakeGoogle::default();
+		let block = google.add_block_series(at(2, start_hour, 0), 120, DAILY);
+		let first = google.add_follower(&block, day(12), "Wind down", 1, 60);
+		let second = google.add_follower(&block, day(12), "Read", 2, 30);
+		let (first, second) = (google.task_id(&first), google.task_id(&second));
+		settle(&mut google, hour);
+		// Both occurrences stay anchored to the 13th's block, even when
+		// reading starts after midnight or the configured day boundary.
+		assert_eq!(on(&google, first, 13).unwrap().start, at(13, start_hour, 0));
+		assert_eq!(
+			on(&google, second, 13).unwrap().start,
+			at(13, start_hour, 0) + Duration::hours(1)
+		);
+	}
+}
+
+#[test]
+fn weekly_overnight_tasks_keep_the_blocks_weekday_end_date_and_skips() {
 	let mut google = FakeGoogle::default();
-	let block = google.add_block_series(at(2, 23, 0), 120, DAILY);
-	let first = google.add_follower(&block, day(12), "Wind down", 1, 60);
-	let second = google.add_follower(&block, day(12), "Read", 2, 30);
-	let (first, second) = (google.task_id(&first), google.task_id(&second));
-	settle(&mut google, 4);
-	// The 13th's block runs from 11pm to 1am; reading starts at midnight.
-	assert_eq!(on(&google, first, 13).unwrap().start, at(13, 23, 0));
-	assert_eq!(on(&google, second, 14).unwrap().start, at(14, 0, 0));
+	let rule = format!(
+		"FREQ=WEEKLY;BYDAY=MO;UNTIL={}",
+		at(30, 23, 59).with_timezone(&Utc).format("%Y%m%dT%H%M%SZ")
+	);
+	let block = google.add_block_series(at(2, 23, 0), 120, &rule);
+	let first = google.add_follower(&block, day(16), "Wind down", 1, 60);
+	let second = google.add_follower(&block, day(16), "Read", 2, 30);
+	let second_id = google.task_id(&second);
+	settle(&mut google, 0);
+	assert_eq!(on(&google, second_id, 16).unwrap().start, at(17, 0, 0));
+	assert!(on(&google, second_id, 17).is_none());
+	google.delete_occurrence(&first, day(23));
+	settle(&mut google, 0);
+	assert_eq!(on(&google, second_id, 23).unwrap().start, at(23, 23, 0));
+	assert_eq!(on(&google, second_id, 30).unwrap().start, at(31, 0, 0));
+	assert!(on(&google, second_id, 37).is_none());
+	google.delete_occurrence(&block, day(30));
+	settle(&mut google, 0);
+	assert!(on(&google, second_id, 30).is_none());
 }
 
 #[test]
@@ -595,6 +625,11 @@ type Scenario = fn(&mut FakeGoogle);
 
 fn scenarios() -> Vec<(&'static str, Scenario)> {
 	vec![
+		("weekly tasks laid out past midnight", |google| {
+			let block = google.add_block_series(at(2, 23, 0), 120, "FREQ=WEEKLY;BYDAY=MO");
+			google.add_follower(&block, day(16), "Wind down", 1, 60);
+			google.add_follower(&block, day(16), "Read", 2, 30);
+		}),
 		("split in this app, with done and skipped days", |google| {
 			let block = google.add_block_series(at(2, 9, 0), 60, DAILY);
 			let task = google.add_follower(&block, day(5), "Inbox zero", 1, 30);
@@ -670,11 +705,20 @@ fn the_google_client_does_what_the_reconciler_asks_of_it() {
 
 #[test]
 fn a_task_put_in_a_repeating_block_to_repeat_with_it_does_so_on_google() {
+	joining_task_through_google(9, 30);
+}
+
+#[test]
+fn a_task_laid_out_after_midnight_joins_the_same_recurring_block_on_google() {
+	joining_task_through_google(23, 60);
+}
+
+fn joining_task_through_google(hour: u32, first_minutes: u32) {
 	use crate::task_edit::{self, Change};
 	use std::{cell::RefCell, rc::Rc};
 	let mut google = FakeGoogle::default();
-	let block = google.add_block_series(at(2, 9, 0), 120, DAILY);
-	let first = google.add_follower(&block, day(5), "Inbox zero", 1, 30);
+	let block = google.add_block_series(at(2, hour, 0), 120, DAILY);
+	let first = google.add_follower(&block, day(5), "Inbox zero", 1, first_minutes);
 	settle(&mut google, 0);
 	let task = google.add_calendar_task(day(12), "Plan", 15);
 	let task_id = task.details.task_data.as_ref().unwrap().id;
@@ -698,6 +742,15 @@ fn a_task_put_in_a_repeating_block_to_repeat_with_it_does_so_on_google() {
 				"token",
 			)
 			.unwrap();
+			let start = occurrence.start + Duration::minutes(i64::from(first_minutes));
+			let placed = task_edit::send(
+				placed,
+				&settings,
+				Change::Reflow(start, start + Duration::minutes(15)),
+				9,
+				"token",
+			)
+			.unwrap();
 			let join = Change::join_block_series(&occurrence).unwrap();
 			task_edit::send(placed, &settings, join, 9, "token").unwrap();
 		},
@@ -717,7 +770,10 @@ fn a_task_put_in_a_repeating_block_to_repeat_with_it_does_so_on_google() {
 		"the task is one series repeating with the block"
 	);
 	assert_eq!(titles_on(&mut google, &block, 20), ["Inbox zero", "Plan"]);
-	assert_eq!(task_on(&google, &first, 20).unwrap().start, at(20, 9, 0));
+	assert_eq!(task_on(&google, &first, 20).unwrap().start, at(20, hour, 0));
 	assert!(on(&google, task_id, 11).is_none());
-	assert_eq!(on(&google, task_id, 20).unwrap().start, at(20, 9, 30));
+	assert_eq!(
+		on(&google, task_id, 20).unwrap().start,
+		at(20, hour, 0) + Duration::minutes(i64::from(first_minutes))
+	);
 }

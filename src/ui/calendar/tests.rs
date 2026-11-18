@@ -1798,6 +1798,113 @@ fn resizing_the_top_keeps_the_end_and_the_bottom_keeps_the_start() {
 }
 
 #[test]
+fn dragging_across_a_day_boundary_preserves_the_full_task_or_block_interval() {
+	for hour in [0, 3] {
+		for task in [false, true] {
+			for next_day in [false, true] {
+				let mut state = State::blank();
+				let mut snapshot = calendar::sample_snapshot();
+				let day = snapshot.day;
+				let next = day.succ_opt().unwrap();
+				let boundary = calendar::at_clock(next, hour, 0);
+				let mut event = snapshot.events.remove(0);
+				event.start = boundary - chrono::Duration::hours(1);
+				event.end = boundary + chrono::Duration::hours(1);
+				event.all_day = false;
+				if task {
+					event.details.task_data = Some(crate::task_db::TaskData {
+						id: 101,
+						metadata: Default::default(),
+					});
+				}
+				state.config.calendar.app_calendar = Some(event.calendar_id.clone());
+				state.config.calendar.day_end_hour = hour;
+				snapshot.day = if next_day { next } else { day };
+				snapshot.events = vec![event.clone()];
+				state.calendar = calendar::Store::with_snapshot(snapshot);
+				state.calendar.hour_height = 60.0;
+				let metrics = Metrics::of(Size::new(600.0, 1440.0));
+				let mut ui = iced_test::Simulator::with_size(
+					Default::default(),
+					Size::new(600.0, 1440.0),
+					day_canvas(&state, &metrics, event.start, state.calendar.day, false),
+				);
+				let y = if next_day { 30.0 } else { 1410.0 };
+				let delta = if next_day { 30 } else { -30 };
+				ui.point_at(Point::new(90.0, y));
+				ui.simulate([iced::Event::Mouse(mouse::Event::ButtonPressed(
+					mouse::Button::Left,
+				))]);
+				ui.point_at(Point::new(90.0, y + delta as f32));
+				ui.simulate([
+					iced::Event::Mouse(mouse::Event::CursorMoved {
+						position: Point::new(90.0, y + delta as f32),
+					}),
+					iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+				]);
+				let messages: Vec<_> = ui.into_messages().collect();
+				assert!(
+					messages.iter().any(|m| matches!(m,
+						Message::Event(EventMessage::EventTimeChanged { start, end, .. })
+						if *start == event.start + chrono::Duration::minutes(delta)
+						&& *end == event.end + chrono::Duration::minutes(delta)
+					)),
+					"hour {hour}, task {task}, next day {next_day}: {messages:?}"
+				);
+			}
+		}
+	}
+}
+
+#[test]
+fn only_real_event_edges_resize_at_a_day_boundary() {
+	for (start, end, top, bottom) in [
+		(-60, 60, DragMode::Move, DragMode::ResizeEnd),
+		(1380, 1500, DragMode::ResizeStart, DragMode::Move),
+		(-60, 1500, DragMode::Move, DragMode::Move),
+	] {
+		let mut canvas = canvas_with_one_block();
+		canvas.blocks[0].start_min = start;
+		canvas.blocks[0].end_min = end;
+		let rect = canvas.block_rect(&canvas.blocks[0], 600.0);
+		assert!(rect.y >= 0.0 && rect.y + rect.height <= 1440.0);
+		assert_eq!(
+			canvas.grab(Point::new(rect.x + 4.0, rect.y + 1.0), 600.0),
+			Some((0, top))
+		);
+		assert_eq!(
+			canvas.grab(Point::new(rect.x + 4.0, rect.y + rect.height - 1.0), 600.0),
+			Some((0, bottom))
+		);
+		let drag = Drag {
+			id: "standup".into(),
+			mode: DragMode::Move,
+			origin_y: 0.0,
+			start_min: start,
+			end_min: end,
+			preview_start: start,
+			preview_end: end,
+		};
+		let preview = canvas.preview(&drag, 0.0);
+		assert_eq!((preview.preview_start, preview.preview_end), (start, end));
+		for mode in [DragMode::ResizeStart, DragMode::ResizeEnd] {
+			let resized = canvas.preview(
+				&Drag {
+					mode,
+					..drag.clone()
+				},
+				30.0,
+			);
+			match mode {
+				DragMode::ResizeStart => assert_eq!(resized.preview_end, end),
+				DragMode::ResizeEnd => assert_eq!(resized.preview_start, start),
+				_ => unreachable!(),
+			}
+		}
+	}
+}
+
+#[test]
 fn a_resize_cannot_invert_the_event() {
 	let canvas = canvas_with_one_block();
 	let drag = Drag {

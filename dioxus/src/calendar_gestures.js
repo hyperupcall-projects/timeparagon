@@ -23,6 +23,8 @@ function select(source) {
     preview.classList.add('calendar-selection');
     preview.setAttribute('aria-label', 'Selected event. Drag to move, or drag the start and end handles to resize.');
     for (const [edge, label] of [['start', 'Adjust start'], ['end', 'Adjust end']]) {
+        // A day boundary is not an event edge.
+        if (edge === 'start' ? +source.dataset.startMin < 0 : +source.dataset.endMin > 1440) continue;
         const handle = document.createElement('span');
         handle.className = 'calendar-resize ' + edge;
         handle.dataset.resize = edge;
@@ -50,8 +52,9 @@ const clock = minutes => {
 };
 function render() {
     const s = selected;
-    s.preview.style.top = (s.start + s.startDelta) / 1440 * s.grid.clientHeight + 'px';
-    s.preview.style.height = Math.max(22, (s.end - s.start + s.endDelta - s.startDelta) / 1440 * s.grid.clientHeight) + 'px';
+    const start = Math.max(0, s.start + s.startDelta), end = Math.min(1440, s.end + s.endDelta);
+    s.preview.style.top = start / 1440 * s.grid.clientHeight + 'px';
+    s.preview.style.height = Math.max(22, (end - start) / 1440 * s.grid.clientHeight) + 'px';
     s.when.classList[s.start + s.startDelta < 45 ? 'add' : 'remove']('below');
     s.when.textContent = clock(s.start + s.startDelta) + ' – ' + clock(s.end + s.endDelta);
 }
@@ -91,14 +94,14 @@ function update(x, y, id) {
         const columns = grids();
         const target = columns.find(grid => { const r = grid.getBoundingClientRect(); return x >= r.left && x <= r.right; }) || s.grid;
         const days = columns.indexOf(target) - columns.indexOf(drag.grid);
-        const shift = Math.max(-s.start, Math.min(1440 - s.end, delta));
+        const shift = Math.max(-Math.max(0, s.start), Math.min(1440 - Math.min(1440, s.end), delta));
         s.startDelta = shift; s.endDelta = shift;
         s.dayDelta = days * 1440;
         if (s.preview.parentNode !== target) target.append(s.preview);
     } else if (drag.mode === 'start') {
-        s.startDelta = Math.max(-s.start, Math.min(s.duration + s.endDelta - 5, drag.startDelta + delta));
+        s.startDelta = Math.max(-Math.max(0, s.start), Math.min(s.end - s.start + s.endDelta - 5, drag.startDelta + delta));
     } else {
-        s.endDelta = Math.min(1440 - s.end, Math.max(5 - s.duration + s.startDelta, drag.endDelta + delta));
+        s.endDelta = Math.min(1440 - Math.min(1440, s.end), Math.max(5 - (s.end - s.start) + s.startDelta, drag.endDelta + delta));
     }
     render();
     if (!raf) raf = requestAnimationFrame(autoScroll);

@@ -93,9 +93,8 @@ pub(super) fn day_canvas<'a>(
 
 	let blocks: Vec<Block> = timed
 		.iter()
-		.zip(spans.iter())
 		.zip(packed.iter())
-		.map(|((event, span), slot)| {
+		.map(|(event, slot)| {
 			let hidden = state.calendar.search.hides_details(event);
 			let time_block =
 				crate::timeblocking::is_block(event, &state.config.calendar) && !hidden;
@@ -117,8 +116,9 @@ pub(super) fn day_canvas<'a>(
 				} else {
 					calendar::time_format::event(event, state.config.appearance.time_format)
 				},
-				start_min: span.start_min,
-				end_min: span.end_min,
+				// Packing uses the visible slice; editing needs the entire interval.
+				start_min: minutes_into_day(event.start, day, offset),
+				end_min: minutes_into_day(event.end, day, offset),
 				column: slot.column,
 				columns: slot.columns,
 				column_span: slot.column_span,

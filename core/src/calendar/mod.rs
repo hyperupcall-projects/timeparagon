@@ -1883,7 +1883,7 @@ impl Store {
 						|| (event.start.date_naive() != crate::timeblocking::UNDATED
 							&& event.start.date_naive() == day)
 						|| (!settings.hide_overdue_tasks && crate::timeblocking::overdue(event)))
-					&& !omit_managed_tasks_event(event, &blocks, settings)
+					&& !omit_managed_tasks_event(event, &blocks, day, settings)
 			})
 	}
 
@@ -2184,7 +2184,7 @@ impl Store {
 					|| (event.start.date_naive() != crate::timeblocking::UNDATED
 						&& event.start.date_naive() == self.day)
 					|| (!settings.hide_overdue_tasks && crate::timeblocking::overdue(event)))
-				&& !omit_managed_tasks_event(event, &blocks, settings)
+				&& !omit_managed_tasks_event(event, &blocks, self.day, settings)
 		})
 	}
 
@@ -2300,7 +2300,7 @@ fn timed_in<'a>(
 		!event.all_day
 			&& event.start < end
 			&& event.end > start
-			&& !omit_managed_tasks_event(event, &blocks, settings)
+			&& !omit_managed_tasks_event(event, &blocks, day, settings)
 	})
 }
 
@@ -2314,6 +2314,7 @@ fn timed_in<'a>(
 fn omit_managed_tasks_event(
 	event: &Event,
 	time_blocks: &[Event],
+	day: NaiveDate,
 	settings: &CalendarSettings,
 ) -> bool {
 	let Some(managed) = settings.app_calendar.as_deref() else {
@@ -2321,7 +2322,14 @@ fn omit_managed_tasks_event(
 	};
 	event.is_calendar_task()
 		&& event.calendar_id == managed
-		&& crate::timeblocking::block_of(event, time_blocks, settings.day_start_hour()).is_some()
+		&& crate::timeblocking::block_of(
+			event,
+			time_blocks
+				.iter()
+				.filter(|block| event_on_day(block, day, settings.day_start_hour())),
+			settings.day_start_hour(),
+		)
+		.is_some()
 }
 
 impl Default for Store {

@@ -2218,7 +2218,9 @@ fn timed_event_view(
 		let mut open = open_block;
 		let planned: u32 = timed.tasks.iter().map(|task| task.minutes).sum();
 		let duration = (timed.end_min - timed.start_min).max(1) as f32;
-		let filled = (planned as f32 / duration).min(1.0) * 100.0;
+		let occupied_end =
+			(timed.scheduled_start_min as f32 + planned as f32).min(timed.end_min as f32);
+		let filled = ((occupied_end - timed.start_min as f32).max(0.0) / duration).min(1.0) * 100.0;
 		rsx! {
 			button {
 				key: "{id}",
@@ -2227,8 +2229,8 @@ fn timed_event_view(
 				"data-calendar-event": timed.event.id.clone(),
 				"data-event-calendar": timed.event.calendar_id.clone(),
 				"data-draggable": calendar_gestures::can_drag(&timed.event).to_string(),
-				"data-start-min": timed.start_min,
-				"data-end-min": timed.end_min,
+				"data-start-min": timed.scheduled_start_min,
+				"data-end-min": timed.scheduled_end_min,
 				"data-duration": (timed.event.end - timed.event.start).num_minutes(),
 				"data-before-start": timed.event.start.timestamp(),
 				"data-before-end": timed.event.end.timestamp(),
@@ -2255,8 +2257,8 @@ fn timed_event_view(
 				"data-calendar-event": timed.event.id.clone(),
 				"data-event-calendar": timed.event.calendar_id.clone(),
 				"data-draggable": calendar_gestures::can_drag(&timed.event).to_string(),
-				"data-start-min": timed.start_min,
-				"data-end-min": timed.end_min,
+				"data-start-min": timed.scheduled_start_min,
+				"data-end-min": timed.scheduled_end_min,
 				"data-duration": (timed.event.end - timed.event.start).num_minutes(),
 				"data-before-start": timed.event.start.timestamp(),
 				"data-before-end": timed.event.end.timestamp(),
@@ -2284,8 +2286,8 @@ fn timed_event_view(
 				"data-calendar-event": timed.event.id.clone(),
 				"data-event-calendar": timed.event.calendar_id.clone(),
 				"data-draggable": calendar_gestures::can_drag(&timed.event).to_string(),
-				"data-start-min": timed.start_min,
-				"data-end-min": timed.end_min,
+				"data-start-min": timed.scheduled_start_min,
+				"data-end-min": timed.scheduled_end_min,
 				"data-duration": (timed.event.end - timed.event.start).num_minutes(),
 				"data-before-start": timed.event.start.timestamp(),
 				"data-before-end": timed.event.end.timestamp(),
@@ -2310,7 +2312,7 @@ fn block_task_rows(timed: &TimedEvent, mut editing: Signal<Option<Event>>) -> Ve
 
 fn block_task_buttons(timed: &TimedEvent, on_open: EventHandler<Event>) -> Vec<Element> {
 	let top = scaled_px(timed.start_min as f32 * HOUR_HEIGHT / 60.0);
-	let duration = (timed.end_min - timed.start_min).max(1) as u32;
+	let duration = (timed.scheduled_end_min - timed.scheduled_start_min).max(1) as u32;
 	let (left, span) = column_position(timed.column, timed.columns, timed.column_span);
 	let width = time_block_width(span);
 	let mut elapsed = 0;
