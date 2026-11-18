@@ -299,6 +299,9 @@ fn Main() -> Element {
 	// one changes there, as when another device's night arrives by sync.
 	let mut stored_nights = use_signal(Vec::<calendar::Event>::new);
 	let mut database_sync_status = use_signal(timeparagon_core::database_sync::status);
+	// What database sync has done, for the Log sheet. The core keeps a bounded
+	// log with sequence numbers, so each poll only pulls the new entries.
+	let mut database_sync_log = use_signal(Vec::<timeparagon_core::database_sync::LogEntry>::new);
 	let search_state = use_signal(Search::default);
 	// A note's connection or an agenda row, waiting for its day to load.
 	let mut pending_open = use_signal(|| None::<String>);
@@ -412,6 +415,19 @@ fn Main() -> Element {
 			let status = timeparagon_core::database_sync::status();
 			if status != *database_sync_status.peek() {
 				database_sync_status.set(status);
+			}
+			let new_sync = timeparagon_core::database_sync::log_since(
+				database_sync_log
+					.peek()
+					.last()
+					.map_or(0, |entry| entry.sequence),
+			);
+			if !new_sync.is_empty() {
+				database_sync_log.with_mut(|log| {
+					log.extend(new_sync);
+					let excess = log.len().saturating_sub(100);
+					log.drain(..excess);
+				});
 			}
 			let days = cached_days.peek().loaded_days();
 			let range = days.first().copied().zip(days.last().copied());
@@ -1266,7 +1282,6 @@ fn Main() -> Element {
 	let more_sheet = show_more().then(|| {
 		rsx! {
 			more::MoreSheet {
-				status: database_sync_status(),
 				on_close: move |()| show_more.set(false),
 				on_open: move |item| {
 					show_more.set(false);
@@ -1742,6 +1757,10 @@ fn Main() -> Element {
 		}
 	});
 
+	// The Log sheet shows both what database sync did and what was sent to
+	// Google, as one list newest first.
+	let log_entries = move || merged_log(database_sync_log(), google_log());
+
 	rsx! {
 		document::Title { "TimeParagon · Day" }
 		document::Style { {style::STYLESHEET.as_str()} }
@@ -1813,9 +1832,9 @@ fn Main() -> Element {
 							button { class: "btn", onclick: move |_| show_log.set(false), "Close" }
 						}
 						div { class: "modal-body",
-							if google_log().is_empty() {p { "Nothing has been sent to Google yet." }}
-							for (sequence, time, text, failed) in google_log().into_iter().rev().map(|entry| (entry.sequence, entry.at.format("%H:%M:%S").to_string(), entry.text, entry.failed)) {
-								p { key: "{sequence}", class: if failed { "editor-error" } else { "" },
+							if log_entries().is_empty() {p { "Nothing has been logged yet." }}
+							for (time, text, failed, key) in log_entries() {
+								p { key: "{key}", class: if failed { "editor-error" } else { "" },
 									span { class: "hint", "{time} " }
 									"{text}"
 								}
@@ -2780,9 +2799,67 @@ pub(crate) fn css_color(color: timeparagon_core::Color) -> String {
 	)
 }
 
+/// Sync and Google log entries in one list, newest first, as the Log sheet
+/// shows them: time, text, whether it failed, and a key for the list.
+fn merged_log(
+	sync: Vec<timeparagon_core::database_sync::LogEntry>,
+	google: Vec<calendar::operations::LogEntry>,
+) -> Vec<(String, String, bool, String)> {
+	let mut entries: Vec<(chrono::DateTime<chrono::Local>, String, bool, String)> = sync
+		.into_iter()
+		.map(|entry| {
+			(
+				entry.at,
+				entry.text,
+				false,
+				format!("sync-{}", entry.sequence),
+			)
+		})
+		.chain(google.into_iter().map(|entry| {
+			(
+				entry.at,
+				entry.text,
+				entry.failed,
+				format!("google-{}", entry.sequence),
+			)
+		}))
+		.collect();
+	entries.sort_by(|a, b| b.0.cmp(&a.0));
+	entries
+		.into_iter()
+		.map(|(at, text, failed, key)| (at.format("%H:%M:%S").to_string(), text, failed, key))
+		.collect()
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use chrono::TimeZone;
+
+	#[test]
+	fn the_log_sheet_merges_sync_and_google_entries_newest_first() {
+		let at = chrono::Local
+			.with_ymd_and_hms(2026, 11, 18, 9, 0, 0)
+			.unwrap();
+		let sync = timeparagon_core::database_sync::LogEntry {
+			sequence: 7,
+			at,
+			text: "Database synced".into(),
+		};
+		let google = calendar::operations::LogEntry {
+			sequence: 3,
+			at: at + chrono::Duration::seconds(10),
+			text: "Saved task".into(),
+			failed: false,
+		};
+		let entries = merged_log(vec![sync], vec![google]);
+		assert_eq!(entries.len(), 2);
+		assert_eq!((&*entries[0].1, &*entries[0].3), ("Saved task", "google-3"));
+		assert_eq!(
+			(&*entries[1].1, &*entries[1].3),
+			("Database synced", "sync-7")
+		);
+	}
 
 	#[test]
 	fn event_links_and_deadline_chips_open_the_original_task() {

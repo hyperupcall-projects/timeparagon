@@ -4,11 +4,7 @@ use dioxus::prelude::*;
 use timeparagon_core::more_menu::{Item, PHONE_ROWS, Shape};
 
 #[component]
-pub fn MoreSheet(
-	status: String,
-	on_close: EventHandler<()>,
-	on_open: EventHandler<Item>,
-) -> Element {
+pub fn MoreSheet(on_close: EventHandler<()>, on_open: EventHandler<Item>) -> Element {
 	let tiles = PHONE_ROWS.iter().flat_map(|row| {
 		let wide = row.len() == 1;
 		row.iter().map(move |&item| (item, wide))
@@ -48,7 +44,6 @@ pub fn MoreSheet(
 							}
 						}
 					}
-					p { class: "hint", "{status}" }
 				}
 			}
 		}
@@ -134,7 +129,7 @@ mod tests {
 	fn render() -> String {
 		fn app() -> Element {
 			rsx! {
-				MoreSheet { status: "Synced", on_close: |_| {}, on_open: |_| {} }
+				MoreSheet { on_close: |_| {}, on_open: |_| {} }
 			}
 		}
 		let mut dom = VirtualDom::new(app);
@@ -164,7 +159,6 @@ mod tests {
 		}
 		assert_eq!(html.matches("more-badge").count(), 8, "{html}");
 		assert_eq!(html.matches("more-tile-wide").count(), 4, "{html}");
-		assert!(html.contains("Synced"), "{html}");
 	}
 
 	#[test]
