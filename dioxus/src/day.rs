@@ -116,6 +116,16 @@ pub fn today(settings: &CalendarSettings) -> NaiveDate {
 	calendar::day_at(timeparagon_core::clock::now(), settings.day_start_hour())
 }
 
+/// The day to load when opening an entry. All-day entries use their calendar
+/// date even when the timed grid starts after midnight.
+pub fn event_day(event: &Event, settings: &CalendarSettings) -> NaiveDate {
+	if event.all_day {
+		event.start.date_naive()
+	} else {
+		calendar::day_at(event.start, settings.day_start_hour())
+	}
+}
+
 /// Pulls calendars, events and Google Tasks for one day.
 ///
 /// Blocking: callers run this on a worker thread. It uses the same OAuth token
@@ -623,7 +633,7 @@ pub fn build_model(snapshot: &Snapshot, settings: &CalendarSettings) -> DayModel
 	let day = snapshot.day;
 	let hour_start = settings.day_start_hour();
 	let offset = settings.day_end_minutes();
-	let (view_start, view_end) = view_bounds(day, offset);
+	let (view_start, view_end) = view_bounds(day, hour_start);
 
 	let events = snapshot.events.clone();
 
@@ -660,6 +670,7 @@ pub fn build_model(snapshot: &Snapshot, settings: &CalendarSettings) -> DayModel
 	);
 	let all_day = all_day_events(
 		&display_events,
+		day,
 		&snapshot.calendars,
 		settings,
 		&loaded_blocks,
@@ -720,13 +731,13 @@ fn day_summary(snapshot: &Snapshot, events: &[Event], settings: &CalendarSetting
 	}
 }
 
-fn view_bounds(day: NaiveDate, offset: i32) -> (DateTime<Local>, DateTime<Local>) {
-	let start = Local
-		.from_local_datetime(&day.and_hms_opt(0, 0, 0).unwrap())
-		.earliest()
-		.unwrap_or_else(timeparagon_core::clock::now)
-		+ Duration::minutes(i64::from(offset));
-	(start, start + Duration::days(1))
+fn view_bounds(day: NaiveDate, hour: u32) -> (DateTime<Local>, DateTime<Local>) {
+	// Resolve each local boundary separately: a planning day can contain
+	// 23 or 25 elapsed hours when daylight saving changes.
+	(
+		calendar::at_clock(day, hour, 0),
+		calendar::at_clock(day.succ_opt().unwrap_or(day), hour, 0),
+	)
 }
 
 fn source_order(snapshot: &Snapshot, settings: &CalendarSettings) -> Vec<String> {
@@ -797,6 +808,7 @@ fn calendar_name(snapshot: &Snapshot, id: &str) -> String {
 
 fn all_day_events(
 	events: &[Event],
+	day: NaiveDate,
 	calendars: &[calendar::Calendar],
 	settings: &CalendarSettings,
 	block_events: &[Event],
@@ -805,6 +817,9 @@ fn all_day_events(
 	let mut all_day: Vec<_> = events
 		.iter()
 		.filter(|event| (!event.is_task() || calendar::deadline::is_marker(event)) && event.all_day)
+		// Range snapshots contain every visible date. Google's all-day end
+		// date is exclusive and is independent of the timed day boundary.
+		.filter(|event| event.start.date_naive() <= day && day < event.end.date_naive())
 		.filter(|event| calendar::event_enabled(calendars, event, settings))
 		.filter(|event| !managed_copy(event, settings, block_events))
 		.cloned()
@@ -1966,6 +1981,109 @@ mod tests {
 		assert_eq!(model.all_day[0].title, "Offsite");
 		assert!(model.timed.is_empty());
 		assert_eq!(model.task_groups[0].tasks[0].event.title, "Write");
+	}
+
+	#[test]
+	fn opening_all_day_events_keeps_their_date_with_a_later_day_boundary() {
+		let settings = CalendarSettings {
+			day_end_hour: 3,
+			..settings()
+		};
+		let mut event = event(
+			"offsite",
+			"work",
+			"Offsite",
+			at(0, 0),
+			at(0, 0) + Duration::days(1),
+		);
+		event.all_day = true;
+		assert_eq!(event_day(&event, &settings), day());
+		event.all_day = false;
+		assert_eq!(event_day(&event, &settings), day().pred_opt().unwrap());
+		event.start = at(3, 0);
+		assert_eq!(event_day(&event, &settings), day());
+	}
+
+	#[test]
+	fn all_day_events_in_a_shared_snapshot_belong_only_to_their_calendar_dates() {
+		let first = NaiveDate::from_ymd_opt(2026, 11, 17).unwrap();
+		let at = |offset, hour| calendar::at_clock(first + Duration::days(offset), hour, 0);
+		let all_day = |id, start, end| Event {
+			all_day: true,
+			..event(id, "work", id, at(start, 0), at(end, 0))
+		};
+		let mut snapshot = snapshot(vec![
+			all_day("17th only", 0, 1),
+			all_day("18th only", 1, 2),
+			all_day("19th only", 2, 3),
+			all_day("Spanning", -1, 2),
+			all_day("Already ended", -1, 0),
+			all_day("Hidden", 0, 3),
+			task("task", "Untimed task", None, 1, 30, false),
+		]);
+		snapshot.events[5].calendar_id = "hidden".into();
+		for hour in [0, 3] {
+			let settings = CalendarSettings {
+				day_end_hour: hour,
+				disabled: vec!["hidden".into()],
+				..settings()
+			};
+			for (offset, expected) in [
+				(0, vec!["17th only", "Spanning"]),
+				(1, vec!["18th only", "Spanning"]),
+				(2, vec!["19th only"]),
+				(3, vec![]),
+			] {
+				snapshot.day = first + Duration::days(offset);
+				let model = build_model(&snapshot, &settings);
+				let mut titles: Vec<_> = model
+					.all_day
+					.iter()
+					.map(|event| event.title.as_str())
+					.collect();
+				titles.sort();
+				assert_eq!(titles, expected, "date={}, boundary={hour}", snapshot.day);
+			}
+		}
+	}
+
+	#[test]
+	fn day_grid_bounds_follow_local_clock_boundaries_across_daylight_saving() {
+		// Run in a DST-observing TZ as well as UTC. Each endpoint must use
+		// that date's offset, including a non-midnight planning boundary.
+		for (year, month, day) in [(2026, 11, 1), (2027, 3, 14)] {
+			let transition = NaiveDate::from_ymd_opt(year, month, day).unwrap();
+			for day in [transition.pred_opt().unwrap(), transition] {
+				for hour in [0, 3] {
+					let (start, end) = view_bounds(day, hour);
+					assert_eq!(start, calendar::at_clock(day, hour, 0));
+					assert_eq!(end, calendar::at_clock(day.succ_opt().unwrap(), hour, 0));
+					let snapshot = Snapshot {
+						day,
+						..snapshot(vec![event(
+							"last half hour",
+							"work",
+							"Last half hour",
+							calendar::at_clock(day.succ_opt().unwrap(), hour, 0)
+								- Duration::minutes(30),
+							calendar::at_clock(day.succ_opt().unwrap(), hour, 0),
+						)])
+					};
+					let model = build_model(
+						&snapshot,
+						&CalendarSettings {
+							day_end_hour: hour,
+							..settings()
+						},
+					);
+					assert_eq!(
+						model.timed.len(),
+						1,
+						"last event missing on {day}, boundary={hour}"
+					);
+				}
+			}
+		}
 	}
 
 	#[test]

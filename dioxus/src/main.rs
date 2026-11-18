@@ -498,16 +498,7 @@ fn Main() -> Element {
 				.filter(|snapshot| snapshot.day == day)
 		});
 		// A note connects to a task by its task ID rather than its event's.
-		let found = known.and_then(|snapshot| {
-			snapshot.events.into_iter().find(|event| {
-				event.id == id
-					|| event
-						.details
-						.task_data
-						.as_ref()
-						.is_some_and(|data| data.id.to_string() == id)
-			})
-		});
+		let found = known.and_then(|snapshot| linked_event(snapshot, &id));
 		if let Some(event) = found {
 			pending_open.set(None);
 			editing.set(Some(event));
@@ -1068,12 +1059,12 @@ fn Main() -> Element {
 				search: search_state.read().clone(),
 				on_day: move |day| day_nav.go_to(day, day == day::today(&config.peek().calendar)),
 				on_block: move |event: Event| {
-					let day = calendar::day_at(event.start, config.peek().calendar.day_start_hour());
+					let day = day::event_day(&event, &config.peek().calendar);
 					day_nav.go_to(day, day == day::today(&config.peek().calendar));
 					selected_block.set(Some(event.id));
 				},
 				on_open: move |event: Event| {
-					let day = calendar::day_at(event.start, config.peek().calendar.day_start_hour());
+					let day = day::event_day(&event, &config.peek().calendar);
 					day_nav.go_to(day, day == day::today(&config.peek().calendar));
 					pending_open.set(Some(event.id));
 				},
@@ -1136,7 +1127,7 @@ fn Main() -> Element {
 					day_nav.go_to(day, day == day::today(&config.peek().calendar));
 				},
 				on_open: move |event: Event| {
-					let day = calendar::day_at(event.start, config.peek().calendar.day_start_hour());
+					let day = day::event_day(&event, &config.peek().calendar);
 					show_agenda.set(false);
 					agenda_filter.set(None);
 					page.set(Page::Do);
@@ -1799,6 +1790,19 @@ fn nav_tab(
 			"{label}"
 		}
 	}
+}
+
+/// Resolve display-only deadline chips and note links to their stored entry.
+fn linked_event(snapshot: calendar::Snapshot, id: &str) -> Option<Event> {
+	let id = calendar::deadline::source_id(id);
+	snapshot.events.into_iter().find(|event| {
+		event.id == id
+			|| event
+				.details
+				.task_data
+				.as_ref()
+				.is_some_and(|data| data.id.to_string() == id)
+	})
 }
 
 /// Moves the view to another day.
@@ -2656,6 +2660,29 @@ pub(crate) fn css_color(color: timeparagon_core::Color) -> String {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn event_links_and_deadline_chips_open_the_original_task() {
+		let mut snapshot = calendar::sample_snapshot();
+		let mut task = snapshot.events.remove(0);
+		task.id = "task:linked".into();
+		task.details.task_data = Some(timeparagon_core::task_db::TaskData {
+			id: 42,
+			metadata: tb::Metadata {
+				deadline: Some(calendar::deadline::Deadline {
+					date: snapshot.day.succ_opt().unwrap(),
+					time: None,
+				}),
+				..Default::default()
+			},
+		});
+		snapshot.events = vec![task.clone()];
+		let marker = calendar::deadline::marker(&task).unwrap();
+		for id in [&task.id, "42", &marker.id] {
+			assert_eq!(linked_event(snapshot.clone(), id), Some(task.clone()));
+		}
+		assert_eq!(linked_event(snapshot, "deleted"), None);
+	}
 
 	#[test]
 	fn a_short_event_has_room_for_its_title_only() {

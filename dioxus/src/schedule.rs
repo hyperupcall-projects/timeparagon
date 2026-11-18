@@ -447,7 +447,7 @@ mod tests {
 			&settings,
 			TimeFormat::TwelveHour,
 			1.0,
-			3,
+			dates.len() as u8,
 			EventHandler::new(|_| {}),
 			EventHandler::new(|_| {}),
 			None,
@@ -490,6 +490,9 @@ mod tests {
 				event("Sunday meeting", at(first, 9), at(first, 10), false),
 				event("Monday meeting", at(second, 9), at(second, 10), false),
 				event("Overnight", at(first, 23), at(second, 1), false),
+				event("Sunday holiday", at(first, 0), at(second, 0), true),
+				event("Monday holiday", at(second, 0), at(third, 0), true),
+				event("Two-day holiday", at(first, 0), at(third, 0), true),
 				event(
 					"Tuesday holiday",
 					at(third, 0),
@@ -511,7 +514,35 @@ mod tests {
 		);
 		dom.rebuild_in_place();
 		let html = dioxus_ssr::render(&dom);
-		assert!(html.contains("Tuesday holiday"));
+		let heads = html
+			.split("class=\"planner-column-head\"")
+			.skip(1)
+			.collect::<Vec<_>>();
+		assert_eq!(heads.len(), 3);
+		for (head, expected, absent) in [
+			(
+				heads[0],
+				vec!["Sunday holiday", "Two-day holiday"],
+				vec!["Monday holiday", "Tuesday holiday"],
+			),
+			(
+				heads[1],
+				vec!["Monday holiday", "Two-day holiday"],
+				vec!["Sunday holiday", "Tuesday holiday"],
+			),
+			(
+				heads[2].split("class=\"timeline-scroll\"").next().unwrap(),
+				vec!["Tuesday holiday"],
+				vec!["Sunday holiday", "Monday holiday", "Two-day holiday"],
+			),
+		] {
+			for title in expected {
+				assert!(head.contains(title), "{title} missing from its column");
+			}
+			for title in absent {
+				assert!(!head.contains(title), "{title} repeated in another column");
+			}
+		}
 		assert_eq!(html.matches("class=\"gutter\"").count(), 1);
 		let sunday = html
 			.split("aria-label=\"2026-11-08\"")
