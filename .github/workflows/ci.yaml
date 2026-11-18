@@ -96,5 +96,6 @@ jobs:
       - run: npm test
         working-directory: slack
       - run: node tests/map_picker.mjs
+      - run: node tests/calendar_gestures.mjs
       - run: python3 packaging/test_install.py
       - run: python3 scripts/test_clippy_fix.py

@@ -1,8 +1,12 @@
-// Touch events keep scrolling natural until the hold has armed. Pointer events
+// Touch events keep scrolling natural until a hold or pinch arms. Pointer events
 // cover mouse/pen; touch has its own path to avoid native pointercancel on pan.
 window.__calendarGesture?.abort();
 const controller = new AbortController(), signal = controller.signal;
 let pending = null, timer = null, selected = null, drag = null, quietUntil = 0, raf = 0;
+let pinch = null, pinching = false;
+let zoom = +(document.documentElement.style.getPropertyValue('--calendar-zoom') || 1);
+// Only the timeline's vertical geometry scales; text and controls stay readable.
+const MIN_ZOOM = 0.5, MAX_ZOOM = 3;
 const grids = () => [...document.querySelectorAll('.grid[data-calendar-day]')];
 const clearHold = () => { clearTimeout(timer); timer = null; pending = null; };
 function deselect() {
@@ -121,17 +125,63 @@ function finish(cancelled, id) {
     s.saving = true; s.preview.classList.add('saving'); s.when.textContent = 'Saving…';
     dioxus.send({ id: s.id, calendar: s.calendar, before_start: s.before_start, before_end: s.before_end, start_delta, end_delta });
 }
+const distance = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+function startPinch(e) {
+    if (e.touches.length !== 2 || selected?.saving || document.querySelector('.modal-backdrop')) return;
+    const [a, b] = e.touches;
+    const scroller = a.target.closest('.timeline-scroll');
+    if (!scroller || b.target.closest('.timeline-scroll') !== scroller) return;
+    const timeline = scroller.querySelector('.timeline');
+    const span = distance(a, b);
+    if (!timeline || span < 1) return;
+    deselect();
+    pinching = true;
+    const midpoint = (a.clientY + b.clientY) / 2;
+    pinch = { scroller, timeline, ids: [a.identifier, b.identifier], span, zoom,
+        // A fraction of the day survives both scaling and midpoint movement.
+        anchor: (midpoint - timeline.getBoundingClientRect().top) / timeline.clientHeight };
+}
+function movePinch(e) {
+    if (!pinch || e.touches.length !== 2) return;
+    const [a, b] = pinch.ids.map(id => [...e.touches].find(t => t.identifier === id));
+    if (!a || !b || !pinch.timeline.isConnected) { pinch = null; return; }
+    zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, pinch.zoom * distance(a, b) / pinch.span));
+    document.documentElement.style.setProperty('--calendar-zoom', zoom);
+    const {scroller, timeline, anchor} = pinch;
+    const midpoint = (a.clientY + b.clientY) / 2;
+    scroller.scrollTop += timeline.getBoundingClientRect().top + anchor * timeline.clientHeight - midpoint;
+}
+function finishPinch() {
+    pinch = null;
+    if (!pinching) return;
+    pinching = false;
+    quietUntil = Date.now() + 600;
+    // Refit event labels once, keeping the native bridge out of animation frames.
+    dioxus.send({zoom});
+}
 document.addEventListener('touchstart', e => {
+    if (e.touches.length > 1) {
+        startPinch(e);
+        if (pinching) { e.preventDefault(); pinch = e.touches.length === 2 ? pinch : null; }
+        deselect(); return;
+    }
+    if (pinching) { e.preventDefault(); return; }
     if (e.touches.length !== 1) { deselect(); return; }
     const t = e.changedTouches[0]; begin(e.target, t.clientX, t.clientY, t.identifier);
-}, {signal, passive: true});
+}, {signal, passive: false});
 document.addEventListener('touchmove', e => {
+    if (pinching) { e.preventDefault(); movePinch(e); return; }
     const t = [...e.touches].find(t => t.identifier === (drag?.id ?? pending?.id));
     if (!t) return;
     if (drag) e.preventDefault();
     update(t.clientX, t.clientY, t.identifier);
 }, {signal, passive: false});
 for (const type of ['touchend', 'touchcancel']) document.addEventListener(type, e => {
+    if (pinching) {
+        pinch = null;
+        if (!e.touches.length) finishPinch();
+        return;
+    }
     for (const t of e.changedTouches) finish(type === 'touchcancel', t.identifier);
 }, {signal});
 document.addEventListener('pointerdown', e => {
@@ -142,10 +192,10 @@ for (const type of ['pointerup', 'pointercancel']) document.addEventListener(typ
     if (e.pointerType !== 'touch') finish(type === 'pointercancel', e.pointerId);
 }, {signal});
 document.addEventListener('click', e => {
-    if (Date.now() < quietUntil || e.target.closest('.calendar-selection')) { e.preventDefault(); e.stopImmediatePropagation(); }
+    if (pinching || Date.now() < quietUntil || e.target.closest('.calendar-selection')) { e.preventDefault(); e.stopImmediatePropagation(); }
 }, {signal, capture: true});
 document.addEventListener('contextmenu', e => { if (pending || selected) e.preventDefault(); }, {signal});
 document.addEventListener('keydown', e => { if (e.key === 'Escape') deselect(); }, {signal});
-window.addEventListener('blur', deselect, {signal});
-window.__calendarGesture = { saved: deselect, abort: () => { deselect(); controller.abort(); } };
+window.addEventListener('blur', () => { finishPinch(); deselect(); }, {signal});
+window.__calendarGesture = { saved: deselect, abort: () => { finishPinch(); deselect(); controller.abort(); } };
 await new Promise(() => {});

@@ -38,6 +38,7 @@ fn strip_dates(anchor: NaiveDate, expanded: bool, first: FirstDayOfWeek) -> Vec<
 #[component]
 pub fn Planner(
 	config: Signal<Config>,
+	zoom: Signal<f32>,
 	settings: CalendarSettings,
 	mut view: Signal<PlanView>,
 	mut anchor: Signal<NaiveDate>,
@@ -99,12 +100,6 @@ pub fn Planner(
 		settings.first_day_of_week,
 	);
 	let heading = calendar::month_heading(calendar::first_of_month(selected));
-	let gesture_context = loaded
-		.read()
-		.as_ref()
-		.and_then(|result| result.as_ref().ok())
-		.filter(|(requested, _)| *requested == dates)
-		.map(|(_, snapshot)| day::EditContext::new(&config.read(), snapshot));
 	let snapshot = loaded
 		.read()
 		.as_ref()
@@ -117,11 +112,16 @@ pub fn Planner(
 				.as_ref()
 				.filter(|(wanted, _)| *wanted == dates)
 				.map(|(_, snapshot)| snapshot.clone())
-		})
-		.map(|mut snapshot| {
-			crate::habits::name_events(&mut snapshot.events);
-			day::filter_snapshot(&snapshot, &search, &settings)
 		});
+	// Cached grids remain interactive while refreshing or offline. Keep the
+	// complete snapshot for edits, before narrowing what is drawn to a search.
+	let gesture_context = snapshot
+		.as_ref()
+		.map(|snapshot| day::EditContext::new(&config.read(), snapshot));
+	let snapshot = snapshot.map(|mut snapshot| {
+		crate::habits::name_events(&mut snapshot.events);
+		day::filter_snapshot(&snapshot, &search, &settings)
+	});
 	let error = loaded
 		.read()
 		.as_ref()
@@ -234,10 +234,10 @@ pub fn Planner(
 			}
 			if !full_month && !agenda_mode {
 				if let Some(context) = gesture_context {
-					crate::calendar_gestures::Gestures { context, on_saved: move |_| revision.set(revision() + 1) }
+					crate::calendar_gestures::Gestures { context, zoom, on_saved: move |_| revision.set(revision() + 1) }
 				}
 				if let Some(snapshot) = snapshot {
-					{schedule_grid(&snapshot, &dates, &settings, time_format, shown_count, on_open, on_block, (!search.is_active()).then(|| config.read().clone()).as_ref())}
+					{schedule_grid(&snapshot, &dates, &settings, time_format, zoom(), shown_count, on_open, on_block, (!search.is_active()).then(|| config.read().clone()).as_ref())}
 				}
 			}
 		}
@@ -250,6 +250,7 @@ fn schedule_grid(
 	dates: &[NaiveDate],
 	settings: &CalendarSettings,
 	time_format: TimeFormat,
+	zoom: f32,
 	count: u8,
 	on_open: EventHandler<Event>,
 	on_block: EventHandler<Event>,
@@ -263,7 +264,7 @@ fn schedule_grid(
 			day::build_model(&snapshot, settings)
 		})
 		.collect();
-	let height = 24.0 * HOUR_HEIGHT;
+	let height = crate::scaled_px(24.0 * HOUR_HEIGHT);
 	let hour_start = settings.day_start_hour();
 	rsx! {
 		div { class: "planner-schedule", "data-days": "{count}",
@@ -286,10 +287,10 @@ fn schedule_grid(
 				}
 			}
 			div { class: "timeline-scroll",
-				div { class: "timeline planner-timeline", style: "height:{height}px;grid-template-columns:44px repeat({count}, minmax(0, 1fr));",
+				div { class: "timeline planner-timeline", style: "height:{height};grid-template-columns:44px repeat({count}, minmax(0, 1fr));",
 					div { class: "gutter",
 						for row in 0..24u32 {
-							span { class: "hour-label", style: "top:{row as f32 * HOUR_HEIGHT + 2.0}px;",
+							span { class: "hour-label", style: "top:calc({crate::scaled_px(row as f32 * HOUR_HEIGHT)} + 2px);",
 								"{time_format::hour(day::hour_at(hour_start, row), time_format)}"
 							}
 						}
@@ -300,7 +301,7 @@ fn schedule_grid(
 							"data-hour-start": model.hour_start,
 							"data-clock": if time_format == TimeFormat::TwelveHour { "12" } else { "24" },
 							for row in 0..48 {
-								div { class: if row % 2 == 0 { "hour-line" } else { "hour-line half-hour" }, style: "top:{row as f32 * HOUR_HEIGHT / 2.0}px;" }
+								div { class: if row % 2 == 0 { "hour-line" } else { "hour-line half-hour" }, style: "top:{crate::scaled_px(row as f32 * HOUR_HEIGHT / 2.0)};" }
 							}
 							for timed in &model.timed {
 								{
@@ -322,7 +323,7 @@ fn schedule_grid(
 											"data-before-end": timed.event.end.timestamp(),
 											title: "{timed.title}\n{crate::event_when(&timed.event, time_format)}",
 											onclick: move |_| { if is_block { on_block.call(opened.clone()); } else { on_open.call(opened.clone()); } },
-											{crate::event_label(timed, crate::event_height(timed), time_format)}
+											{crate::event_label(timed, crate::event_height(timed, zoom), time_format)}
 											if is_block { span { class: "block-plan", "Plan" } }
 										}
 									}
@@ -337,10 +338,10 @@ fn schedule_grid(
 								}
 							}
 							if let Some(minutes) = model.now_min {
-								div { id: "now-line", class: "now-line", style: "top:{minutes as f32 * HOUR_HEIGHT / 60.0}px;", span { class: "now-dot" } }
+								div { id: "now-line", class: "now-line", style: "top:{crate::scaled_px(minutes as f32 * HOUR_HEIGHT / 60.0)};", span { class: "now-dot" } }
 							}
 							if index == 0 {
-								div { id: "timeline-anchor", class: "anchor", style: "top:{8.0 * HOUR_HEIGHT}px;" }
+								div { id: "timeline-anchor", class: "anchor", style: "top:{crate::scaled_px(8.0 * HOUR_HEIGHT)};" }
 							}
 						}
 					}
@@ -371,9 +372,10 @@ mod tests {
 		});
 		let anchor = use_signal(move || day);
 		let revision = use_signal(|| 0);
+		let zoom = use_signal(|| 1.0f32);
 		let config = use_signal(Config::default);
 		rsx! { Planner {
-			config, settings: CalendarSettings::default(), view, anchor, today: day,
+			config, zoom, settings: CalendarSettings::default(), view, anchor, today: day,
 			revision, time_format: TimeFormat::TwelveHour, search: Search::default(),
 			on_day: |_| {}, on_open: |_| {}, on_block: |_| {},
 		} }
@@ -437,6 +439,7 @@ mod tests {
 			&dates,
 			&settings,
 			TimeFormat::TwelveHour,
+			1.0,
 			3,
 			EventHandler::new(|_| {}),
 			EventHandler::new(|_| {}),

@@ -42,7 +42,7 @@ use timeparagon_core::timeblocking as tb;
 use day::{DayModel, EditContext, Theme, TimeBlock, TimedEvent};
 use plan::{PlanView, TaskTab};
 
-/// Height of one hour on the timeline, in pixels.
+/// Default height of one hour on the timeline, in pixels.
 const HOUR_HEIGHT: f32 = 60.0;
 /// The shortest an event is drawn, so a finger can land on it.
 const EVENT_MIN_HEIGHT: f32 = 22.0;
@@ -211,6 +211,8 @@ fn Main() -> Element {
 
 	let mut current_day = use_signal(|| day::today(&settings));
 	let mut revision = use_signal(|| 0u32);
+	// Shared by Do and Plan for the lifetime of this app session.
+	let calendar_zoom = use_signal(|| 1.0f32);
 	let mut selected_block = use_signal(|| None::<String>);
 	let mut editing = use_signal(|| None::<Event>);
 	let block_writing = use_signal(|| false);
@@ -875,10 +877,11 @@ fn Main() -> Element {
 							div { class: "sidebar-scroll", {lists} }
 						}
 					}
-					{timeline(model, &travel, &settings, time_format, selected_block, editing, sleep_timer)}
+					{timeline(model, &travel, &settings, time_format, selected_block, editing, sleep_timer, calendar_zoom())}
 					if let Some(snapshot) = &snapshot {
 						calendar_gestures::Gestures {
 							context: EditContext::new(&config.read(), snapshot),
+							zoom: calendar_zoom,
 							on_saved: move |_| revision.set(revision() + 1),
 						}
 					}
@@ -1015,6 +1018,7 @@ fn Main() -> Element {
 			}
 			schedule::Planner {
 				config,
+				zoom: calendar_zoom,
 				settings: settings.clone(),
 				view: plan_view,
 				anchor: plan_anchor,
@@ -2014,17 +2018,18 @@ fn timeline(
 	open_block: Signal<Option<String>>,
 	editing: Signal<Option<Event>>,
 	sleep_timer: SleepTimer,
+	zoom: f32,
 ) -> Element {
-	let grid_height = 24.0 * HOUR_HEIGHT;
+	let grid_height = scaled_px(24.0 * HOUR_HEIGHT);
 	let hours: Vec<Element> = (0..24u32)
 		.map(|row| {
-			let top = row as f32 * HOUR_HEIGHT + 2.0;
+			let top = scaled_px(row as f32 * HOUR_HEIGHT);
 			let label = time_format::hour(day::hour_at(model.hour_start, row), time_format);
 			rsx! {
 				span {
 					key: "label-{row}",
 					class: "hour-label",
-					style: "top: {top}px;",
+					style: "top: calc({top} + 2px);",
 					"{label}"
 				}
 			}
@@ -2032,16 +2037,16 @@ fn timeline(
 		.collect();
 	let lines: Vec<Element> = (0..24u32)
 		.map(|row| {
-			let top = row as f32 * HOUR_HEIGHT;
+			let top = scaled_px(row as f32 * HOUR_HEIGHT);
 			rsx! {
-				div { key: "line-{row}", class: "hour-line", style: "top: {top}px;" }
+				div { key: "line-{row}", class: "hour-line", style: "top: {top};" }
 			}
 		})
 		.collect();
 	let events: Vec<Element> = model
 		.timed
 		.iter()
-		.map(|timed| timed_event_view(timed, time_format, open_block, editing, sleep_timer))
+		.map(|timed| timed_event_view(timed, time_format, open_block, editing, sleep_timer, zoom))
 		.collect();
 	let block_tasks: Vec<Element> = model
 		.timed
@@ -2060,9 +2065,9 @@ fn timeline(
 		.collect();
 
 	let now_line = model.now_min.map(|minutes| {
-		let top = minutes as f32 * HOUR_HEIGHT / 60.0;
+		let top = scaled_px(minutes as f32 * HOUR_HEIGHT / 60.0);
 		rsx! {
-			div { id: "now-line", class: "now-line", style: "top: {top}px;",
+			div { id: "now-line", class: "now-line", style: "top: {top};",
 				span { class: "now-dot" }
 			}
 		}
@@ -2074,7 +2079,7 @@ fn timeline(
 			}
 		}
 	});
-	let anchor_top = 8.0 * HOUR_HEIGHT;
+	let anchor_top = scaled_px(8.0 * HOUR_HEIGHT);
 
 	let summary = model.summary;
 	let summary_class = if summary.needs_attention() {
@@ -2095,9 +2100,9 @@ fn timeline(
 			}
 			div { class: "timeline-card",
 				div { class: "timeline-scroll",
-					div { class: "timeline", style: "height: {grid_height}px;",
-						div { class: "gutter", style: "height: {grid_height}px;", {hours.into_iter()} }
-						div { class: "grid", style: "height: {grid_height}px;",
+					div { class: "timeline", style: "height: {grid_height};",
+						div { class: "gutter", style: "height: {grid_height};", {hours.into_iter()} }
+						div { class: "grid", style: "height: {grid_height};",
 							"data-calendar-day": model.day.to_string(),
 							"data-hour-start": model.hour_start,
 							"data-clock": if time_format == TimeFormat::TwelveHour { "12" } else { "24" },
@@ -2110,7 +2115,7 @@ fn timeline(
 							div {
 								id: "timeline-anchor",
 								class: "anchor",
-								style: "top: {anchor_top}px;"
+								style: "top: {anchor_top};"
 							}
 						}
 					}
@@ -2190,12 +2195,13 @@ fn timed_event_view(
 	open_block: Signal<Option<String>>,
 	editing: Signal<Option<Event>>,
 	sleep_timer: SleepTimer,
+	zoom: f32,
 ) -> Element {
 	let mut editing = editing;
 	let opened = timed.event.clone();
 	let id = timed.event.id.clone();
 	let style = event_style(timed);
-	let height = event_height(timed);
+	let height = event_height(timed, zoom);
 	let tooltip = format!(
 		"{}\n{}\n{}",
 		timed.title,
@@ -2299,7 +2305,7 @@ fn block_task_rows(timed: &TimedEvent, mut editing: Signal<Option<Event>>) -> Ve
 }
 
 fn block_task_buttons(timed: &TimedEvent, on_open: EventHandler<Event>) -> Vec<Element> {
-	let top = timed.start_min as f32 * HOUR_HEIGHT / 60.0;
+	let top = scaled_px(timed.start_min as f32 * HOUR_HEIGHT / 60.0);
 	let duration = (timed.end_min - timed.start_min).max(1) as u32;
 	let (left, span) = column_position(timed.column, timed.columns, timed.column_span);
 	let width = time_block_width(span);
@@ -2318,7 +2324,7 @@ fn block_task_buttons(timed: &TimedEvent, on_open: EventHandler<Event>) -> Vec<E
             let icon = status_icon(task.status);
             let title = tb::task_label(&task.event);
             let minutes = task.minutes;
-            let row_top = top + index as f32 * look::TIME_BLOCK_ROW;
+            let row_offset = index as f32 * look::TIME_BLOCK_ROW;
             let inset = look::EVENT_GAP / 2.0;
             let gap = look::TIME_BLOCK_ROW_GAP;
             let opened = task.event.clone();
@@ -2328,7 +2334,7 @@ fn block_task_buttons(timed: &TimedEvent, on_open: EventHandler<Event>) -> Vec<E
                     class: "{class}",
                     "data-sending": task.event.details.sending,
                     disabled: task.event.details.sending,
-                    style: "top:{row_top:.1}px;left:calc({left:.4}% + {inset}px + {width} + {gap}px);width:{width};",
+                    style: "top:calc({top} + {row_offset:.1}px);left:calc({left:.4}% + {inset}px + {width} + {gap}px);width:{width};",
                     onclick: move |_| on_open.call(opened.clone()),
                     "{icon} {title} · {minutes}m"
                 }
@@ -2465,8 +2471,14 @@ pub(crate) fn status_icon(status: tb::TaskStatus) -> &'static str {
 	}
 }
 
-fn event_height(timed: &TimedEvent) -> f32 {
-	((timed.end_min - timed.start_min) as f32 * HOUR_HEIGHT / 60.0).max(EVENT_MIN_HEIGHT)
+/// Scale calendar geometry without scaling fonts or finger targets. The webview
+/// updates this variable directly during a pinch, avoiding native round trips.
+fn scaled_px(pixels: f32) -> String {
+	format!("calc({pixels:.4}px * var(--calendar-zoom, 1))")
+}
+
+fn event_height(timed: &TimedEvent, zoom: f32) -> f32 {
+	((timed.end_min - timed.start_min) as f32 * HOUR_HEIGHT * zoom / 60.0).max(EVENT_MIN_HEIGHT)
 }
 
 /// Where a column starts and how wide its span is, as percentages of the grid.
@@ -2489,8 +2501,9 @@ fn time_block_width(span: f32) -> String {
 }
 
 fn event_style(timed: &TimedEvent) -> String {
-	let top = timed.start_min as f32 * HOUR_HEIGHT / 60.0;
-	let height = event_height(timed);
+	let top = scaled_px(timed.start_min as f32 * HOUR_HEIGHT / 60.0);
+	let duration = scaled_px((timed.end_min - timed.start_min) as f32 * HOUR_HEIGHT / 60.0);
+	let height = format!("max({EVENT_MIN_HEIGHT}px, {duration})");
 	let (left, span) = column_position(timed.column, timed.columns, timed.column_span);
 	let width = if timed.time_block {
 		time_block_width(span)
@@ -2502,15 +2515,17 @@ fn event_style(timed: &TimedEvent) -> String {
 	let ink = css_color(calendar::colors::on_color(timed.color));
 
 	format!(
-		"top:{top:.1}px;height:{height:.1}px;left:calc({left:.4}% + {inset}px);width:{width};background:{background};color:{ink};"
+		"top:{top};height:{height};left:calc({left:.4}% + {inset}px);width:{width};background:{background};color:{ink};"
 	)
 }
 
 /// Where a trip's box sits: ending at the start of the event it leads to, in
 /// that event's column. Over a time block it is half as wide, as on the desktop.
 fn travel_style(trip: &day::TravelBox) -> String {
-	let height = (trip.minutes as f32 * HOUR_HEIGHT / 60.0).max(look::TRAVEL_MIN_HEIGHT);
-	let top = (trip.anchor_min as f32 * HOUR_HEIGHT / 60.0 - height).max(0.0);
+	let duration = scaled_px(trip.minutes as f32 * HOUR_HEIGHT / 60.0);
+	let height = format!("max({}px, {duration})", look::TRAVEL_MIN_HEIGHT);
+	let anchor = scaled_px(trip.anchor_min as f32 * HOUR_HEIGHT / 60.0);
+	let top = format!("max(0px, calc({anchor} - {height}))");
 	let (left, span) = column_position(trip.column, trip.columns, trip.column_span);
 	let width = if trip.time_block {
 		time_block_width(span)
@@ -2522,7 +2537,7 @@ fn travel_style(trip: &day::TravelBox) -> String {
 	let ink = css_color(calendar::colors::on_color(calendar::colors::TRAVEL));
 
 	format!(
-		"top:{top:.1}px;height:{height:.1}px;left:calc({left:.4}% + {inset}px);width:{width};background:{background};color:{ink};"
+		"top:{top};height:{height};left:calc({left:.4}% + {inset}px);width:{width};background:{background};color:{ink};"
 	)
 }
 

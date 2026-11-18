@@ -515,6 +515,9 @@ textarea {
     overflow-x: hidden;
     overflow-y: auto;
     overscroll-behavior-y: contain;
+    /* One finger scrolls; the gesture controller owns two-finger zoom. */
+    touch-action: pan-y;
+    overflow-anchor: none;
 }
 
 .timeline-scroll::-webkit-scrollbar,

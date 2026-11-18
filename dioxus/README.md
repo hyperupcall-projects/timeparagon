@@ -8,6 +8,10 @@ own screen and the rest of the app in sheets over it:
   or drag the circular top/bottom handles to change just the start/end. Times
   snap to five minutes; tap elsewhere to dismiss the handles. A gesture changes
   only that occurrence; use the editor to change a repeating series.
+- Pinch with two fingers on the timed grid to zoom in or out, in Do, Day or
+  Multi-day. The time under your fingers stays in place. Zoom changes the
+  spacing between hours and is kept when switching days or views until the app
+  closes; text and controls keep their normal size.
 - Adding tasks (with the desktop's quick-add keywords), events and time blocks.
 - Notes, with Markdown, colors and connections, kept as Markdown files in the
   notes directory chosen on each device.

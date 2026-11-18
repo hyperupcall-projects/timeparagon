@@ -4,7 +4,9 @@ import vm from 'node:vm';
 import assert from 'node:assert/strict';
 const script = await readFile(new URL('../dioxus/src/calendar_gestures.js', import.meta.url), 'utf8');
 function setup() {
-    const listeners = {}, timers = new Map(), writes = [];
+    const listeners = {}, timers = new Map(), writes = [], options = {};
+    const properties = new Map();
+    const rootStyle = {getPropertyValue: name => properties.get(name) || '', setProperty: (name, value) => properties.set(name, String(value))};
     let serial = 0;
     class Node {
         constructor(classes = '', dataset = {}) {
@@ -19,6 +21,8 @@ function setup() {
         append(n) { n.remove(); this.children.push(n); n.parentNode = this; }
         remove() { if (this.parentNode) this.parentNode.children = this.parentNode.children.filter(n => n !== this); this.parentNode = null; }
         contains(n) { return n === this || this.children.some(c => c.contains(n)); }
+        querySelector() { return timeline; }
+        get clientHeight() { return 1440 * +(properties.get('--calendar-zoom') || 1); }
         closest(selector) {
             const matches = selector === '[data-resize]' ? this.dataset.resize
                 : selector === '[data-calendar-event][data-draggable="true"]' ? this.dataset.calendarEvent && this.dataset.draggable === 'true'
@@ -31,11 +35,14 @@ function setup() {
         }
     }
     const scroller = new Node('timeline-scroll'); scroller.scrollTop = 0;
+    const timeline = new Node('timeline'); scroller.append(timeline);
     const first = new Node('grid', {hourStart: '0', clock: '24'}), second = new Node('grid', {hourStart: '0', clock: '24'});
-    first.clientHeight = second.clientHeight = 1440; scroller.append(first); scroller.append(second);
+    timeline.append(first); timeline.append(second);
     const source = new Node('grid-event', {calendarEvent: 'event', eventCalendar: 'work', draggable: 'true', startMin: '540', endMin: '600', duration: '60', beforeStart: '1000', beforeEnd: '4600'});
     first.append(source);
-    const doc = {querySelector: () => null, querySelectorAll: () => [first, second], createElement: () => new Node(), addEventListener: (type, fn) => { listeners[type] = fn; }};
+    const doc = {documentElement: {style: rootStyle}, querySelector: () => doc.modalOpen ? {} : null,
+        querySelectorAll: () => [first, second], createElement: () => new Node(),
+        addEventListener: (type, fn, opts) => { listeners[type] = fn; options[type] = opts; }};
     const context = vm.createContext({ document: doc, window: {addEventListener() {}}, navigator: {vibrate() {}}, AbortController,
         setTimeout: fn => {timers.set(++serial, fn); return serial;}, clearTimeout: id => timers.delete(id),
         requestAnimationFrame: () => ++serial, cancelAnimationFrame() {},
@@ -46,7 +53,16 @@ function setup() {
     const up = cancel => listeners[cancel ? 'pointercancel' : 'pointerup']({pointerId: 1, pointerType: 'mouse'});
     const hold = () => { for (const fn of [...timers.values()]) fn(); timers.clear(); };
     const preview = () => [...first.children, ...second.children].find(n => n.classes.has('calendar-selection'));
-    return {source, first, second, scroller, listeners, writes, context, down, move, up, hold, preview};
+    const finger = (identifier, x, y, target = source) => ({identifier, clientX: x, clientY: y, target});
+    const touch = (type, touches, changedTouches = touches) => {
+        let prevented = false;
+        listeners[type]({target: changedTouches[0]?.target || source, touches, changedTouches,
+            preventDefault() {prevented = true;}});
+        return prevented;
+    };
+    const zoom = () => +(properties.get('--calendar-zoom') || 1);
+    const reload = () => vm.runInContext(`(async () => { ${script}\n })()`, context);
+    return {source, first, second, scroller, timeline, doc, options, listeners, writes, context, down, move, up, hold, preview, finger, touch, zoom, reload};
 }
 {
     const s = setup(); s.down(); s.up(); s.hold();
@@ -117,4 +133,77 @@ for (const edge of ['start', 'end']) {
     assert.equal(s.writes[0].start_delta, -540, 'moving clamps to the day boundary');
     assert.equal(s.writes[0].end_delta, -540, 'boundary clamping preserves duration');
 }
-console.log('Calendar gesture checks passed');
+{
+    const s = setup(), a = s.finger(7, 100, 200), b = s.finger(8, 100, 400);
+    s.scroller.scrollTop = 480;
+    assert.equal(s.options.touchstart.passive, false, 'two fingers can claim native zoom');
+    assert.equal(s.touch('touchstart', [a]), false, 'one finger retains native scrolling');
+    assert.equal(s.touch('touchstart', [a, b], [b]), true, 'two fingers claim the timeline');
+    s.hold();
+    assert.equal(s.preview(), undefined, 'a pinch cancels a pending long press');
+    assert.equal(s.touch('touchmove', [s.finger(8, 100, 500), s.finger(7, 100, 100)]), true);
+    assert.equal(s.zoom(), 2, 'spreading the same fingers doubles the timeline spacing');
+    assert.equal(s.scroller.scrollTop, 1260, 'the time at the midpoint stays under the fingers');
+    s.touch('touchmove', [s.finger(7, 100, 150), s.finger(8, 100, 550)]);
+    assert.equal(s.scroller.scrollTop, 1210, 'moving the midpoint pans the same anchored time');
+    assert.deepEqual(s.writes, [], 'animation stays in the webview');
+    s.touch('touchend', [a], [b]);
+    s.touch('touchmove', [s.finger(7, 100, 600)]);
+    s.hold();
+    assert.equal(s.preview(), undefined, 'the remaining finger cannot turn a pinch into an edit');
+    assert.equal(s.zoom(), 2);
+    s.touch('touchend', [], [a]);
+    assert.deepEqual(s.writes, [{zoom: 2}], 'finishing refits labels without writing calendar data');
+    let suppressed = false;
+    s.listeners.click({target: s.source, preventDefault() {suppressed = true;}, stopImmediatePropagation() {}});
+    assert.ok(suppressed, 'pinch release cannot open an event');
+    s.reload();
+    s.touch('touchstart', [a, b]);
+    s.touch('touchmove', [s.finger(7, 100, 250), s.finger(8, 100, 350)]);
+    assert.equal(s.zoom(), 1, 'zooming out starts from the retained scale after changing views');
+    s.touch('touchend', [], [a, b]);
+}
+{
+    const s = setup(), a = s.finger(7, 100, 200), b = s.finger(8, 300, 200);
+    s.touch('touchstart', [a, b]);
+    s.touch('touchmove', [s.finger(7, 10, 200), s.finger(8, 1010, 200)]);
+    assert.equal(s.zoom(), 3, 'zooming in is bounded even with a horizontal pinch');
+    s.touch('touchmove', [s.finger(7, 100, 200), s.finger(8, 101, 200)]);
+    assert.equal(s.zoom(), 0.5, 'zooming out is bounded');
+    s.touch('touchcancel', [], [a, b]);
+    assert.deepEqual(s.writes, [{zoom: 0.5}], 'cancelling retains the displayed scale without editing');
+    s.down(); s.hold(); s.move(100, 565); s.up();
+    assert.equal(s.writes[1].start_delta, 30, 'dragging after zoom still uses five-minute time units');
+    assert.equal(s.writes[1].end_delta, 30, 'dragging after zoom preserves the event duration');
+}
+{
+    const s = setup(), a = s.finger(7, 100, 200), b = s.finger(8, 100, 400);
+    s.down(); s.hold(); s.move(100, 580);
+    assert.ok(s.preview());
+    s.touch('touchstart', [a, b]);
+    assert.equal(s.preview(), undefined, 'a pinch discards an unsaved drag preview');
+    s.touch('touchmove', [s.finger(7, 100, 100), s.finger(8, 100, 500)]);
+    s.touch('touchend', [], [a, b]);
+    assert.deepEqual(s.writes, [{zoom: 2}]);
+}
+{
+    const s = setup(), a = s.finger(7, 100, 200), b = s.finger(8, 100, 400), c = s.finger(9, 200, 300);
+    s.touch('touchstart', [a, b]);
+    s.touch('touchmove', [s.finger(7, 100, 100), s.finger(8, 100, 500)]);
+    s.touch('touchstart', [a, b, c], [c]);
+    s.touch('touchend', [a, b], [c]);
+    s.touch('touchmove', [a, b]);
+    assert.equal(s.zoom(), 2, 'adding or removing a third finger cannot jump the zoom');
+    s.touch('touchend', [], [a, b]);
+    assert.deepEqual(s.writes, [{zoom: 2}]);
+}
+for (const blocked of ['outside', 'modal']) {
+    const s = setup(), a = s.finger(7, 100, 200);
+    const b = s.finger(8, 100, 400, blocked === 'outside' ? {closest: () => null} : s.source);
+    s.doc.modalOpen = blocked === 'modal';
+    assert.equal(s.touch('touchstart', [a, b]), false);
+    assert.equal(s.touch('touchmove', [a, b]), false);
+    assert.equal(s.zoom(), 1, 'pinching outside the timeline or over a sheet leaves the calendar alone');
+    assert.deepEqual(s.writes, []);
+}
+console.log('Calendar drag, resize, pinch zoom, anchoring, limits and cancellation checks passed');

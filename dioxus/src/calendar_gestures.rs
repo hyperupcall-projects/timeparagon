@@ -1,4 +1,4 @@
-//! Long-press editing shared by Do and Plan's timed grids.
+//! Pinch zoom and long-press editing shared by Do and Plan's timed grids.
 use dioxus::prelude::*;
 use timeparagon_core::calendar::{self, Event};
 
@@ -18,15 +18,35 @@ struct Move {
 	before_end: i64,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum Gesture {
+	Zoom { zoom: f32 },
+	Move(Move),
+}
+
 #[component]
-pub fn Gestures(context: day::EditContext, on_saved: EventHandler<()>) -> Element {
+pub fn Gestures(
+	context: day::EditContext,
+	mut zoom: Signal<f32>,
+	on_saved: EventHandler<()>,
+) -> Element {
 	let seed = context.clone();
 	let mut latest = use_signal(move || seed);
 	use_effect(use_reactive!(|context| latest.set(context)));
 	let mut error = use_signal(|| None::<String>);
 	use_future(move || async move {
 		let mut eval = document::eval(include_str!("calendar_gestures.js"));
-		while let Ok(change) = eval.recv::<Move>().await {
+		while let Ok(gesture) = eval.recv::<Gesture>().await {
+			let change = match gesture {
+				Gesture::Zoom { zoom: value } => {
+					if value.is_finite() {
+						zoom.set(value.clamp(0.5, 3.0));
+					}
+					continue;
+				}
+				Gesture::Move(change) => change,
+			};
 			let context = latest.peek().clone();
 			let event = context
 				.events
