@@ -19,6 +19,10 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.VIBRATE" />
 
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+
     <application android:hasCode="true" android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
         android:fullBackupContent="false"
@@ -41,6 +45,13 @@
         <activity android:name="dev.kofler.timeparagon.notes.NotesFolderActivity"
             android:exported="false" android:excludeFromRecents="true"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <activity android:name="dev.kofler.timeparagon.input.MediaInputActivity"
+            android:exported="false" android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <provider android:name="dev.kofler.timeparagon.input.CameraOutput"
+            android:authorities="dev.kofler.timeparagon.ai-input"
+            android:exported="false" android:grantUriPermissions="true" />
 
         <!-- The day view widget. Its sources are in android/; scripts/build-android.sh
              adds them to the project `dx` generates. -->

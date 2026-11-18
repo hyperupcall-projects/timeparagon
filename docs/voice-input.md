@@ -220,3 +220,45 @@ or use × to remove it. Add saves only the selected event and leaves the others
 for review. Cancel discards the remaining proposals. A missing date must be
 entered before adding; missing start times use an all-day draft and missing end
 times use a one-hour duration. Location text is retained in the editable notes.
+
+## Android input
+
+The mobile Add sheet has the same microphone and picture controls beside the
+title. Voice input is available for tasks. Tap once to record, then again to
+finish; the input meter, two-minute limit, transcription/extraction states,
+in-memory model debug log and explicit Add step follow the desktop flow. Task
+metadata remains editable under **Task details**, and later recordings refine
+the current draft. Closing the sheet cancels capture and discards pending results.
+
+The picture menu offers **Take picture**, **Paste image**, and **Choose image
+file**. Use the file picker to select a saved screenshot or photo. Camera capture
+uses Android's camera app at full resolution; clipboard import reads a copied
+image URI. PNG, JPEG and WebP images up to 20 MB use the same recognition request,
+provider selection and validation as desktop. Proposals retain edits as you switch
+between them. Add saves the selected event and keeps the remaining proposals open.
+A missing date must be entered before saving.
+
+Configure **Settings → AI** with the same Ollama extraction model and
+Ollama/OpenRouter image model as desktop. Both apps use the same settings type,
+model parameters, schemas and extraction code. As before, these settings and the
+OpenRouter token are stored per device; they are not copied by database sync.
+
+Android records 16 kHz mono PCM natively and requests microphone permission when
+first used. It sends the WAV to a `whisper-server` instance using the same GGML
+model you use with `whisper-cli`. Start the server on your computer, for example:
+
+```sh
+whisper-server --host 0.0.0.0 --port 8080 -m /models/ggml-base.bin
+```
+
+Set the phone's **Whisper server URL** to that computer's reachable address,
+for example `http://192.168.1.10:8080`. Use reachable addresses for Ollama too:
+`localhost` on Android means the phone. The server's loaded model controls
+transcription. Desktop can use this server through the same optional setting;
+when its URL is blank, desktop continues using its configured local executable
+and model file. See the [whisper.cpp server documentation](https://github.com/ggml-org/whisper.cpp/tree/master/examples/server).
+
+Audio and image files stay in the private cache only while being processed and
+are removed afterward. The configured Whisper server receives audio, Ollama
+receives transcript and draft context, and the image provider receives pictures.
+Use servers you trust. No recording or image is attached to the saved item.

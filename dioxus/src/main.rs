@@ -7,6 +7,7 @@
 //! block first lists its assigned tasks.
 
 mod agenda;
+mod ai_input;
 mod alarms;
 mod cache;
 mod calendar_gestures;
@@ -15,6 +16,7 @@ mod day;
 mod editor;
 mod habits;
 mod habits_charts;
+mod media_input;
 mod notes;
 mod people;
 mod plan;
@@ -1065,6 +1067,7 @@ fn Main() -> Element {
 		drop(store);
 		rsx! {
 			create::CreateSheet {
+				models: config.read().voice.clone(),
 				settings: settings.clone(),
 				projects: config.read().projects.clone(),
 				calendars,
@@ -1361,6 +1364,7 @@ fn Main() -> Element {
 							}
 						}
 						p { class: "hint", "{database_sync_status}" }
+						ai_input::ModelSettings { config }
 						notes::NotesSettings { config }
 						reminders::ReminderSection { config }
 						sleep::SleepSettings { config }

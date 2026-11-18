@@ -197,38 +197,6 @@ pub fn quick_task(text: &str, today: NaiveDate, projects: &ProjectsSettings) -> 
 	task
 }
 
-/// Adds a task to the inbox list, or to `day` when it names no day of its own.
-///
-/// Blocking: callers run this on a worker thread.
-pub fn create_task(
-	mut task: QuickTask,
-	day: Option<NaiveDate>,
-	settings: &CalendarSettings,
-) -> Result<Event, String> {
-	let title = task.title.trim();
-	if title.is_empty() {
-		return Err("A task needs a name".to_owned());
-	}
-	if title.chars().count() > task_edit::MAX_TITLE_CHARS {
-		return Err(format!(
-			"A task name can be at most {} characters",
-			task_edit::MAX_TITLE_CHARS
-		));
-	}
-	task.metadata.deadline = task
-		.deadline
-		.map(|date| calendar::deadline::Deadline { date, time: None });
-	let token = task_edit::google_access(settings)?;
-	task_edit::create_inbox_task(
-		settings,
-		&token,
-		title,
-		"",
-		task.due.or(day),
-		Some(task.metadata),
-	)
-}
-
 /// What the new event and time block forms hold.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NewEvent {

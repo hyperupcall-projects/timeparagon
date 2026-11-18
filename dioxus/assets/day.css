@@ -3569,3 +3569,22 @@ textarea {
     box-shadow: 0 4px 16px #0005;
 }
 .calendar-drag-time.below { bottom: auto; top: calc(100% + 16px); }
+
+/* Media entry follows the desktop draft: compact controls and a review queue. */
+.ai-title-row { display: flex; gap: 8px; align-items: start; flex-wrap: wrap; }
+.ai-title-row > .client-input { min-width: 0; flex: 1 1 160px; }
+.ai-toolbar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.ai-toolbar .btn { min-height: 42px; min-width: 42px; display: inline-flex; align-items: center; justify-content: center; }
+.ai-microphone { transition: background 50ms ease-in-out; }
+.ai-microphone[aria-pressed="true"] { outline: 2px solid currentColor; }
+.ai-sources, .ai-review, .ai-task-details, .ai-settings { display: grid; gap: 8px; }
+.ai-input { position: relative; }
+.ai-sources { position: absolute; right: 0; z-index: 2; width: min(280px, 80vw); padding: 12px; background: var(--card); border: 1px solid var(--edge); border-radius: 8px; box-shadow: var(--shadow-card); }
+.ai-proposal { display: flex; gap: 6px; }
+.ai-proposal > :first-child { flex: 1; min-width: 0; text-align: left; overflow-wrap: anywhere; }
+.ai-proposal [aria-pressed="true"] { outline: 2px solid currentColor; }
+.ai-task-details summary { cursor: pointer; padding: 8px 0; }
+.ai-task-details label, .ai-settings label { display: grid; gap: 4px; min-width: 0; }
+.ai-task-details .sheet-check { display: flex; }
+.ai-debug { z-index: 100; }
+.ai-debug-log { white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; padding: 12px; max-height: 55dvh; font-size: 12px; user-select: text; }
