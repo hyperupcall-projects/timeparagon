@@ -91,12 +91,12 @@ impl Step {
 			Step::Welcome => "Welcome to TimeParagon",
 			Step::GoogleClient => "Google Cloud OAuth client",
 			Step::GoogleSignIn => "Sign in to Google",
-			Step::Sync => "Database sync",
+			Step::Sync => "Turso databasee sync",
 			Step::Notes => "Notes folder",
 			Step::Mapbox => "Mapbox",
 			Step::OpenRouter => "OpenRouter",
 			Step::Notifications => "Notifications",
-			Step::Done => "All set",
+			Step::Done => "Done!",
 		}
 	}
 
@@ -399,15 +399,12 @@ pub fn SetupFlow(on_finish: EventHandler<()>) -> Element {
 
 	let body = match step {
 		Step::Welcome => rsx! {
-			p { "TimeParagon needs a few things before it can show your day. This takes about ten minutes the first time." }
+			p { "TimeParagon requires a bit of setup before it can be used. It needs:" }
 			ol { class: "setup-list",
-				li { "The address of your database sync server" }
-				li { "A Google Cloud OAuth client, and signing in with it" }
-				li { "A folder for your Markdown notes" }
-				li { "Optionally, Mapbox and OpenRouter tokens and notification access" }
-			}
-			p { class: "hint",
-				"You can leave at any time: what you have entered is kept, and setup opens on the same page next time until every step is done."
+				li { "The address of the Turso sync server" }
+				li { "A Google Cloud OAuth client and secret" }
+				li { "A folder for Markdown notes" }
+				li { "Optionally, Mapbox, OpenRouter tokens, and notification access" }
 			}
 		},
 		Step::GoogleClient => rsx! {
@@ -446,10 +443,7 @@ pub fn SetupFlow(on_finish: EventHandler<()>) -> Element {
 			}
 		},
 		Step::GoogleSignIn => rsx! {
-			p { "Sign in with the Google account whose calendar and tasks you want to see. Your browser opens; approve every permission and then return here." }
-			p { class: "hint",
-				"Google warns that the app is unverified, since the OAuth client is your own: choose Advanced → Go to (your app)."
-			}
+			p { "Sign in with the Google account that has the main calendar and tasks that you want to use." }
 			if signed_in() {
 				p { class: "setup-ok", "✓ Signed in to Google." }
 			}
@@ -487,14 +481,7 @@ pub fn SetupFlow(on_finish: EventHandler<()>) -> Element {
 			let url = draft(keys::SYNC_URL);
 			let connected = !url.trim().is_empty() && url.trim() == draft(keys::SYNC_TESTED).trim();
 			rsx! {
-				p { "Every device keeps its own database and swaps changes with a Turso sync server you run, usually on your computer or a home server." }
-				p {
-					"Use the "
-					b { "Tailscale" }
-					" address of that server, such as "
-					code { "https://desktop.tail1234.ts.net:8443" }
-					". With Tailscale on this phone too, the server is reachable from anywhere without opening it to the internet."
-				}
+				p { "Every device keeps a local SQLite database that is synced using a Turso sync server." }
 				label { r#for: "setup-sync-url", "Sync server URL" }
 				input {
 					id: "setup-sync-url",
@@ -514,12 +501,12 @@ pub fn SetupFlow(on_finish: EventHandler<()>) -> Element {
 						p { "{phase}" }
 						if phase == SYNCING {
 							p { class: "hint",
-								"Getting everything from the server, including the settings your computer shares, such as the Google client. The first time can take a minute."
+								"Connected! Syncing the database. This may take a while."
 							}
 						}
 					}
 				} else if connected {
-					p { class: "setup-ok", "✓ Connected and synced. The URL is saved." }
+					p { class: "setup-ok", "✓ Connected and synced." }
 				}
 				div { class: "state-actions",
 					button {
@@ -563,11 +550,9 @@ pub fn SetupFlow(on_finish: EventHandler<()>) -> Element {
 			}
 		}
 		Step::Notes => rsx! {
-			p { "Notes are Markdown files, one per note, in a folder on this phone." }
-			p {
-				"Use "
+			p { "Choose or create a directory to store the app's markdown notes. It is recommended to use"
 				b { "Syncthing" }
-				" to keep that folder in step with the notes folder on your computer; note text stays in this folder, while colors and connections use database sync."
+				"to keep the files in sync."
 			}
 			p { class: "hint",
 				"Create and share the folder in Syncthing first, then choose it here with Choose folder."
@@ -624,13 +609,7 @@ pub fn SetupFlow(on_finish: EventHandler<()>) -> Element {
 			}
 		},
 		Step::Done => rsx! {
-			p { "TimeParagon is ready. Your day loads from Google, and habits, goals and settings arrive from your other devices through database sync." }
-			p { class: "hint",
-				"You can change any of this in Settings, or go through these pages again with Settings → Run setup."
-			}
-			p { class: "hint",
-				"Tip: long-press the home screen to add the TimeParagon day widget."
-			}
+			p { "TimeParagon is now ready! You have completed setup." }
 		},
 	};
 
@@ -695,7 +674,7 @@ pub fn SetupFlow(on_finish: EventHandler<()>) -> Element {
 							}
 						}
 						if step == Step::Done {
-							button { class: "btn primary", onclick: finish, "Start using TimeParagon" }
+							button { class: "btn primary", onclick: finish, "Finish" }
 						} else {
 							button {
 								class: "btn primary",
