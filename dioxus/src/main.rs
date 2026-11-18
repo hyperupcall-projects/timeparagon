@@ -2,7 +2,7 @@
 //!
 //! Do is the day's calendar, Plan shows a day, multiple days or month,
 //! Tasks holds the Unfinished, Inbox, Today and Backlog lists,
-//! Note opens the notepad, More the other pages, and
+//! More holds the notepad and other pages, and
 //! Settings the settings. Tapping an item opens a sheet that edits it; a time
 //! block first lists its assigned tasks.
 
@@ -798,7 +798,7 @@ fn Main() -> Element {
 		|| page() == Page::Habits
 		|| show_notes()
 		|| show_log()
-		|| matches!(show_scratch(), Some(scratch::Page::BrainDump));
+		|| show_scratch().is_some();
 	let task_tabs = TaskTab::ALL.into_iter().map(|tab| {
 		let mut task_tab = task_tab;
 		nav_tab(tab.label(), task_tab() == tab, "", move |_| {
@@ -853,20 +853,25 @@ fn Main() -> Element {
 					page.set(Page::Tasks);
 				})}
 				div { class: "spacer" }
-				{nav_tab("Note", show_scratch() == Some(scratch::Page::Notepad), "", move |_| {
-					plan_menu_open.set(false);
-					show_scratch.set(Some(scratch::Page::Notepad));
-				})}
-				{nav_tab("More", more_active, "", move |_| {
-					plan_menu_open.set(false);
-					show_more.set(true);
-				})}
 				button {
-					class: "nav-tab",
+					class: "nav-tab nav-icon",
+					title: "More",
+					aria_label: "More",
+					aria_pressed: more_active.to_string(),
+					aria_expanded: show_more().to_string(),
+					onclick: move |_| {
+						plan_menu_open.set(false);
+						show_more.set(true);
+					},
+					{nav_icon(false)}
+				}
+				button {
+					class: "nav-tab nav-icon",
+					title: "Settings",
+					aria_label: "Settings",
 					aria_pressed: show_settings().to_string(),
 					onclick: move |_| open_settings(),
-					span { class: "label-long", "Settings" }
-					span { class: "label-short", "Set" }
+					{nav_icon(true)}
 				}
 			}
 			if page() == Page::Tasks {
@@ -1233,7 +1238,6 @@ fn Main() -> Element {
 		rsx! {
 			scratch::ScratchSheet {
 				config,
-				day: selected_day,
 				page,
 				on_close: move |()| show_scratch.set(None),
 			}
@@ -1266,6 +1270,14 @@ fn Main() -> Element {
                             class: "btn",
                             onclick: move |_| {
                                 show_more.set(false);
+                                show_scratch.set(Some(scratch::Page::Notepad));
+                            },
+                            "Notepad"
+                        }
+                        button {
+                            class: "btn",
+                            onclick: move |_| {
+                                show_more.set(false);
                                 page.set(Page::Habits);
                             },
                             "Habits"
@@ -1293,14 +1305,6 @@ fn Main() -> Element {
                                 show_scratch.set(Some(scratch::Page::BrainDump));
                             },
                             "Brain dump"
-                        }
-                        button {
-                            class: "btn",
-                            onclick: move |_| {
-                                show_more.set(false);
-                                show_scratch.set(Some(scratch::Page::Projects));
-                            },
-                            "Projects"
                         }
                         button { class: "btn", onclick: move |_| { show_more.set(false); show_alarms.set(true); }, "Alarms" }
                         button { class: "btn", onclick: move |_| {show_more.set(false);show_log.set(true);}, "Log" }
@@ -1875,6 +1879,38 @@ fn nav_tab(
 			aria_pressed: active.to_string(),
 			onclick: move |_| on_press(()),
 			"{label}"
+		}
+	}
+}
+
+/// Navbar icons use the same 24-unit line drawings as the desktop app.
+fn nav_icon(settings: bool) -> Element {
+	let gear_points = settings.then(|| {
+		(0..32)
+			.map(|i| {
+				let angle = (i as f32 - 0.5) * std::f32::consts::TAU / 32.0;
+				let radius = if i % 4 < 2 { 10.0 } else { 8.0 };
+				format!(
+					"{},{}",
+					12.0 + radius * angle.cos(),
+					12.0 + radius * angle.sin()
+				)
+			})
+			.collect::<Vec<_>>()
+			.join(" ")
+	});
+	rsx! {
+		svg {
+			width: "20", height: "20", view_box: "0 0 24 24",
+			fill: "none", stroke: "currentColor", stroke_width: "1.8",
+			stroke_linecap: "round", stroke_linejoin: "round",
+			"aria-hidden": "true", "focusable": "false",
+			if let Some(points) = gear_points {
+				polygon { points: "{points}" }
+				circle { cx: "12", cy: "12", r: "3" }
+			} else {
+				path { d: "M4 6h16 M4 12h16 M4 18h16" }
+			}
 		}
 	}
 }
@@ -3077,7 +3113,7 @@ mod sheet_tests {
 	fn the_notepad_sheet_shows_only_the_notepad() {
 		fn app() -> Element {
 			let config = use_signal(Config::default);
-			rsx! { scratch::ScratchSheet { config, day: today(), on_close: |_| {} } }
+			rsx! { scratch::ScratchSheet { config, on_close: |_| {} } }
 		}
 		let html = render(app);
 		assert_offers(&html, &[">Notepad<", ">Edit<", ">View<", "Markdown"]);
@@ -3087,14 +3123,15 @@ mod sheet_tests {
 	}
 
 	#[test]
-	fn brain_dump_and_projects_are_sheets_of_their_own() {
+	fn brain_dump_has_its_own_searchable_sheet() {
 		fn app() -> Element {
 			let config = use_signal(Config::default);
-			rsx! { scratch::ScratchSheet { config, day: today(), page: scratch::Page::Projects, on_close: |_| {} } }
+			rsx! { scratch::ScratchSheet { config, page: scratch::Page::BrainDump, on_close: |_| {} } }
 		}
 		let html = render(app);
-		assert_offers(&html, &[">Projects<"]);
+		assert_offers(&html, &[">Brain dump<", "Search every page", ">Add today<"]);
 		assert!(!html.contains(">Notepad<"), "{html}");
+		assert!(!html.contains(">Projects<"), "{html}");
 	}
 
 	fn render_list(app: fn() -> Element) -> String {

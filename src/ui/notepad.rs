@@ -66,15 +66,7 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 	};
 
 	let controls = row![
-		super::controls::section_heading(
-			if metrics.breakpoint.is_compact() {
-				"Note"
-			} else {
-				"Notepad"
-			},
-			None,
-			metrics.label() + 4.0
-		),
+		super::controls::section_heading("Notepad", None, metrics.label() + 4.0),
 		text_size(state, metrics),
 		Space::new().width(Fill),
 		tab("Edit", Tab::Edit),
