@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_INCREMENTAL: "0"
+
 jobs:
   android:
     name: Android release APK
@@ -20,10 +23,25 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      # Keep the generated, signed Android project out of the Rust cache.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
+      - name: Cache Gradle downloads
+        uses: actions/cache@v4
+        with:
+          # Compiled Gradle scripts can contain signing passwords. Only cache
+          # downloaded dependencies and distributions, never the full caches.
+          path: |
+            ~/.gradle/caches/modules-2
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-${{ runner.arch }}-android-gradle-${{ hashFiles('Cargo.lock', 'dioxus/Cargo.toml', 'scripts/build-android.sh') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-android-gradle-
       - name: Check signing secrets
         run: |
           for name in TIMEPARAGON_KEYSTORE_BASE64 TIMEPARAGON_KEYSTORE_PASSWORD; do
@@ -54,6 +72,7 @@ jobs:
           name: android
           path: dist/*.apk
           if-no-files-found: error
+          compression-level: 0
 
   linux:
     name: Linux release binary
@@ -64,6 +83,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Install native dependencies
         run: |
           sudo apt-get update
@@ -109,7 +129,7 @@ jobs:
           merge-multiple: true
       - name: Create release
         run: |
-          (cd dist && sha256sum * > SHA256SUMS)
+          (cd dist && sha256sum -- * > SHA256SUMS)
           prerelease=
           case "$GITHUB_REF_NAME" in *-*) prerelease=--prerelease ;; esac
           gh release create "$GITHUB_REF_NAME" $prerelease --repo "$GITHUB_REPOSITORY" \

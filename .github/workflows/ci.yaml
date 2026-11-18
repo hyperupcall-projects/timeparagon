@@ -7,6 +7,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   fmt:
     name: Formatting
@@ -24,20 +28,31 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      # Includes compiled dependencies and CEF's download in target/*/build.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - name: Install native dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            clang cmake pkg-config \
+            clang cmake pkg-config faketime \
             libpipewire-0.3-dev libspa-0.2-dev libxkbcommon-dev libwayland-dev \
             libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev \
             libasound2t64 libnss3 libgbm1
       - run: cargo test --workspace --locked
+        id: tests
+      # Reuse the same build for all four fake-clock runs. Keep running these
+      # after ordinary test failures, as the separate job did.
+      - name: Rust tests on daylight saving days
+        if: ${{ !cancelled() && steps.tests.outcome != 'skipped' }}
+        run: scripts/test-daylight-saving.sh
 
   # clippy:
   #   name: Clippy
@@ -60,27 +75,6 @@ jobs:
   #           libasound2t64 libnss3 libgbm1
   #     - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-  daylight-saving:
-    name: Rust tests on daylight saving days
-    runs-on: ubuntu-24.04
-    env:
-      CARGO_BUILD_JOBS: "2"
-      CARGO_PROFILE_DEV_DEBUG: "0"
-      CARGO_PROFILE_TEST_DEBUG: "0"
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install native dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            clang cmake pkg-config \
-            libpipewire-0.3-dev libspa-0.2-dev libxkbcommon-dev libwayland-dev \
-            libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev \
-            libasound2t64 libnss3 libgbm1
-      - run: sudo apt-get install -y --no-install-recommends faketime
-      - run: scripts/test-daylight-saving.sh
-
   script-tests:
     name: JavaScript and Python tests
     runs-on: ubuntu-24.04
@@ -91,11 +85,11 @@ jobs:
           node-version: "24"
           cache: npm
           cache-dependency-path: slack/package-lock.json
-      - run: npm ci
+      - run: npm ci --no-audit --no-fund
         working-directory: slack
       - run: npm test
         working-directory: slack
       - run: node tests/map_picker.mjs
       - run: node tests/calendar_gestures.mjs
       - run: python3 packaging/test_install.py
-      - run: python3 scripts/test_clippy_fix.py
+      - run: python3 -m unittest discover -s scripts -p 'test_*.py'
