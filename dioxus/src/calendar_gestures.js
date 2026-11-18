@@ -8,11 +8,13 @@ let alarmDrag = null, alarmTap = null;
 let zoom = +(document.documentElement.style.getPropertyValue('--calendar-zoom') || 1);
 // Only the timeline's vertical geometry scales; text and controls stay readable.
 const MIN_ZOOM = 0.5, MAX_ZOOM = 3;
+// A new range starts on a quarter hour and lasts an hour until it is adjusted.
+const DRAFT_SNAP = 15, DRAFT_MINUTES = 60;
 function setZoom(value) {
     if (!Number.isFinite(value)) return;
     value = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, value));
     if (value === zoom) return;
-    deselect();
+    settle();
     const anchors = [...document.querySelectorAll('.timeline-scroll')].map(scroller => {
         const timeline = scroller.querySelector('.timeline');
         const rect = scroller.getBoundingClientRect();
@@ -21,28 +23,79 @@ function setZoom(value) {
     }).filter(Boolean);
     zoom = value;
     document.documentElement.style.setProperty('--calendar-zoom', zoom);
+    if (selected) render();
     for (const {scroller, timeline, center, fraction} of anchors) {
         scroller.scrollTop += timeline.getBoundingClientRect().top + fraction * timeline.clientHeight - center;
     }
 }
 const grids = () => [...document.querySelectorAll('.grid[data-calendar-day]')];
 const clearHold = () => { clearTimeout(timer); timer = null; pending = null; };
-function deselect() {
+// `quiet` is for when Rust already knows the draft is gone or being replaced.
+function deselect(quiet) {
     clearHold(); cancelAnimationFrame(raf); raf = 0; drag = null;
     if (!selected) return;
-    selected.source.classList.remove('gesture-source');
+    const draft = selected.draft;
+    selected.source?.classList.remove('gesture-source');
     selected.preview.remove(); selected = null;
+    if (draft && !quiet) dioxus.send({cancel_range: true});
+}
+// Scrolling, zooming and leaving the app keep a draft; only its unfinished drag is dropped.
+function settle() {
+    if (!selected?.draft) return deselect();
+    clearHold(); cancelAnimationFrame(raf); raf = 0;
+    if (drag) { drag = null; revertDraft(); }
+}
+function revertDraft() {
+    const s = selected;
+    s.startDelta = 0; s.endDelta = 0;
+    if (s.preview.parentNode !== s.grid) s.grid.append(s.preview);
+    render(); publishDraft();
+}
+function publishDraft() {
+    const s = selected, grid = s.preview.parentNode;
+    const range = {range_day: grid.dataset.calendarDay, hour_start: +grid.dataset.hourStart,
+        range_start: s.start + s.startDelta, range_end: s.end + s.endDelta};
+    const sent = JSON.stringify(range);
+    if (sent !== s.sent) { s.sent = sent; dioxus.send(range); }
+}
+// The confirmation bar shortens the grid, which can cover a range held near the bottom.
+function revealDraft() {
+    if (!selected?.draft || drag) return;
+    const scroller = selected.grid.closest('.timeline-scroll');
+    const view = scroller.getBoundingClientRect(), box = selected.preview.getBoundingClientRect();
+    // Leave room for the handles and time label outside the range.
+    const above = view.top + 44 - box.top, below = box.bottom + 44 - view.bottom;
+    if (above > 0) scroller.scrollTop -= above;
+    else if (below > 0) scroller.scrollTop += Math.min(below, -above);
 }
 function select(source) {
     deselect();
     const preview = source.cloneNode(true);
     preview.removeAttribute('disabled');
     preview.removeAttribute('data-calendar-event');
+    source.classList.add('gesture-source');
+    lift(preview, source.closest('.grid'), 'Selected event. Drag to move, or drag the start and end handles to resize.', {
+        source, start: +source.dataset.startMin, end: +source.dataset.endMin,
+        id: source.dataset.calendarEvent, calendar: source.dataset.eventCalendar,
+        before_start: +source.dataset.beforeStart, before_end: +source.dataset.beforeEnd,
+        duration: +source.dataset.duration });
+}
+function drawDraft(grid, y) {
+    deselect(true);
+    const held = (y - grid.getBoundingClientRect().top) / grid.clientHeight * 1440;
+    const start = Math.max(0, Math.min(1440 - DRAFT_MINUTES, Math.floor(held / DRAFT_SNAP) * DRAFT_SNAP));
+    const preview = document.createElement('div');
+    preview.className = 'grid-event calendar-draft';
+    lift(preview, grid, 'New time range. Drag to move, or drag the start and end handles to resize.',
+        {draft: true, start, end: start + DRAFT_MINUTES});
+    publishDraft();
+}
+function lift(preview, grid, description, fields) {
     preview.classList.add('calendar-selection');
-    preview.setAttribute('aria-label', 'Selected event. Drag to move, or drag the start and end handles to resize.');
+    preview.setAttribute('aria-label', description);
     for (const [edge, label] of [['start', 'Adjust start'], ['end', 'Adjust end']]) {
         // A day boundary is not an event edge.
-        if (edge === 'start' ? +source.dataset.startMin < 0 : +source.dataset.endMin > 1440) continue;
+        if (edge === 'start' ? fields.start < 0 : fields.end > 1440) continue;
         const handle = document.createElement('span');
         handle.className = 'calendar-resize ' + edge;
         handle.dataset.resize = edge;
@@ -52,14 +105,8 @@ function select(source) {
     const when = document.createElement('span');
     when.className = 'calendar-drag-time'; when.setAttribute('role', 'status');
     preview.append(when);
-    const grid = source.closest('.grid');
-    selected = { source, preview, grid, when, start: +source.dataset.startMin,
-        end: +source.dataset.endMin,
-        id: source.dataset.calendarEvent, calendar: source.dataset.eventCalendar,
-        before_start: +source.dataset.beforeStart, before_end: +source.dataset.beforeEnd,
-        duration: +source.dataset.duration,
-        startDelta: 0, endDelta: 0, saving: false };
-    source.classList.add('gesture-source'); grid.append(preview);
+    selected = { ...fields, preview, grid, when, startDelta: 0, endDelta: 0, saving: false };
+    grid.append(preview);
     render();
     navigator.vibrate?.(20);
 }
@@ -110,14 +157,19 @@ function begin(target, x, y, id) {
         quietUntil = Date.now() + 600;
         return;
     }
-    deselect();
-    const source = target.closest('[data-calendar-event][data-draggable="true"]');
-    if (!source || source.disabled) return;
-    pending = { source, x, y, id };
+    // A draft stays while the grid scrolls under it; a tap on the grid dismisses it.
+    const draft = selected?.draft;
+    if (!draft) deselect();
+    const grid = target.closest('.grid[data-calendar-day]');
+    const movable = target.closest('[data-calendar-event][data-draggable="true"]');
+    const source = movable?.disabled ? null : movable;
+    const empty = grid && !target.closest('.grid-event, .block-task');
+    if (!source && !empty && !(draft && grid)) return;
+    pending = { source, grid: empty ? grid : null, x, y, id, dismiss: draft && !!grid };
     timer = setTimeout(() => {
         const p = pending;
-        if (!p?.source.isConnected) return clearHold();
-        select(p.source);
+        if (!(p?.source || p?.grid)?.isConnected) return clearHold();
+        if (p.source) select(p.source); else drawDraft(p.grid, p.y);
         drag = { x: p.x, y: p.y, id: p.id, mode: 'move', grid: selected.grid,
             startDelta: 0, endDelta: 0, scroll: selected.grid.getBoundingClientRect().top };
         quietUntil = Date.now() + 600;
@@ -133,7 +185,7 @@ function update(x, y, id) {
         return;
     }
     if (alarmTap?.id === id && Math.hypot(x - alarmTap.x, y - alarmTap.y) > 8) alarmTap = null;
-    if (selected && !selected.source.isConnected) return deselect();
+    if (selected && !(selected.source || selected.grid).isConnected) return deselect();
     if (!drag) {
         if (pending && Math.hypot(x - pending.x, y - pending.y) > 8) clearHold();
         return;
@@ -156,6 +208,7 @@ function update(x, y, id) {
         s.endDelta = Math.min(1440 - Math.min(1440, s.end), Math.max(5 - (s.end - s.start) + s.startDelta, drag.endDelta + delta));
     }
     render();
+    if (s.draft) publishDraft();
     if (!raf) raf = requestAnimationFrame(autoScroll);
 }
 function autoScroll() {
@@ -170,7 +223,9 @@ function autoScroll() {
     }
 }
 function finish(cancelled, id) {
+    const dismissed = !cancelled && pending?.dismiss && pending.id === id;
     clearHold();
+    if (dismissed) { quietUntil = Date.now() + 600; return deselect(); }
     if (alarmTap?.id === id) {
         if (!cancelled && placingAlarm()) alarmAt(alarmTap.grid, alarmTap.y);
         alarmTap = null;
@@ -183,8 +238,16 @@ function finish(cancelled, id) {
     if (!drag || drag.id !== id) return;
     quietUntil = Date.now() + 600;
     cancelAnimationFrame(raf); raf = 0; drag = null;
-    if (cancelled) return deselect();
     const s = selected;
+    if (s?.draft) {
+        if (cancelled) return revertDraft();
+        // Later drags measure from here, as nothing is saved between them.
+        s.start += s.startDelta; s.end += s.endDelta;
+        s.startDelta = 0; s.endDelta = 0;
+        s.grid = s.preview.parentNode;
+        return revealDraft();
+    }
+    if (cancelled) return deselect();
     const start_delta = s.startDelta + (s.dayDelta || 0), end_delta = s.endDelta + (s.dayDelta || 0);
     if (!start_delta && !end_delta) return; // Keep handles after a stationary hold.
     s.saving = true; s.preview.classList.add('saving'); s.when.textContent = 'Saving…';
@@ -200,7 +263,7 @@ function startPinch(e) {
     const span = distance(a, b);
     if (!timeline || span < 1) return;
     alarmDrag = null; alarmTap = null;
-    deselect();
+    settle();
     pinching = true;
     const midpoint = (a.clientY + b.clientY) / 2;
     pinch = { scroller, timeline, ids: [a.identifier, b.identifier], span, zoom,
@@ -213,6 +276,7 @@ function movePinch(e) {
     if (!a || !b || !pinch.timeline.isConnected) { pinch = null; return; }
     zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, pinch.zoom * distance(a, b) / pinch.span));
     document.documentElement.style.setProperty('--calendar-zoom', zoom);
+    if (selected) render();
     const {scroller, timeline, anchor} = pinch;
     const midpoint = (a.clientY + b.clientY) / 2;
     scroller.scrollTop += timeline.getBoundingClientRect().top + anchor * timeline.clientHeight - midpoint;
@@ -230,10 +294,10 @@ document.addEventListener('touchstart', e => {
         alarmDrag = null; alarmTap = null;
         startPinch(e);
         if (pinching) { e.preventDefault(); pinch = e.touches.length === 2 ? pinch : null; }
-        deselect(); return;
+        settle(); return;
     }
     if (pinching) { e.preventDefault(); return; }
-    if (e.touches.length !== 1) { deselect(); return; }
+    if (e.touches.length !== 1) { settle(); return; }
     const t = e.changedTouches[0]; begin(e.target, t.clientX, t.clientY, t.identifier);
 }, {signal, passive: false});
 document.addEventListener('touchmove', e => {
@@ -260,7 +324,7 @@ for (const type of ['pointerup', 'pointercancel']) document.addEventListener(typ
 }, {signal});
 document.addEventListener('click', e => {
     // Confirm and Cancel must respond immediately, including just after a drag.
-    if (e.target.closest('.alarm-placement-bar')) return;
+    if (e.target.closest('.placement-bar')) return;
     if (placingAlarm() && !document.querySelector('.modal-backdrop') && e.target.closest('.grid[data-calendar-day]')) {
         e.preventDefault(); e.stopImmediatePropagation(); return;
     }
@@ -281,6 +345,8 @@ document.addEventListener('keydown', e => {
     const grid = needle.closest('.grid[data-calendar-day]');
     alarmAt(grid, grid.getBoundingClientRect().top + (+needle.dataset.minute + delta) / 1440 * grid.clientHeight);
 }, {signal});
-window.addEventListener('blur', () => { finishPinch(); deselect(); alarmDrag = null; alarmTap = null; }, {signal});
-window.__calendarGesture = { setZoom, saved: deselect, abort: () => { finishPinch(); deselect(); alarmDrag = null; alarmTap = null; controller.abort(); } };
+window.addEventListener('blur', () => { finishPinch(); settle(); alarmDrag = null; alarmTap = null; }, {signal});
+window.__calendarGesture = { setZoom, saved: () => deselect(), revealDraft,
+    dismissDraft: () => { if (selected?.draft) deselect(true); },
+    abort: () => { finishPinch(); deselect(true); alarmDrag = null; alarmTap = null; controller.abort(); } };
 await new Promise(() => {});

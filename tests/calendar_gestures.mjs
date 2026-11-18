@@ -35,11 +35,17 @@ function setup() {
             const matches = selector === '[data-resize]' ? this.dataset.resize
                 : selector === '.grid[data-calendar-day]' ? this.classes.has('grid') && this.dataset.calendarDay
                 : selector === '[data-calendar-event][data-draggable="true"]' ? this.dataset.calendarEvent && this.dataset.draggable === 'true'
+                : selector === '.grid-event, .block-task' ? this.classes.has('grid-event') || this.classes.has('block-task')
+                : selector === '.placement-bar' ? this.classes.has('placement-bar')
                 : selector.startsWith('.') && this.classes.has(selector.slice(1));
             return matches ? this : this.parentNode?.closest(selector) || null;
         }
         getBoundingClientRect() {
             if (this.classes.has('timeline-scroll')) return {top: 0, bottom: 800};
+            if (this.classes.has('calendar-draft')) {
+                const top = parseFloat(this.style.top) - scroller.scrollTop;
+                return {top, bottom: top + parseFloat(this.style.height)};
+            }
             return {top: -scroller.scrollTop, left: this === first ? 0 : 200, right: this === first ? 200 : 400};
         }
     }
@@ -73,7 +79,7 @@ function setup() {
     const zoom = () => +(properties.get('--calendar-zoom') || 1);
     const reload = () => vm.runInContext(`(async () => { ${script}\n })()`, context);
     const alarm = (minute = 600) => {
-        doc.alarmBar = new Node('alarm-placement-bar');
+        doc.alarmBar = new Node('placement-bar alarm-placement-bar');
         const needle = new Node('alarm-needle', {minute: String(minute)});
         needle.append(new Node('alarm-needle-time')); first.append(needle);
         return needle;
@@ -336,4 +342,140 @@ for (const blocked of ['outside', 'modal']) {
     s.doc.modalOpen = true; s.down(); s.up();
     assert.deepEqual(s.writes, [], 'a sheet blocks alarm gestures underneath it');
 }
-console.log('Calendar drag, resize, pinch zoom, alarm placement, scrolling and cancellation checks passed');
+const ranges = s => s.writes.filter(w => w.range_day);
+const lastRange = s => ranges(s).at(-1);
+const span = s => [lastRange(s).range_start, lastRange(s).range_end];
+const cancels = s => s.writes.filter(w => w.cancel_range).length;
+const draft = (s, grid = s.first, x = 100, y = 550) => { s.down(grid, x, y); s.hold(); s.up(); return s.preview(); };
+const knob = (preview, edge) => preview.children.find(n => n.dataset.resize === edge);
+{
+    const s = setup(); s.down(s.first, 100, 550); s.up(); s.hold();
+    assert.equal(s.preview(), undefined, 'a tap on the empty grid draws nothing');
+    s.down(s.first, 100, 550); s.move(100, 600); s.hold();
+    assert.equal(s.preview(), undefined, 'scrolling the empty grid draws nothing');
+    assert.deepEqual(s.writes, []);
+}
+{
+    const s = setup(), preview = draft(s);
+    assert.ok(preview.classes.has('calendar-draft'), 'holding the empty grid draws a gray range');
+    assert.deepEqual(preview.children.filter(n => n.dataset.resize).map(n => n.dataset.resize), ['start', 'end'], 'a range has the handles of a held event');
+    assert.deepEqual(s.writes, [{range_day: '2026-11-17', hour_start: 0, range_start: 540, range_end: 600}], 'it starts on the quarter hour held and lasts an hour');
+    assert.equal(preview.style.top, '540px');
+    assert.equal(preview.style.height, '60px');
+}
+for (const [y, start] of [[5, 0], [1435, 1380]]) {
+    const s = setup(); draft(s, s.first, 100, y);
+    assert.deepEqual(span(s), [start, start + 60], 'a range held at the edge of the day stays inside it');
+}
+{
+    const s = setup(); s.down(s.first, 100, 550); s.hold(); s.move(100, 610); s.up();
+    assert.deepEqual(span(s), [600, 660], 'the same press can drag the new range');
+    s.down(s.preview(), 100, 620); s.move(100, 650); s.up();
+    assert.deepEqual(span(s), [630, 690], 'a second drag continues from where the first ended');
+    assert.equal(s.writes.filter(w => w.id).length, 0, 'adjusting a range never writes an event');
+}
+{
+    const s = setup(), preview = draft(s);
+    s.down(knob(preview, 'start'), 100, 540); s.move(100, 510); s.up();
+    assert.deepEqual(span(s), [510, 600], 'the top handle changes the start');
+    s.down(knob(preview, 'end'), 100, 600); s.move(100, 645); s.up();
+    assert.deepEqual(span(s), [510, 645], 'the bottom handle changes the end');
+    s.down(knob(preview, 'start'), 100, 510); s.move(100, 900); s.up();
+    assert.deepEqual(span(s), [640, 645], 'a range keeps at least five minutes');
+}
+{
+    const s = setup(), preview = draft(s);
+    s.down(preview, 100, 550); s.move(300, 550); s.up();
+    assert.equal(lastRange(s).range_day, '2026-11-18', 'a range moves between visible days');
+    assert.equal(preview.parentNode, s.second);
+    s.down(knob(preview, 'end'), 300, 600); s.move(300, 630); s.up();
+    assert.deepEqual([lastRange(s).range_day, lastRange(s).range_end], ['2026-11-18', 630], 'resizing stays on the new day');
+}
+{
+    const s = setup(), preview = draft(s), sent = s.writes.length;
+    s.down(preview, 100, 550); s.move(100, 551); s.move(100, 552);
+    assert.equal(s.writes.length, sent, 'a range only reports whole five-minute changes');
+    s.move(100, 600); s.up(true);
+    assert.equal(s.preview(), preview, 'a cancelled drag keeps the range');
+    assert.deepEqual(span(s), [540, 600], 'and puts it back');
+    assert.equal(cancels(s), 0);
+}
+{
+    const s = setup(), preview = draft(s), a = s.finger(7, 100, 300, s.first);
+    assert.equal(s.touch('touchstart', [a]), false, 'a finger beside the range still scrolls natively');
+    s.touch('touchmove', [s.finger(7, 100, 200, s.first)]);
+    s.touch('touchend', [], [s.finger(7, 100, 200, s.first)]);
+    assert.equal(s.preview(), preview, 'scrolling keeps the range');
+    const b = s.finger(8, 100, 500, s.first);
+    s.touch('touchstart', [a, b]);
+    s.touch('touchmove', [s.finger(7, 100, 100, s.first), s.finger(8, 100, 700, s.first)]);
+    s.touch('touchend', [], [a, b]);
+    assert.equal(s.preview(), preview, 'pinching keeps the range');
+    assert.equal(preview.style.top, 540 * s.zoom() + 'px', 'the range follows the zoomed grid');
+    s.context.window.__calendarGesture.setZoom(1);
+    assert.equal(preview.style.top, '540px', 'menu zoom also keeps the range in place');
+    assert.equal(cancels(s), 0);
+}
+{
+    const s = setup(); draft(s);
+    s.down(s.first, 100, 900); s.up();
+    assert.equal(s.preview(), undefined, 'a tap on the grid dismisses the range');
+    assert.equal(cancels(s), 1, 'and clears the confirmation bar');
+    let suppressed = false;
+    s.listeners.click({target: s.first, preventDefault() {suppressed = true;}, stopImmediatePropagation() {}});
+    assert.ok(suppressed, 'that tap opens nothing underneath');
+}
+{
+    const s = setup(), first = draft(s);
+    draft(s, s.first, 100, 900);
+    assert.notEqual(s.preview(), first, 'holding elsewhere replaces the range');
+    assert.equal(lastRange(s).range_start, 900);
+    assert.equal(cancels(s), 0, 'replacing never flashes the bar away');
+}
+{
+    const s = setup(); draft(s);
+    s.down(s.source, 100, 550); s.hold(); s.up();
+    assert.ok(s.preview() && !s.preview().classes.has('calendar-draft'), 'holding an event selects that event instead');
+    assert.equal(cancels(s), 1);
+}
+{
+    const s = setup(); s.source.dataset.draggable = 'false';
+    s.down(s.source, 100, 550); s.hold();
+    assert.equal(s.preview(), undefined, 'an event that cannot move is not empty grid');
+    assert.deepEqual(s.writes, []);
+}
+{
+    const s = setup(), bar = new s.first.constructor('placement-bar range-draft-bar'), preview = draft(s);
+    s.down(preview, 100, 550); s.move(100, 560); s.up();
+    s.down(bar, 100, 790); s.up();
+    assert.equal(s.preview(), preview, 'pressing the bar leaves the range for its own buttons');
+    let suppressed = false;
+    s.listeners.click({target: bar, preventDefault() {suppressed = true;}, stopImmediatePropagation() {}});
+    assert.equal(suppressed, false, 'Confirm time responds immediately after a drag');
+}
+{
+    const s = setup(); draft(s); const sent = s.writes.length;
+    s.context.window.__calendarGesture.dismissDraft();
+    assert.equal(s.preview(), undefined, 'Rust can take the range off the grid');
+    assert.equal(s.writes.length, sent, 'without being told what it already knows');
+}
+{
+    const s = setup(); s.down(s.source, 100, 550); s.hold(); s.up();
+    s.context.window.__calendarGesture.dismissDraft();
+    assert.ok(s.preview(), 'dismissing a range leaves a selected event alone');
+}
+{
+    const s = setup(); s.scroller.scrollTop = 300; draft(s, s.first, 100, 200);
+    assert.equal(s.scroller.scrollTop, 300, 'a range in clear view does not scroll');
+    s.down(s.preview(), 100, 200); s.move(100, 760); s.up();
+    assert.ok(s.scroller.scrollTop > 300, 'a range left under the bar scrolls into view');
+}
+{
+    const s = setup(); s.alarm(); s.down(s.first, 100, 550); s.hold(); s.up();
+    assert.deepEqual(ranges(s), [], 'alarm placement keeps holding for the needle');
+}
+{
+    const s = setup(); s.doc.modalOpen = true; s.down(s.first, 100, 550); s.hold();
+    assert.equal(s.preview(), undefined, 'a sheet blocks drawing underneath it');
+}
+console.log('Calendar drag, resize, pinch zoom, alarm placement, new range, scrolling and cancellation checks passed');

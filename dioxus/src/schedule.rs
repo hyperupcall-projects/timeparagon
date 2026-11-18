@@ -53,6 +53,14 @@ pub fn Planner(
 	let crate::habits::EventNames(names) = use_context();
 	let mut count = use_signal(|| 3u8);
 	let mut expanded = use_signal(|| false);
+	// Fewer columns can remove the one holding a range being chosen.
+	let draft = try_use_context::<crate::calendar_gestures::DraftRange>();
+	use_effect(move || {
+		count();
+		if let Some(crate::calendar_gestures::DraftRange(mut draft)) = draft {
+			draft.set(None);
+		}
+	});
 	let selected = anchor();
 	let period = view();
 	let days_count = count();

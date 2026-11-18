@@ -8,6 +8,7 @@ use timeparagon_core::config::{CalendarSettings, ProjectsSettings};
 use timeparagon_core::task_input::{self, Value};
 
 use crate::ai_input::{self, TaskDraft};
+use crate::calendar_gestures::TimeRange;
 use crate::day::{self, NewEvent};
 use crate::editor::worker;
 use serde_json::json;
@@ -42,6 +43,17 @@ fn sleep_defaults(day: NaiveDate, settings: &CalendarSettings) -> (String, Strin
 		start.format("%H:%M").to_string(),
 		end.format("%H:%M").to_string(),
 	)
+}
+
+/// A task chosen for a time on the grid is due then, for that long.
+fn task_in_range(range: TimeRange) -> TaskDraft {
+	let mut task = TaskDraft {
+		due: range.start.date().to_string(),
+		due_time: range.start.format("%H:%M").to_string(),
+		..TaskDraft::default()
+	};
+	task.metadata.minutes = range.minutes();
+	task
 }
 
 /// Records a night typed in by hand. Blocking: callers run it on a worker.
@@ -98,18 +110,35 @@ pub fn CreateSheet(
 	calendars: Vec<Calendar>,
 	default_calendar: Option<String>,
 	day: NaiveDate,
+	/// The time already chosen on the grid, which every kind starts from.
+	#[props(default)]
+	range: Option<TimeRange>,
 	on_created: EventHandler<()>,
 	on_close: EventHandler<()>,
 ) -> Element {
 	let today = day::today(&settings);
-	let (start, end) = default_times(day, today, timeparagon_core::clock::now().hour());
-	let mut kind = use_signal(|| Kind::Task);
+	let (start, end) = range.map_or_else(
+		|| default_times(day, today, timeparagon_core::clock::now().hour()),
+		|range| {
+			(
+				range.start.format("%H:%M").to_string(),
+				range.end.format("%H:%M").to_string(),
+			)
+		},
+	);
+	let mut kind = use_signal(|| {
+		if range.is_some() {
+			Kind::Event
+		} else {
+			Kind::Task
+		}
+	});
 	let mut title = use_signal(String::new);
 	let mut on_day = use_signal(|| false);
 	let mut description = use_signal(String::new);
 	let mut color_input = use_signal(String::new);
-	let mut date = use_signal(|| day.to_string());
-	let mut end_date = use_signal(|| day.to_string());
+	let mut date = use_signal(|| range.map_or(day, |range| range.start.date()).to_string());
+	let mut end_date = use_signal(|| range.map_or(day, |range| range.end.date()).to_string());
 	let mut all_day = use_signal(|| false);
 	let mut start = use_signal(move || start);
 	let mut end = use_signal(move || end);
@@ -131,7 +160,7 @@ pub fn CreateSheet(
 	let mut busy = use_signal(|| false);
 	let mut error = use_signal(|| None::<String>);
 	let ai_active = use_signal(|| false);
-	let mut task_details = use_signal(TaskDraft::default);
+	let mut task_details = use_signal(|| range.map(task_in_range).unwrap_or_default());
 	let mut proposals = use_signal(Vec::<NewEvent>::new);
 	let mut selected = use_signal(|| None::<usize>);
 	let form = EventForm {
@@ -179,7 +208,7 @@ pub fn CreateSheet(
 				aria_pressed: (kind() == this).to_string(),
 				onclick: move |_| {
 					if kind() == Kind::Event { review.stash(); selected.set(None); }
-					if this == Kind::Sleep && kind() != Kind::Sleep {
+					if this == Kind::Sleep && kind() != Kind::Sleep && range.is_none() {
 						let (first, last, bedtime, wakeup) = sleep_defaults(day, &sleep_settings);
 						date.set(first);
 						end_date.set(last);
@@ -340,15 +369,17 @@ pub fn CreateSheet(
 								span { key: "{token}", class: "meta-pill", "{token}" }
 							}
 						}
-						label { class: "sheet-check",
-							input {
-								r#type: "checkbox",
-								checked: on_day(),
-								onchange: move |event: FormEvent| on_day.set(event.checked()),
+						if range.is_none() {
+							label { class: "sheet-check",
+								input {
+									r#type: "checkbox",
+									checked: on_day(),
+									onchange: move |event: FormEvent| on_day.set(event.checked()),
+								}
+								"Due {day.format(\"%b %-d\")}, unless it names a day"
 							}
-							"Due {day.format(\"%b %-d\")}, unless it names a day"
+							p { class: "hint", "Without a day, it goes to the Inbox." }
 						}
-						p { class: "hint", "Without a day, it goes to the Inbox." }
 					} else {
 						if kind() == Kind::Event {
 							select {
@@ -423,7 +454,10 @@ pub fn CreateSheet(
 							}
 						}
 						if kind() == Kind::Sleep {
-							p { class: "hint", "Bedtime and wake-up, from your weekly schedule. A night added here is kept when the schedule changes." }
+							p { class: "hint",
+								if range.is_none() { "Bedtime and wake-up, from your weekly schedule. " }
+								"A night added here is kept when the schedule changes."
+							}
 						} else { textarea {
 							class: "client-input",
 							placeholder: "Description",
@@ -743,6 +777,45 @@ mod media_tests {
 		}
 		let mut dom = VirtualDom::new(app);
 		dom.rebuild_in_place();
+	}
+	#[test]
+	fn a_time_chosen_on_the_grid_fills_in_the_sheet() {
+		fn app() -> Element {
+			let day = NaiveDate::from_ymd_opt(2026, 11, 17).unwrap();
+			let range = TimeRange {
+				start: day.and_hms_opt(23, 30, 0).unwrap(),
+				end: day.succ_opt().unwrap().and_hms_opt(0, 45, 0).unwrap(),
+			};
+			rsx! {CreateSheet {settings:CalendarSettings::default(),projects:ProjectsSettings::default(),calendars:vec![],default_calendar:None,day,range,on_created:|_|{},on_close:|_|{}}}
+		}
+		let mut dom = VirtualDom::new(app);
+		dom.rebuild_in_place();
+		let html = dioxus_ssr::render(&dom);
+		for field in [
+			"value=\"2026-11-17\"",
+			"value=\"2026-11-18\"",
+			"value=\"23:30\"",
+			"value=\"00:45\"",
+			">Task<",
+			">Time block<",
+			">Sleep<",
+		] {
+			assert!(html.contains(field), "{field} missing");
+		}
+		assert!(html.contains("aria-label=\"Calendar\""), "opens on Event");
+		let task = task_in_range(TimeRange {
+			start: NaiveDate::from_ymd_opt(2026, 11, 17)
+				.unwrap()
+				.and_hms_opt(9, 15, 0)
+				.unwrap(),
+			end: NaiveDate::from_ymd_opt(2026, 11, 17)
+				.unwrap()
+				.and_hms_opt(10, 0, 0)
+				.unwrap(),
+		});
+		assert_eq!(task.due, "2026-11-17");
+		assert_eq!(task.due_time, "09:15");
+		assert_eq!(task.metadata.minutes, 45);
 	}
 	#[test]
 	fn media_controls_follow_the_title_and_offer_manual_task_review() {
