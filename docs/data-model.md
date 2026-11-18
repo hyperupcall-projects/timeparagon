@@ -162,6 +162,14 @@ The catalog of calendars and the time of the last successful refresh are cached
 in the `calendar_sync_state` document, so a restart can show source names and
 honor the sync interval.
 
+Mobile views read covered ranges from `google_sync_events` and the canonical
+task records, then apply stored sleep and local edits. `google_sync_windows`
+records coverage even for empty dates. When incremental sync is disabled,
+`calendar_view_coverage` records the fetched dates, account and day boundary for
+the month snapshots. A month containing some events does not imply that its
+other dates were fetched. View loading saves snapshots before delivering them
+to the UI; restoring a UI cache never overwrites those newer database records.
+
 ### Event
 
 `calendar::Event` is the single type for everything placed on the calendar,

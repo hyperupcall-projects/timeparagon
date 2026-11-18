@@ -7,7 +7,7 @@ use timeparagon_core::calendar::time_format::{self, TimeFormat};
 use timeparagon_core::calendar::{self, Event, Snapshot};
 use timeparagon_core::config::{CalendarSettings, Config};
 
-use crate::{HOUR_HEIGHT, day, editor::worker, plan::PlanView};
+use crate::{HOUR_HEIGHT, day, plan::PlanView};
 
 fn schedule_dates(
 	view: PlanView,
@@ -64,17 +64,8 @@ pub fn Planner(
 	let full_month = period == PlanView::Month;
 	let agenda_mode = period == PlanView::Schedule;
 	let dates = schedule_dates(period, selected, days_count, settings.first_day_of_week);
-	let load_settings = settings.clone();
-	let wanted = dates.clone();
-	let loaded = use_resource(use_reactive!(|(wanted, load_settings)| {
-		let _ = revision();
-		async move {
-			let requested = wanted.clone();
-			worker(move || day::load_agenda(&wanted, &load_settings))
-				.await
-				.map(|snapshot| (requested, snapshot))
-		}
-	}));
+	let (loaded, disk_view) =
+		crate::cache::use_calendar(dates.clone(), settings.clone(), revision, true);
 	// Keep Add and event sheets anchored to the date selected in the strip.
 	use_effect(move || {
 		on_day.call(anchor());
@@ -118,9 +109,16 @@ pub fn Planner(
 		.read()
 		.as_ref()
 		.and_then(|result| result.as_ref().ok())
-		.filter(|(requested, _)| *requested == dates)
-		.map(|(_, snapshot)| {
-			let mut snapshot = snapshot.clone();
+		.filter(|(wanted, _)| *wanted == dates)
+		.map(|(_, snapshot)| snapshot.clone())
+		.or_else(|| {
+			disk_view
+				.read()
+				.as_ref()
+				.filter(|(wanted, _)| *wanted == dates)
+				.map(|(_, snapshot)| snapshot.clone())
+		})
+		.map(|mut snapshot| {
 			crate::habits::name_events(&mut snapshot.events);
 			day::filter_snapshot(&snapshot, &search, &settings)
 		});
@@ -360,6 +358,9 @@ mod tests {
 	}
 
 	fn preview<const MODE: u8>() -> Element {
+		use_context_provider(crate::cache::Loader::default);
+		let changes = use_signal(|| 0);
+		use_context_provider(|| crate::cache::Changes(changes));
 		let day = date(2026, 11, 8);
 		let view = use_signal(|| {
 			if MODE == 0 {

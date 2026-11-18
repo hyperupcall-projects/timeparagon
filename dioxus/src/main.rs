@@ -8,6 +8,7 @@
 
 mod agenda;
 mod alarms;
+mod cache;
 mod calendar_gestures;
 mod create;
 mod day;
@@ -200,6 +201,7 @@ fn App() -> Element {
 #[component]
 fn Main() -> Element {
 	let setup::Finished(mut setup_finished) = use_context::<setup::Finished>();
+	use_context_provider(cache::Loader::default);
 	// Local settings can change under the view when the iced app saves them.
 	let mut config = use_signal(day::load_config);
 	let settings = config.read().calendar.clone();
@@ -262,6 +264,7 @@ fn Main() -> Element {
 	// Bumped when the local edits change (a write was answered, say), so the
 	// day is drawn again with its items unlocked.
 	let mut local_edits = use_signal(|| 0u64);
+	use_context_provider(|| cache::Changes(local_edits));
 	// Nights of the days in memory as the database has them, reread whenever
 	// one changes there, as when another device's night arrives by sync.
 	let mut stored_nights = use_signal(Vec::<calendar::Event>::new);
@@ -277,48 +280,29 @@ fn Main() -> Element {
 	let mut signed_in = use_signal(day::signed_in);
 	let mut cached_days = use_signal(move || {
 		let mut store = calendar::Store::new(config.peek().calendar.day_start_hour());
-		store.cache_days_in(timeparagon_core::task_db::path());
+		store.read_cached_days_in(timeparagon_core::task_db::path());
 		store
 	});
-	// Paint cached data immediately, fetching missing or empty days on navigation.
+	// Keep the shared Store for editors and sleep, without treating an empty
+	// calendar as a cache miss. The loader checks database coverage instead.
 	use_effect(move || {
 		let day = current_day();
-		let today = day::today(&config.peek().calendar);
-		cached_days.write().set_day(day, today);
-		if !cached_days.peek().has_calendar_events_on(day) {
-			let next = *revision.peek() + 1;
-			revision.set(next);
+		let settings = &config.read().calendar;
+		let today = day::today(settings);
+		if cached_days.peek().day_end_hour() != settings.day_start_hour() {
+			let mut store = calendar::Store::new(settings.day_start_hour());
+			store.read_cached_days_in(timeparagon_core::task_db::path());
+			cached_days.set(store);
 		}
+		cached_days.write().set_day(day, today);
 	});
 
-	let data = use_resource(move || {
-		let refresh = revision();
-		let requested_day = *current_day.peek();
-		let settings = config.peek().calendar.clone();
-		// Incremental sync is cheap, so opening the app always catches up.
-		let initial_is_fresh = refresh == 0
-			&& !settings.incremental_sync
-			&& !cached_days
-				.peek()
-				.sync_due(settings.refresh_every(), timeparagon_core::clock::now());
-		let cached = cached_days.peek().cached_snapshot();
-		async move {
-			if initial_is_fresh {
-				return cached
-					.ok_or_else(|| "No cached calendar data yet. Refresh to load it.".to_owned());
-			}
-			if !day::signed_in() {
-				return Err(
-					"Not connected to Google Calendar. Connect an account to load your day."
-						.to_owned(),
-				);
-			}
-			tokio::task::spawn_blocking(move || day::load_day(requested_day, &settings))
-				.await
-				.map_err(|error| format!("The calendar worker stopped: {error}"))
-				.and_then(|result| result)
-		}
-	});
+	let (data, disk_view) = cache::use_calendar(
+		vec![current_day()],
+		settings.clone(),
+		revision,
+		page() != Page::Plan && !show_agenda(),
+	);
 
 	// Mark the document with the chosen theme. `system` leaves the decision to
 	// the CSS `prefers-color-scheme` query, so it follows the OS live.
@@ -340,7 +324,7 @@ fn Main() -> Element {
 	// Keep the last good day on screen through a transient sync failure.
 	use_effect(move || {
 		let value = data.read();
-		if let Some(Ok(snapshot)) = value.as_ref() {
+		if let Some(Ok((_, snapshot))) = value.as_ref() {
 			cached_days
 				.write()
 				.cache_fetched_snapshot(snapshot.clone(), &[snapshot.day]);
@@ -465,7 +449,7 @@ fn Main() -> Element {
 		let _ = task_tab();
 		let pending = matches!(*data.state().read(), UseResourceState::Pending);
 		let loaded_day = match data.read().as_ref() {
-			Some(Ok(snapshot)) => Some(snapshot.day),
+			Some(Ok((_, snapshot))) => Some(snapshot.day),
 			_ => None,
 		};
 		let requested_day = current_day();
@@ -490,7 +474,7 @@ fn Main() -> Element {
 		let day = current_day();
 		let fetching = matches!(*data.state().read(), UseResourceState::Pending);
 		let fetched = match data.read().as_ref() {
-			Some(Ok(snapshot)) if snapshot.day == day => Some(snapshot.clone()),
+			Some(Ok((_, snapshot))) if snapshot.day == day => Some(snapshot.clone()),
 			_ => None,
 		};
 		let known = fetched.clone().or_else(|| {
@@ -531,11 +515,18 @@ fn Main() -> Element {
 	let mut snapshot = match resource.as_ref() {
 		// A resource keeps the previous value while its next fetch is running.
 		// Never paint yesterday's events under today's heading.
-		Some(Ok(snapshot)) if snapshot.day == requested_day => Some(snapshot.clone()),
-		_ => cached_days
+		Some(Ok((_, snapshot))) if snapshot.day == requested_day => Some(snapshot.clone()),
+		_ => disk_view
 			.read()
-			.cached_snapshot()
-			.filter(|snapshot| snapshot.day == requested_day),
+			.as_ref()
+			.filter(|(dates, _)| dates == &[requested_day])
+			.map(|(_, snapshot)| snapshot.clone())
+			.or_else(|| {
+				cached_days
+					.read()
+					.cached_snapshot()
+					.filter(|snapshot| snapshot.day == requested_day)
+			}),
 	};
 	drop(resource);
 	// Drawn again whenever the local edits change, so an item unlocks as soon

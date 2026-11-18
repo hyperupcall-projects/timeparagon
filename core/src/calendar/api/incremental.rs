@@ -913,6 +913,31 @@ fn stored_events(
 		.collect())
 }
 
+/// Read a completely covered view without contacting Google. Month snapshots
+/// may predate an incremental change to an offscreen day.
+pub(crate) fn cached_events(
+	connection: &Connection,
+	calendars: &[Calendar],
+	first: NaiveDate,
+	last: NaiveDate,
+	day_end_hour: u32,
+) -> Result<Option<Vec<Event>>, String> {
+	let (start, _) = day_bounds(first, day_end_hour);
+	let (_, end) = day_bounds(last, day_end_hour);
+	let wanted = Window {
+		start: parse_stamp(&start).ok_or("Invalid calendar range")?,
+		end: parse_stamp(&end).ok_or("Invalid calendar range")?,
+	};
+	if !gaps(wanted, &load_windows(connection)?).is_empty() {
+		return Ok(None);
+	}
+	let mut events = Vec::new();
+	for calendar in calendars.iter().filter(|c| !c.is_task_list()) {
+		events.extend(stored_events(connection, calendar, wanted, first, last)?);
+	}
+	Ok(Some(events))
+}
+
 /// The task lists by name and ID, and each one's sync.
 type TaskSync = Result<(Vec<(String, String)>, Vec<ListSync>), GoogleError>;
 type CalendarSyncs<'a> = Vec<(&'a Calendar, CalendarSync)>;

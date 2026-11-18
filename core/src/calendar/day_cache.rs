@@ -87,7 +87,7 @@ pub fn save_sync_state(
 }
 
 /// One event as the cache row holds it.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct SavedEvent {
 	id: String,
 	calendar_id: String,
@@ -270,7 +270,7 @@ pub fn save(
 		.map(|event| (event.calendar_id.as_str(), event.id.as_str()))
 		.collect();
 	month.events.retain(|saved| {
-		day_at(saved.start, day_end_hour) != day
+		!super::event_on_day(&Event::from(saved.clone()), day, day_end_hour)
 			&& !incoming.contains(&(saved.calendar_id.as_str(), saved.id.as_str()))
 	});
 	month.events.extend(events.iter().map(SavedEvent::from));
@@ -443,7 +443,7 @@ pub fn clear(database: &Path) {
 			.execute_batch(&format!(
 				"BEGIN IMMEDIATE;
                  DELETE FROM calendar_months;
-                 DELETE FROM documents WHERE key='{}';
+                 DELETE FROM documents WHERE key IN ('{}','calendar_view_coverage');
                  COMMIT;",
 				keys::SYNC_STATE
 			))

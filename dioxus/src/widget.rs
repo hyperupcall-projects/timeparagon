@@ -250,7 +250,7 @@ fn refresh() -> bool {
 	let travel = day::travel_boxes(&model, &config.travel, config.appearance.distance_unit);
 	write(&model, &travel, &config.calendar, snapshot.fetched_at);
 	if config.reminders.any_enabled() {
-		refresh_reminders(&config, snapshot, today);
+		refresh_reminders(&config, today);
 	}
 	true
 }
@@ -258,19 +258,10 @@ fn refresh() -> bool {
 /// Caches today and tomorrow, so reminders are planned from fresh events even
 /// when the app has not been opened, then re-plans them.
 #[cfg(target_os = "android")]
-fn refresh_reminders(
-	config: &timeparagon_core::config::Config,
-	today_snapshot: calendar::Snapshot,
-	today: NaiveDate,
-) {
-	let mut store = calendar::Store::new(config.calendar.day_start_hour());
-	store.cache_days_in(timeparagon_core::task_db::path());
-	store.cache_fetched_snapshot(today_snapshot, &[today]);
+fn refresh_reminders(config: &timeparagon_core::config::Config, today: NaiveDate) {
 	// Early reminders for tomorrow are due before the next morning's sync.
-	if let Some(tomorrow) = today.succ_opt()
-		&& let Ok(snapshot) = day::load_day(tomorrow, &config.calendar)
-	{
-		store.cache_fetched_snapshot(snapshot, &[tomorrow]);
+	if let Some(tomorrow) = today.succ_opt() {
+		let _ = day::load_day(tomorrow, &config.calendar);
 	}
 	crate::reminders::publish(config);
 }

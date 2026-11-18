@@ -239,6 +239,15 @@ saved). Life stays on the desktop.
   block's total planned time against its capacity. Tasks can be opened, removed
   and added there, and **Edit block** edits the block itself.
 
+Do, Plan and agenda sheets read their data from SQLite first. Successfully
+fetched empty days are cached too; opening another date fetches its missing
+range. Completed fetches save on the worker even if you leave the view, and
+cached views remain available offline. With incremental sync enabled, the app
+checks every two minutes using the desktop's Calendar sync tokens and Google
+Tasks `updatedMin` timestamps. Those checks update the local copy for all
+covered dates, including dates outside the current view. The widget also saves
+its fetched days to SQLite, whether or not reminders are enabled.
+
 ## Editing
 
 Tapping anything else on the day opens a sheet with the same fields as the iced
