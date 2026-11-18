@@ -8,6 +8,11 @@ own screen and the rest of the app in sheets over it:
   or drag the circular top/bottom handles to change just the start/end. Times
   snap to five minutes; tap elsewhere to dismiss the handles. A gesture changes
   only that occurrence; use the editor to change a repeating series.
+- In Do, Day and Multi-day, hold an empty part of the timed grid to draw a gray
+  one-hour range. Drag it to move it (including between visible days) or drag its
+  handles to change the start and end, then press **Confirm time** to add a task,
+  event, time block or night at that time. **Cancel** or a tap on the grid discards
+  it; scrolling and pinching keep it.
 - Pinch with two fingers on the timed grid to zoom in or out, in Do, Day or
   Multi-day. The time under your fingers stays in place. Zoom changes the
   spacing between hours and is kept when switching days or views until the app

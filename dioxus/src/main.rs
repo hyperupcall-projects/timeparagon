@@ -218,6 +218,10 @@ fn Main() -> Element {
 	use_effect(move || calendar_gestures::sync_zoom(calendar_zoom()));
 	let mut alarm_placement = use_signal(|| None::<chrono::NaiveDateTime>);
 	use_context_provider(|| alarms::Placement(alarm_placement));
+	let mut draft_range = use_signal(|| None::<calendar_gestures::TimeRange>);
+	use_context_provider(|| calendar_gestures::DraftRange(draft_range));
+	// The confirmed time the Add sheet opens on.
+	let mut create_range = use_signal(|| None::<calendar_gestures::TimeRange>);
 	let mut selected_block = use_signal(|| None::<String>);
 	let mut editing = use_signal(|| None::<Event>);
 	let block_writing = use_signal(|| false);
@@ -270,6 +274,11 @@ fn Main() -> Element {
 		{
 			alarm_placement.set(None);
 		}
+	});
+	// A range belongs to the grid it was drawn on.
+	use_effect(move || {
+		let _ = (page(), plan_view(), current_day());
+		draft_range.set(None);
 	});
 	let mut show_log = use_signal(|| false);
 	// Writes to Google as they are sent, saved or refused, newest last.
@@ -369,6 +378,7 @@ fn Main() -> Element {
 			if follow_today()
 				&& editing.peek().is_none()
 				&& !*show_create.peek()
+				&& draft_range.peek().is_none()
 				&& !*block_writing.peek()
 			{
 				let today = day::today(&config.peek().calendar);
@@ -1198,8 +1208,12 @@ fn Main() -> Element {
 				calendars,
 				default_calendar,
 				day: selected_day,
+				range: create_range(),
 				on_created: after_write,
-				on_close: move |()| show_create.set(false),
+				on_close: move |()| {
+					show_create.set(false);
+					create_range.set(None);
+				},
 			}
 		}
 	});
@@ -1784,7 +1798,19 @@ fn Main() -> Element {
 				{body}
 			}
 			alarms::PlacementControls { config }
-			if snapshot.is_some() && page() != Page::Habits && alarm_placement().is_none() {
+			calendar_gestures::RangeControls {
+				time_format,
+				on_confirm: move |range| {
+					create_range.set(Some(range));
+					draft_range.set(None);
+					show_create.set(true);
+				},
+			}
+			if snapshot.is_some()
+				&& page() != Page::Habits
+				&& alarm_placement().is_none()
+				&& draft_range().is_none()
+			{
 				button {
 					class: "fab",
 					title: "Add",

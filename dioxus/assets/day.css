@@ -3551,6 +3551,13 @@ textarea {
 .warning-item p { margin: 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .warning-actions { padding-top: 12px; }
 
+/* Holding the grid must not start a native text selection. */
+.grid[data-calendar-day] {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
 /* Long press lifts a copy above the grid, with Calendar-style edge knobs. */
 .grid-event[data-draggable="true"] {
     -webkit-touch-callout: none;
@@ -3603,6 +3610,15 @@ textarea {
     pointer-events: none;
 }
 .calendar-selection.saving { opacity: 0.7; pointer-events: none; }
+/* A range for something new has no color of its own until it exists. */
+.grid-event.calendar-draft {
+    left: 1px;
+    right: 1px;
+    background: color-mix(in srgb, var(--muted) 45%, var(--card));
+    border-color: var(--muted);
+    outline-color: var(--muted);
+}
+.calendar-draft .calendar-resize::after { border-color: var(--muted); }
 .calendar-gesture-error {
     position: fixed;
     bottom: 80px;
@@ -3664,7 +3680,7 @@ textarea {
     font-weight: 600;
     box-shadow: var(--shadow-row);
 }
-.alarm-placement-bar {
+.placement-bar {
     flex: none;
     display: flex;
     align-items: center;
@@ -3675,12 +3691,13 @@ textarea {
     border-top: 2px solid var(--alarm);
     box-shadow: var(--shadow-floating);
 }
-.alarm-placement-summary { display: grid; gap: 4px; flex: 1 1 220px; }
-.alarm-placement-summary strong { font-size: 16px; }
-.alarm-placement-actions { display: flex; gap: 8px; flex: 1 1 200px; }
-.alarm-placement-actions .btn { min-height: 44px; }
-.alarm-placement-actions .primary { flex: 1; }
-.alarm-placement-bar .error-text { flex-basis: 100%; margin: 0; }
+.range-draft-bar { border-top-color: var(--muted); }
+.placement-summary { display: grid; gap: 4px; flex: 1 1 220px; }
+.placement-summary strong { font-size: 16px; }
+.placement-actions { display: flex; gap: 8px; flex: 1 1 200px; }
+.placement-actions .btn { min-height: 44px; }
+.placement-actions .primary { flex: 1; }
+.placement-bar .error-text { flex-basis: 100%; margin: 0; }
 
 /* Media entry follows the desktop draft: compact controls and a review queue. */
 .ai-title-row { display: flex; gap: 8px; align-items: start; flex-wrap: wrap; }

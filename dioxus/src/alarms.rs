@@ -95,15 +95,15 @@ pub fn PlacementControls(config: Signal<Config>) -> Element {
 	let format = config.read().appearance.time_format;
 	rsx! {
 		if let Some(at) = placement() {
-			div { class: "alarm-placement-bar", role: "region", aria_label: "Set alarm",
-				div { class: "alarm-placement-summary", aria_live: "polite",
+			div { class: "placement-bar alarm-placement-bar", role: "region", aria_label: "Set alarm",
+				div { class: "placement-summary", aria_live: "polite",
 					strong { "{time_format::clock(at, format)} · {at.format(\"%a, %b %-d\")}" }
 					span { class: "hint", "Drag the purple needle or tap a time. Scroll and pinch to zoom." }
 				}
 				if let Some(message) = error().or_else(|| future_time(at, now()).err()) {
 					p { class: "error-text", role: "alert", "{message}" }
 				}
-				div { class: "alarm-placement-actions",
+				div { class: "placement-actions",
 					button { class: "btn", onclick: move |_| placement.set(None), "Cancel" }
 					button { class: "btn primary", disabled: future_time(at, now()).is_err(), onclick: move |_| {
 						let result = (|| {
