@@ -20,6 +20,7 @@ pub mod layout;
 pub mod life;
 pub mod links;
 mod meetings;
+mod nav_icon;
 pub mod notepad;
 pub mod notes;
 pub mod people;
@@ -602,24 +603,14 @@ fn drag_ghost<'a>(
 		.into()
 }
 
-/// The seven main navigation items.
-const TAB_COUNT: usize = 7;
-const TAB_LABELS: [&str; TAB_COUNT] = [
-	"Do", "Plan Day", "Routines", "Life", "Note", "More", "Settings",
-];
-const TAB_SHORT_LABELS: [&str; TAB_COUNT] =
-	["Do", "Plan Day", "Rtn", "Life", "Note", "More", "Set"];
-const TAB_WIDEST_LABELS: [&str; TAB_COUNT] = [
-	"Do",
-	"Plan 2 Weeks",
-	"Routines",
-	"Life",
-	"Note",
-	"More",
-	"Settings",
-];
+/// The six main navigation items.
+const TAB_COUNT: usize = 6;
+const TAB_LABELS: [&str; TAB_COUNT] = ["Do", "Plan Day", "Routines", "Life", "More", "Settings"];
+const TAB_SHORT_LABELS: [&str; TAB_COUNT] = ["Do", "Plan Day", "Rtn", "Life", "More", "Settings"];
+const TAB_WIDEST_LABELS: [&str; TAB_COUNT] =
+	["Do", "Plan 2 Weeks", "Routines", "Life", "More", "Settings"];
 const TAB_WIDEST_SHORT_LABELS: [&str; TAB_COUNT] =
-	["Do", "Plan 2 Weeks", "Rtn", "Life", "Note", "More", "Set"];
+	["Do", "Plan 2 Weeks", "Rtn", "Life", "More", "Settings"];
 
 /// Height of the bottom add-task button.
 const PANEL_ACTION_HEIGHT: f32 = 22.0;
@@ -647,7 +638,8 @@ pub fn plan_view_label(state: &State) -> &'static str {
 pub const TASKS_LABELS: [&str; 4] = ["Unfinished", "Inbox", "Today", "Backlog"];
 
 /// The destinations kept inside the More menu.
-pub const MORE_LABELS: [&str; 6] = [
+pub const MORE_LABELS: [&str; 7] = [
+	"Notepad",
 	"Travel",
 	"Habits",
 	"Notes",
@@ -676,7 +668,7 @@ pub struct TabFit {
 	gap: f32,
 }
 
-/// The labels shown at `width`, so tests and callers agree with `tabs`.
+/// Destination names at `width`; More and Settings are shown as icons.
 pub fn tab_labels(width: f32) -> [&'static str; TAB_COUNT] {
 	if tab_fit(Metrics::of(Size::new(width, 0.0))).short {
 		TAB_SHORT_LABELS
@@ -697,10 +689,12 @@ fn tab_fit(metrics: Metrics) -> TabFit {
 	let size_for = |labels: &[&str; TAB_COUNT]| {
 		let chars: usize = labels
 			.iter()
+			.take(4)
 			.map(|label| label.chars().count())
 			.sum::<usize>();
-		// Seven tabs, four within-group gaps, and gaps on both sides of each spacer.
-		let fixed = 16.0 * pad + 4.0 * gap + 4.0 * (gap * 2.0).max(4.0) + 7.0;
+		// Four text tabs, two square icon buttons, and the gaps between groups.
+		let fixed =
+			10.0 * pad + 2.0 * tab_height(&metrics) + 3.0 * gap + 4.0 * (gap * 2.0).max(4.0) + 7.0;
 		((available - fixed) / ((chars + 1) as f32 * TAB_GLYPH_WIDTH)).min(max_size)
 	};
 	let full = size_for(&TAB_WIDEST_LABELS);
@@ -722,7 +716,7 @@ fn tab_fit(metrics: Metrics) -> TabFit {
 }
 
 /// A single row of navigation in three groups with space between them:
-/// Do/Plan/Routines, then Life, then Note/More/Settings.
+/// Do/Plan/Routines, then Life, then More/Settings.
 /// Labels shrink (and shorten, when very narrow) rather than wrapping.
 ///
 /// Planning destinations show their submenus beneath the main row.
@@ -743,7 +737,8 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 	let more_active = state.more_menu_open
 		|| matches!(
 			state.screen,
-			Screen::Travel
+			Screen::Notepad
+				| Screen::Travel
 				| Screen::Habits
 				| Screen::Notes
 				| Screen::People
@@ -799,26 +794,21 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 		metrics,
 		fit,
 	);
-	let note = tab(
-		labels[4],
-		state.screen == Screen::Notepad,
-		Message::Navigation(NavigationMessage::ScreenSelected(Screen::Notepad)),
-		metrics,
-		fit,
-	);
-	let more = tab(
-		labels[5],
+	let more = icon_tab(
+		nav_icon::Icon::Menu,
+		"More",
+		"nav-more",
 		more_active,
 		Message::Navigation(NavigationMessage::MoreMenuToggled),
 		metrics,
-		fit,
 	);
-	let settings = tab(
-		labels[6],
+	let settings = icon_tab(
+		nav_icon::Icon::Settings,
+		"Settings",
+		"nav-settings",
 		state.screen == Screen::Settings,
 		Message::Navigation(NavigationMessage::ScreenSelected(Screen::Settings)),
 		metrics,
-		fit,
 	);
 
 	let group_gap = (fit.gap * 2.0).max(4.0);
@@ -828,7 +818,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 			Space::new().width(Fill),
 			life,
 			Space::new().width(Fill),
-			row![note, more, settings].spacing(fit.gap),
+			row![more, settings].spacing(fit.gap),
 		]
 		.spacing(group_gap)
 		.align_y(Center),
@@ -917,6 +907,36 @@ fn tab_height(metrics: &Metrics) -> f32 {
 	} else {
 		metrics.icon_button()
 	}
+}
+
+/// An icon destination with the same hit area and active style as the tabs.
+fn icon_tab<'a>(
+	icon: nav_icon::Icon,
+	label: &'static str,
+	id: &'static str,
+	active: bool,
+	message: Message,
+	metrics: &Metrics,
+) -> Element<'a, Message> {
+	let side = tab_height(metrics);
+	let size = (side - 4.0).clamp(12.0, 18.0);
+	container(
+		tooltip(
+			button(
+				container(nav_icon::view(icon, size, active))
+					.center_x(side)
+					.center_y(side),
+			)
+			.padding(0)
+			.on_press(message)
+			.style(controls::nav(active)),
+			text(label).size(12),
+			tooltip::Position::Bottom,
+		)
+		.style(controls::surface),
+	)
+	.id(id)
+	.into()
 }
 
 /// One tab, lit when it is the page on show.
@@ -1053,6 +1073,7 @@ fn more_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 
 	let mut panel = column![].spacing(2.0).width(Fill);
 	for (label, screen) in MORE_LABELS.iter().zip([
+		Screen::Notepad,
 		Screen::Travel,
 		Screen::Habits,
 		Screen::Notes,

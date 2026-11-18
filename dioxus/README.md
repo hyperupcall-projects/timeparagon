@@ -18,10 +18,13 @@ own screen and the rest of the app in sheets over it:
   notes directory chosen on each device.
 - Search and filters for the day.
 - **Do**, **Plan** (Day, Multi-day, Month or Schedule), **Tasks**
-  with its **Unfinished**, **Inbox**, **Today** and **Backlog** lists, **Note**,
+  with its **Unfinished**, **Inbox**, **Today** and **Backlog** lists,
   **More** and **Settings**.
 - Joining meetings and answering invitations.
-- The notepad, brain dumps and projects, shared through Turso.
+- The notepad and daily brain dumps, shared through Turso. **More → Brain dump**
+  lists every page newest first, with dated previews and search across text and
+  dates. **Add today** opens today's page; tap a date or **Edit** to change an
+  older page. The editor saves as you type and offers **Delete**.
 - The habit tracker, with the desktop's features: the list with sections, sorting
   and filters (hold a row to drag it in manual order), each habit's page with its
   charts, notes and calendar events, the add and edit form, the day dialog with
@@ -239,8 +242,8 @@ the Month button above the schedule returns to the full month. **Tasks** shows t
 lists beneath the navigation. The lists take the same tasks as the desktop's and save the same
 sort settings; Backlog has a picker on each task for its planning horizon in
 place of dragging. At widths above 820px, Tasks keeps the grid beside
-its list. **Note** opens the notepad, and **More** holds Alarms, Habits, Notes, Brain
-dump, Projects, and Log (each change sent to Google, and whether it was
+its list. **More** starts with **Notepad**, followed by Habits, Notes, People, Brain
+dump, Alarms, and Log (each change sent to Google, and whether it was
 saved). Life stays on the desktop.
 
 ## What the day view shows

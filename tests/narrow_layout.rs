@@ -544,14 +544,14 @@ fn the_calendar_menu_lists_calendars_without_website_or_dock_buttons() {
 	}
 }
 
-/// The tab label at `index` (Do, Plan Day, Routines, Life, Note, More,
+/// The tab label at `index` (Do, Plan Day, Routines, Life, More,
 /// Settings) for a window of `width`.
 fn tab_label(width: f32, index: usize) -> &'static str {
 	timeparagon::ui::tab_labels(width)[index]
 }
 
 /// Navigation is one row in three groups at every width, never overflowing:
-/// Do/Plan/Routines, then Life, then Note/More/Settings.
+/// Do/Plan/Routines, then Life, then More/Settings.
 #[test]
 fn the_tabs_are_one_row_in_three_groups() {
 	let state = state();
@@ -559,19 +559,29 @@ fn the_tabs_are_one_row_in_three_groups() {
 		let mut ui = render(&state, Size::new(width, 500.0));
 		let labels = timeparagon::ui::tab_labels(width);
 		let mut bounds = Vec::new();
-		for label in labels {
-			let found = ui.find(label).unwrap().bounds();
+		for (index, label) in labels.into_iter().enumerate() {
+			let found = match index {
+				4 => ui
+					.find(iced::widget::Id::from("nav-more"))
+					.unwrap()
+					.bounds(),
+				5 => ui
+					.find(iced::widget::Id::from("nav-settings"))
+					.unwrap()
+					.bounds(),
+				_ => ui.find(label).unwrap().bounds(),
+			};
 			assert!(
 				found.x >= 0.0 && found.x + found.width <= width,
 				"{label} extends beyond the window at {width}px"
 			);
 			bounds.push(found);
 		}
-		// Order: Do, Plan Day, Routines, Life, Note, More, Settings.
+		// Order: Do, Plan Day, Routines, Life, More, Settings.
 		for pair in bounds.windows(2) {
 			assert!(pair[0].x + pair[0].width <= pair[1].x, "order at {width}px");
 			assert!(
-				(pair[0].y - pair[1].y).abs() < 1.0,
+				(pair[0].center().y - pair[1].center().y).abs() < 1.0,
 				"not one row at {width}px"
 			);
 		}
@@ -584,7 +594,7 @@ fn the_tabs_are_one_row_in_three_groups() {
 		let gap = |a: usize, b: usize| bounds[b].x - (bounds[a].x + bounds[a].width);
 		assert!(gap(2, 3) > gap(0, 1), "first group at {width}px");
 		assert!(gap(3, 4) > gap(0, 1), "middle group at {width}px");
-		assert!(gap(5, 6) < gap(3, 4), "right group at {width}px");
+		assert!(gap(4, 5) < gap(3, 4), "right group at {width}px");
 	}
 }
 
@@ -593,12 +603,14 @@ fn the_tabs_are_one_row_in_three_groups() {
 fn the_menu_keeps_its_width_when_editors_open() {
 	let mut state = state();
 	let base = state.calendar_width();
-	let labels = timeparagon::ui::tab_labels(base);
 	state.calendar.open_event = Some("all-day".into());
 	for block in [false, true] {
 		state.timeblocking.block = block.then(|| "standup".into());
 		let mut ui = at(Size::new(base, 600.0), timeparagon::ui::view(&state));
-		let settings = ui.find(labels[6]).expect("Settings tab").bounds();
+		let settings = ui
+			.find(iced::widget::Id::from("nav-settings"))
+			.expect("Settings icon")
+			.bounds();
 		assert!(settings.x + settings.width <= base + 0.5);
 	}
 }
@@ -626,7 +638,7 @@ fn plan_day_has_task_tabs_and_more_opens_a_menu() -> Result<(), Error> {
 
 	state.screen = Screen::Calendar;
 	let mut ui = render(&state, Size::new(420.0, 600.0));
-	let _ = ui.click("More")?;
+	let _ = ui.click(iced::widget::Id::from("nav-more"))?;
 	assert!(
 		ui.into_messages()
 			.any(|m| matches!(m, Message::Navigation(NavigationMessage::MoreMenuToggled)))
@@ -718,23 +730,28 @@ fn life_shows_its_pages_and_opens_an_area_in_a_side_panel() -> Result<(), Error>
 	Ok(())
 }
 
-/// The settings tab opens the settings, which is where it belongs now.
+/// The settings gear opens Settings at every width.
 #[test]
 fn the_settings_tab_opens_the_settings() -> Result<(), Error> {
-	let state = state();
-	let mut ui = render(&state, Size::new(420.0, 600.0));
-
-	let _ = ui.click(tab_label(420.0, 6))?;
-
-	let messages: Vec<Message> = ui.into_messages().collect();
-
-	assert!(
-		messages.iter().any(|message| matches!(
-			message,
-			Message::Navigation(NavigationMessage::ScreenSelected(Screen::Settings))
-		)),
-		"clicking the tab produced {messages:?}"
-	);
+	for width in WIDTHS {
+		let state = state();
+		let mut ui = render(&state, Size::new(width, 600.0));
+		assert!(ui.find("More").is_err(), "More is still text at {width}px");
+		assert!(ui.find("Set").is_err(), "Set is still text at {width}px");
+		assert!(
+			ui.find("Settings").is_err(),
+			"Settings is still text at {width}px"
+		);
+		ui.click(iced::widget::Id::from("nav-settings"))?;
+		let messages: Vec<Message> = ui.into_messages().collect();
+		assert!(
+			messages.iter().any(|message| matches!(
+				message,
+				Message::Navigation(NavigationMessage::ScreenSelected(Screen::Settings))
+			)),
+			"clicking the gear produced {messages:?}"
+		);
+	}
 
 	Ok(())
 }
@@ -1057,22 +1074,30 @@ fn resync_calendar_and_tasks_data_is_offered_once_signed_in() -> Result<(), Erro
 	Ok(())
 }
 
-/// The notepad is a tab of its own and is reachable at every width.
+/// The notepad is the first item under More at every width.
 #[test]
-fn the_notepad_is_a_tab_at_the_top_of_the_calendar() {
+fn the_notepad_is_first_under_more() {
 	for width in WIDTHS {
-		let state = state();
+		let mut state = state();
 
 		let mut ui = render(&state, Size::new(width, HEIGHT));
-
-		let notepad = tab_label(width, 4);
-		assert!(ui.find(notepad).is_ok(), "the tab is missing at {width}px");
+		assert!(ui.find("Note").is_err(), "Note is still a tab at {width}px");
+		assert!(ui.find("Notepad").is_err(), "Notepad is a tab at {width}px");
 
 		let calendar = tab_label(width, 0);
 		assert!(
 			ui.find(calendar).is_ok(),
 			"the way back is missing at {width}px"
 		);
+		drop(ui);
+
+		state.more_menu_open = true;
+		let mut ui = render(&state, Size::new(width, HEIGHT));
+		let notepad = ui.find("Notepad").expect("Notepad in More").bounds();
+		for label in timeparagon::ui::MORE_LABELS.into_iter().skip(1) {
+			let next = ui.find(label).unwrap().bounds();
+			assert!(notepad.y + notepad.height <= next.y, "{label} at {width}px");
+		}
 	}
 }
 
@@ -1101,24 +1126,23 @@ fn the_habits_item_opens_the_habits() -> Result<(), Error> {
 	Ok(())
 }
 
-/// The notepad tab opens the notepad.
+/// The Notepad item opens the notepad and closes More at every width.
 #[test]
-fn the_notepad_tab_opens_the_notepad() -> Result<(), Error> {
-	let state = state();
-	let mut ui = render(&state, Size::new(420.0, 600.0));
-
-	let _ = ui.click(tab_label(420.0, 4))?;
-
-	let messages: Vec<Message> = ui.into_messages().collect();
-
-	assert!(
-		messages.iter().any(|message| matches!(
+fn the_notepad_item_opens_the_notepad() -> Result<(), Error> {
+	for width in WIDTHS {
+		let mut state = state();
+		state.more_menu_open = true;
+		let mut ui = render(&state, Size::new(width, HEIGHT));
+		ui.click("Notepad")?;
+		let message = ui.into_messages().next().expect("Notepad navigation");
+		assert!(matches!(
 			message,
 			Message::Navigation(NavigationMessage::ScreenSelected(Screen::Notepad))
-		)),
-		"clicking the tab produced {messages:?}"
-	);
-
+		));
+		let _ = app::update(&mut state, message);
+		assert_eq!(state.screen, Screen::Notepad);
+		assert!(!state.more_menu_open);
+	}
 	Ok(())
 }
 
@@ -1131,7 +1155,7 @@ fn the_notepad_screen_is_usable_at_two_hundred_pixels() {
 
 	let mut ui = render(&state, Size::new(200.0, 600.0));
 
-	for label in [tab_label(200.0, 4), tab_label(200.0, 0), "A-", "A+", "100%"] {
+	for label in ["Notepad", tab_label(200.0, 0), "A-", "A+", "100%"] {
 		assert!(ui.find(label).is_ok(), "{label:?} is missing at 200px");
 	}
 }

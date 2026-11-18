@@ -51,7 +51,7 @@ textarea {
 
 /* ---------------------------------------------------------------- navigation */
 
-/* Do, Plan and Tasks, then Note, More and Settings. Tasks owns the second row. */
+/* Do, Plan and Tasks, then More and Settings. Tasks owns the second row. */
 .nav-card {
     flex: none;
     position: relative;
@@ -79,10 +79,6 @@ textarea {
 }
 
 .task-tabs::-webkit-scrollbar {
-    display: none;
-}
-
-.label-short {
     display: none;
 }
 
@@ -168,6 +164,15 @@ textarea {
     background: transparent;
     white-space: nowrap;
     cursor: pointer;
+}
+
+.nav-card .nav-icon {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    padding: 0;
 }
 
 .nav-tab:hover,
@@ -2805,8 +2810,40 @@ textarea {
     resize: vertical;
 }
 
-.scratch-earlier {
-    white-space: pre-wrap;
+.brain-dump-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.brain-dump-card {
+    flex: none;
+    padding: 10px 12px;
+    border: 1px solid var(--edge);
+    border-radius: var(--radius-card);
+    background: var(--card);
+}
+
+.brain-dump-card p {
+    margin: 6px 0 0;
+}
+
+.brain-dump-date {
+    flex: 1;
+    min-width: 0;
+    padding: 4px 0;
+    border: none;
+    background: none;
+    font-weight: 600;
+    text-align: left;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+}
+
+.brain-dump-editor-date {
+    min-width: 0;
+    margin: 0;
+    overflow-wrap: anywhere;
 }
 
 .agenda-day {
@@ -3026,21 +3063,13 @@ textarea {
     gap: 8px;
 }
 
-/* A phone keeps every tab on one line by shortening Settings and tightening. */
+/* A phone keeps every tab on one line with tighter spacing. */
 @media (max-width: 480px) {
     .nav-card .nav-tab,
     .plan-main,
     .plan-toggle {
         padding: 0 5px;
         font-size: 13px;
-    }
-
-    .label-long {
-        display: none;
-    }
-
-    .label-short {
-        display: inline;
     }
 }
 

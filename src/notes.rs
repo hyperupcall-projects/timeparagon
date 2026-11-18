@@ -2,7 +2,7 @@
 //!
 //! The files themselves are in `timeparagon_core::notes`.
 //! This is what the app is in the middle of doing with them. It is unrelated
-//! to the notepad, which is the single page behind the "Note" tab.
+//! to the notepad, which is the single page under More → Notepad.
 
 use std::path::{Path, PathBuf};
 

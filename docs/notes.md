@@ -1,7 +1,7 @@
 # Notes
 
 Notes are Markdown documents listed under **More → Notes**. They are separate
-from the notepad behind the **Note** tab, which is also written in Markdown and
+from **More → Notepad**, which is also written in Markdown and
 has the same **Edit** and **View** tabs.
 
 ## Storage
