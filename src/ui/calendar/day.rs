@@ -188,7 +188,7 @@ pub(super) fn day_canvas<'a>(
 			(0..=DAY_MINUTES).contains(&minutes).then(|| AlarmMark {
 				id: alarm.id,
 				minutes,
-				label: alarm_label(alarm, state.config.appearance.time_format),
+				label: alarm.needle_label(state.config.appearance.time_format),
 			})
 		})
 		.collect();
@@ -286,19 +286,6 @@ pub(super) fn day_canvas<'a>(
 
 /// Minutes in a day, the height of the grid in minutes.
 pub(super) const DAY_MINUTES: i32 = 24 * 60;
-
-/// What an alarm's needle says beside it: its time, and its label if it has
-/// one.
-pub(super) fn alarm_label(alarm: &alarms::Alarm, time_format: TimeFormat) -> String {
-	let time = calendar::time_format::clock(alarm.at, time_format);
-	let label = alarm.label.trim();
-
-	if label.is_empty() {
-		time
-	} else {
-		format!("{time} {label}")
-	}
-}
 
 /// Minutes from the start of the displayed day.
 ///

@@ -327,6 +327,7 @@ fn schedule_grid(
 							for row in 0..48 {
 								div { class: if row % 2 == 0 { "hour-line" } else { "hour-line half-hour" }, style: "top:{crate::scaled_px(row as f32 * HOUR_HEIGHT / 2.0)};" }
 							}
+							crate::alarms::AlarmLines { day: model.day, hour_start: model.hour_start }
 							for timed in &model.timed {
 								{
 									let opened = timed.event.clone();
@@ -367,6 +368,7 @@ fn schedule_grid(
 							if index == 0 {
 								div { id: "timeline-anchor", class: "anchor", style: "top:{crate::scaled_px(8.0 * HOUR_HEIGHT)};" }
 							}
+							crate::alarms::AlarmMarks { day: model.day, hour_start: model.hour_start, time_format }
 							crate::alarms::AlarmNeedle { day: model.day, hour_start: model.hour_start, time_format }
 						}
 					}

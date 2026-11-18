@@ -39,7 +39,9 @@ own screen and the rest of the app in sheets over it:
   purple needle on the calendar. Drag it to the exact minute or tap a time,
   then press **Set alarm** in the bottom bar to confirm; **Cancel** discards the
   selection. One finger still scrolls away from the needle, and two fingers
-  pinch to zoom while choosing. Alarms sync through Turso and appear on the
+  pinch to zoom while choosing. Saved alarms appear as purple needles on the
+  calendar. Tap one to change its time, label, notification, sound and flash
+  settings, or to delete it. Alarms sync through Turso and appear on the
   desktop calendar. Android
   delivers them as notifications, including while the app is closed; notification
   permission is required. Built-in sounds work on both devices; desktop audio

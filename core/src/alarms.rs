@@ -1,6 +1,6 @@
 //! Shared one-shot alarms and their persisted desktop-compatible profiles.
 use crate::{Color, calendar::time_format::TimeFormat, hex::HexColor, sounds::Tone};
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, NaiveDate, NaiveTime, TimeZone, Timelike};
 use serde::{Deserialize, Serialize};
 use std::{
 	io,
@@ -219,6 +219,107 @@ impl Alarm {
 		}
 
 		profile
+	}
+
+	/// What the alarm's needle says beside it: its time, and its label if it
+	/// has one.
+	pub fn needle_label(&self, time_format: TimeFormat) -> String {
+		let time = crate::calendar::time_format::clock(self.at, time_format);
+		let label = self.label.trim();
+
+		if label.is_empty() {
+			time
+		} else {
+			format!("{time} {label}")
+		}
+	}
+}
+
+/// `when` with the seconds taken off.
+pub fn minute_of(when: DateTime<Local>) -> DateTime<Local> {
+	// Subtracting rather than `with_second`, which gives up on a local time
+	// that happens twice, as it does in the hour the clocks go back.
+	when - chrono::Duration::seconds(i64::from(when.second()))
+		- chrono::Duration::nanoseconds(i64::from(when.nanosecond()))
+}
+
+/// Whole minutes from `now` to `at`, counted between the clock faces rather
+/// than the instants: from 10:00:40, a 10:45 alarm is 45 minutes away, which
+/// is what the clock on the wall says.
+pub fn minutes_between(now: DateTime<Local>, at: DateTime<Local>) -> i64 {
+	(minute_of(at) - minute_of(now)).num_minutes()
+}
+
+/// Whether an alarm may be set for `at`.
+///
+/// It has to be at least a minute ahead of the clock: an alarm for this very
+/// minute is already as good as in the past.
+pub fn can_set(now: DateTime<Local>, at: DateTime<Local>) -> bool {
+	minutes_between(now, at) >= 1
+}
+
+/// A length of time as short as it can be said: `45m`, `2h`, `1h 15m`,
+/// `1d 3h`.
+pub fn compact(minutes: u64) -> String {
+	let (days, hours, minutes) = (minutes / 1_440, minutes % 1_440 / 60, minutes % 60);
+
+	let parts: Vec<String> = [(days, 'd'), (hours, 'h'), (minutes, 'm')]
+		.into_iter()
+		.filter(|(amount, _)| *amount > 0)
+		.map(|(amount, unit)| format!("{amount}{unit}"))
+		.collect();
+
+	// A day and some minutes reads better as "1d 5m" than "1d 0h 5m", and
+	// zero has to say something.
+	if parts.is_empty() {
+		"0m".to_owned()
+	} else {
+		parts.join(" ")
+	}
+}
+
+/// When an alarm goes off, relative to now: `Goes off in 45m`.
+pub fn countdown_label(minutes: i64) -> String {
+	if minutes >= 1 {
+		format!("Goes off in {}", compact(minutes as u64))
+	} else {
+		"Going off now".to_owned()
+	}
+}
+
+/// How many times a sound plays, as its slider says it.
+pub fn repeat_label(repeats: u8) -> String {
+	match repeats {
+		0 => "Repeat until dismissed".to_owned(),
+		1 => "Play once".to_owned(),
+		count => format!("Play {count} times"),
+	}
+}
+
+/// Reads `HH:MM` as a time of day.
+pub fn parse_time(text: &str) -> Option<NaiveTime> {
+	NaiveTime::parse_from_str(text.trim(), "%H:%M").ok()
+}
+
+/// The local moment on `date` at `time`, taking the earlier of two when a
+/// clock change makes it ambiguous. `None` when the clock skips it.
+pub fn local_at(date: NaiveDate, time: NaiveTime) -> Option<DateTime<Local>> {
+	Local.from_local_datetime(&date.and_time(time)).earliest()
+}
+
+/// The moment a typed time puts an alarm at, on the date it already has, or
+/// why that time cannot be used.
+pub fn retimed(
+	date: NaiveDate,
+	text: &str,
+	now: DateTime<Local>,
+) -> Result<DateTime<Local>, String> {
+	let time = parse_time(text).ok_or("Use the 24-hour form, like 07:30")?;
+
+	match local_at(date, time) {
+		Some(at) if can_set(now, at) => Ok(at),
+		Some(_) => Err("That time has already passed".to_owned()),
+		None => Err("That time does not exist on this day".to_owned()),
 	}
 }
 
