@@ -201,8 +201,7 @@ fn the_settings_tab_is_usable_at_two_hundred_pixels() {
 		// Keyboard shortcuts.
 		"Toggle Visibility",
 		"Toggle Shape",
-		"New shortcut",
-		"Add shortcut",
+		"Add",
 		"Calendar day width (px)",
 		"Time block panel width (px)",
 		"Event/Habit/Task details width (px)",

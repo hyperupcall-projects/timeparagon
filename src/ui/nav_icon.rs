@@ -9,6 +9,7 @@ use crate::app::Message;
 pub(super) enum Icon {
 	Menu,
 	Settings,
+	Info,
 }
 
 pub(super) fn view<'a>(icon: Icon, size: f32, active: bool) -> Element<'a, Message> {
@@ -72,6 +73,11 @@ impl canvas::Program<Message> for NavIcon {
 				});
 				frame.stroke(&outline, stroke);
 				frame.stroke(&Path::circle(point(12.0, 12.0), 3.0 * scale), stroke);
+			}
+			Icon::Info => {
+				frame.stroke(&Path::circle(point(12.0, 12.0), 10.0 * scale), stroke);
+				frame.stroke(&Path::line(point(12.0, 11.0), point(12.0, 17.0)), stroke);
+				frame.fill(&Path::circle(point(12.0, 7.5), 1.4 * scale), color);
 			}
 		}
 		vec![frame.into_geometry()]

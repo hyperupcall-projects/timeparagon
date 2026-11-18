@@ -45,6 +45,19 @@ pub fn owned_elsewhere<'a>(
 	.into()
 }
 
+/// An info symbol that shows `description` while the pointer is over it.
+pub fn info_tip<'a>(description: &'a str, size: f32) -> Element<'a, Message> {
+	iced::widget::tooltip(
+		super::nav_icon::view(super::nav_icon::Icon::Info, size, false),
+		container(text(description).size(12)).max_width(240),
+		iced::widget::tooltip::Position::Bottom,
+	)
+	.gap(4)
+	.padding(6)
+	.style(surface)
+	.into()
+}
+
 pub fn field_label<'a>(label: &'a str, size: f32) -> iced::widget::Text<'a> {
 	text(label)
 		.size(size)
