@@ -90,7 +90,8 @@ pub(crate) fn select(state: &mut State, kind: DraftKind) -> Task<Message> {
 	entry.description = description;
 	state.calendar.draft = Some(entry);
 	state.inbox.draft.as_mut().unwrap().kind = Some(kind);
-	Task::none()
+	// Every type's title takes the same place, so typing carries on there.
+	operation::focus(TITLE_FIELD)
 }
 
 /// Validate before starting any persistence or network work.

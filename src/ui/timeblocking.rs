@@ -414,9 +414,13 @@ pub fn fields<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
 			row![
 				field_label("Title", metrics),
 				iced::widget::Space::new().width(Fill),
-				crate::ui::controls::quiet_button("?").on_press(Message::Inbox(
-					crate::inbox::Action::SyntaxHelp(!draft.syntax_help)
-				))
+				// No taller than the caption, so the title sits where every
+				// other type's does.
+				crate::ui::controls::quiet_button(text("?").size(metrics.label()))
+					.padding([0, 8])
+					.on_press(Message::Inbox(crate::inbox::Action::SyntaxHelp(
+						!draft.syntax_help
+					)))
 			]
 			.align_y(iced::Center),
 			quick_add_help(metrics),
@@ -481,8 +485,14 @@ pub fn fields<'a>(state: &'a State, task: &'a Event, metrics: &Metrics) -> Eleme
 		));
 	}
 
+	// A new task's form has a type selector that already says what it is.
+	let title = if draft.is_some() {
+		title
+	} else {
+		super::calendar::titled(state, task, title, metrics)
+	};
 	column![
-		super::calendar::titled(state, task, title, metrics),
+		title,
 		super::calendar::form_section(
 			"Scheduling",
 			scheduled_by_block(

@@ -3,26 +3,33 @@
 use super::*;
 use iced::widget::column;
 
-/// The complete creation form, shown in the details pane after choosing a type.
+/// What a new item of `kind` is called at the top of its form.
+pub(crate) fn draft_heading(kind: calendar::DraftKind) -> &'static str {
+	match kind {
+		calendar::DraftKind::Task => "New task",
+		calendar::DraftKind::TimeBlock => "New time block",
+		calendar::DraftKind::Habit => "New habit",
+		calendar::DraftKind::Sleep => "New sleep",
+		calendar::DraftKind::Event => "New event",
+	}
+}
+
+/// The calendar's creation form, shown in the details pane after choosing a
+/// type over the grid. The sidebar and the dock wrap the same fields in their
+/// own form instead; see [`crate::ui::inbox::add_something_overlay`].
 pub(crate) fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 	let Some(draft) = state.calendar.draft.as_ref() else {
 		return iced::widget::Space::new().width(0.0).height(0.0).into();
 	};
-
-	let sidebar = state.inbox.draft.is_some();
-	let cancel = if sidebar {
-		Message::Inbox(crate::inbox::Action::Cancel)
-	} else {
-		Message::EventDraft(EventDraftMessage::EventDraftCancelled)
-	};
-	let name = match draft.kind {
-		calendar::DraftKind::TimeBlock => "New time block",
-		calendar::DraftKind::Habit => "New habit",
-		calendar::DraftKind::Sleep => "New sleep",
-		_ => "New event",
-	};
+	let cancel = Message::EventDraft(EventDraftMessage::EventDraftCancelled);
 	let header = row![
-		text(name).size(metrics.label() + 1.0).width(Fill),
+		text(draft_heading(draft.kind))
+			.size(metrics.label() + 4.0)
+			.font(Font {
+				weight: Weight::Bold,
+				..Font::DEFAULT
+			})
+			.width(Fill),
 		button(text("✕").size(metrics.label()).center())
 			.width(Length::Fixed(metrics.icon_button()))
 			.height(Length::Fixed(metrics.icon_button()))
@@ -30,20 +37,80 @@ pub(crate) fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'
 			.on_press_maybe((!draft.saving).then_some(cancel.clone()))
 			.style(crate::ui::controls::secondary),
 	]
+	.spacing(8.0)
 	.align_y(Alignment::Center);
-
-	let title = crate::ui::controls::text_input("Add title", &draft.title)
-		.on_input(|v0| Message::EventDraft(EventDraftMessage::EventDraftTitleChanged(v0)))
-		.size(metrics.label() + 2.0)
-		.width(Fill);
-	let title: Element<'a, Message> = if sidebar {
+	let actions = row![
+		Space::new().width(Fill),
+		button(text("Cancel").size(metrics.label()).center())
+			.on_press_maybe((!draft.saving).then_some(cancel))
+			.style(crate::ui::controls::secondary),
+		button(
+			text(if draft.saving { "Adding…" } else { "Save" })
+				.size(metrics.label())
+				.center()
+		)
+		.on_press_maybe((!draft.saving).then_some(Message::EventDraft(
+			EventDraftMessage::EventDraftSaveRequested
+		)))
+		.style(crate::ui::controls::primary),
+	]
+	.spacing(metrics.spacing)
+	.align_y(Alignment::Center);
+	container(
 		column![
-			row![title, crate::image_input::input_button(state)]
-				.spacing(6)
-				.align_y(Alignment::Center),
+			header,
+			crate::ui::controls::scrollable(container(draft_fields(state, metrics)).padding(
+				iced::Padding {
+					right: 14.0,
+					..iced::Padding::ZERO
+				}
+			))
+			.height(Fill),
+			actions
+		]
+		.spacing(metrics.spacing)
+		.height(Fill)
+		.width(Fill),
+	)
+	.padding(metrics.padding)
+	.width(Fill)
+	.height(Fill)
+	.style(crate::ui::controls::surface)
+	.into()
+}
+
+/// The fields of a new event, time block, habit or sleep, without a heading
+/// or actions: whatever shows them supplies those.
+pub(crate) fn draft_fields<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+	let Some(draft) = state.calendar.draft.as_ref() else {
+		return iced::widget::Space::new().width(0.0).height(0.0).into();
+	};
+
+	// The sidebar's and the dock's creation form, rather than the calendar's.
+	let sidebar = state.inbox.draft.is_some();
+	let mut title = crate::ui::controls::text_input("Add title", &draft.title)
+		.size(metrics.label() + 6.0)
+		.width(Fill);
+	if !draft.saving {
+		title =
+			title.on_input(|v0| Message::EventDraft(EventDraftMessage::EventDraftTitleChanged(v0)));
+	}
+	let title: Element<'a, Message> = if sidebar {
+		// Laid out as the task's title is, so switching types keeps it in place.
+		if !draft.saving {
+			title = title.on_submit(Message::Inbox(crate::inbox::Action::Create));
+		}
+		column![
+			crate::ui::controls::field_label("Title", metrics.label()),
+			row![
+				title.id(iced::widget::Id::new(crate::inbox::TITLE_FIELD)),
+				crate::image_input::input_button(state)
+			]
+			.spacing(6)
+			.align_y(Alignment::Center),
 			crate::image_input::sources(state)
 		]
-		.spacing(4)
+		.spacing(6)
 		.into()
 	} else {
 		title.into()
@@ -93,6 +160,7 @@ pub(crate) fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'
 				),
 			]
 			.spacing(6)
+			.align_y(Alignment::Center)
 		]
 		.spacing(4)
 		.width(Fill);
@@ -124,7 +192,7 @@ pub(crate) fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'
 	}
 
 	let mut description = column![
-		crate::ui::controls::field_label("Description", metrics.label() - 1.0),
+		crate::ui::controls::field_label("Description", metrics.label()),
 		crate::ui::controls::text_editor(&state.form_editors.event_draft)
 			.placeholder("Add description…")
 			.on_action(|a| Message::Event(EventMessage::FormEdited(
@@ -132,10 +200,10 @@ pub(crate) fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'
 				a
 			)))
 			.size(metrics.label())
-			.height(100)
+			.height(140)
 			.padding(8),
 	]
-	.spacing(2.0)
+	.spacing(6.0)
 	.width(Fill);
 
 	if let Some(links) = super::super::links::for_editor(
@@ -144,42 +212,6 @@ pub(crate) fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'
 	) {
 		description = description.push(links);
 	}
-
-	// Only the sidebar's creation form has a preview: the calendar's own
-	// quick-create already sits on the grid it would land in.
-	let view_in_calendar: Element<'a, Message> = if sidebar {
-		crate::ui::inbox::view_in_calendar_button(state, metrics)
-	} else {
-		Space::new().into()
-	};
-	let actions = row![
-		view_in_calendar,
-		Space::new().width(Fill),
-		button(text("Cancel").size(metrics.label()).center())
-			.on_press_maybe((!draft.saving).then_some(cancel))
-			.style(crate::ui::controls::secondary),
-		button(
-			text(if draft.saving {
-				"Adding…"
-			} else if sidebar {
-				"Add"
-			} else {
-				"Save"
-			})
-			.size(metrics.label())
-			.center()
-		)
-		.on_press_maybe(
-			(!draft.saving && !state.inbox.image.busy).then_some(if sidebar {
-				Message::Inbox(crate::inbox::Action::Create)
-			} else {
-				Message::EventDraft(EventDraftMessage::EventDraftSaveRequested)
-			})
-		)
-		.style(crate::ui::controls::primary),
-	]
-	.spacing(metrics.spacing)
-	.align_y(Alignment::Center);
 
 	let calendar: Element<'a, Message> = if !sidebar || draft.kind == calendar::DraftKind::Event {
 		draft_calendar_picker(state, metrics)
@@ -296,32 +328,7 @@ pub(crate) fn draft_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'
 	}
 	.spacing(metrics.spacing)
 	.width(Fill);
-	let mut fields = fields;
-	if let Some(error) = state.inbox.draft.as_ref().and_then(|d| d.error.as_ref()) {
-		fields = fields.push(text(error).style(text::danger));
-	}
-
-	container(
-		column![
-			header,
-			crate::ui::controls::scrollable(fields).height(Fill),
-			actions
-		]
-		.spacing(metrics.spacing)
-		.height(Fill)
-		.width(Fill),
-	)
-	.padding(metrics.padding)
-	.width(Fill)
-	.height(Fill)
-	.style(move |theme| {
-		if sidebar {
-			container::Style::default()
-		} else {
-			crate::ui::controls::surface(theme)
-		}
-	})
-	.into()
+	fields.into()
 }
 
 /// Only the title and type chooser float over the selected calendar range.

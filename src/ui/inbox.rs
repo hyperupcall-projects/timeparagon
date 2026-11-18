@@ -717,95 +717,30 @@ fn picker_day<'a>(
 }
 
 /// The add something popup, drawn over everything including the tabs.
+///
+/// The panel, the dock's popover and the main window all show the same
+/// [`creation_form`], so every type looks alike wherever it is made. Only
+/// what holds the form differs.
 pub fn add_something_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 	let Some(draft) = &state.inbox.draft else {
 		return Space::new().into();
 	};
 	// The preview takes the form's place, with its own way back to it.
-	let preview = state.inbox.preview.as_ref();
-	if let Some(preview) = preview
-		&& state.sidebar.is_some()
-		&& !state.task_creation_window
-	{
-		return super::calendar::preview_view(state, preview, metrics);
-	}
-	if state.sidebar.is_some() && !state.task_creation_window {
-		let kind = draft.kind.unwrap_or(calendar::DraftKind::Task);
-		let type_button = |label: &'static str, value: calendar::DraftKind| {
-			let mut control = button(text(label).size(metrics.label()).center())
-				.width(Fill)
-				.style(crate::ui::controls::nav(kind == value));
-			if !draft.saving
-				&& !draft.fetching
-				&& !state.inbox.voice.active()
-				&& !state.inbox.image.busy
-			{
-				control = control.on_press(msg(Action::KindSelected(value)));
-			}
-			control
-		};
-		// Sleep is recorded from the calendar itself, so it is not offered here.
-		let types = row![
-			type_button("Task", calendar::DraftKind::Task),
-			type_button("Event", calendar::DraftKind::Event),
-			type_button("Time Block", calendar::DraftKind::TimeBlock),
-			type_button("Habit", calendar::DraftKind::Habit),
-		]
-		.spacing(4);
-		let content = if kind == calendar::DraftKind::Task {
-			container(crate::ui::controls::scrollable(form(state, draft, metrics)).height(Fill))
-				.padding(16)
-				.width(Fill)
-				.height(Fill)
-				.into()
-		} else {
-			super::calendar::draft_editor(state, metrics)
-		};
-		return column![
-			container(types).padding([8, 16]),
-			crate::image_input::review(state),
-			content
-		]
-		.width(Fill)
-		.height(Fill)
-		.into();
-	}
-	let card = if let Some(preview) = preview {
-		// The grid scrolls inside, so the card gets a height of its own.
-		container(super::calendar::preview_view(state, preview, metrics))
-			.width(Fill)
-			.height(iced::Length::Fixed(
-				(metrics.size.height - 32.0).clamp(80.0, 640.0),
-			))
-	} else if draft.kind.is_some() {
-		container(column![
-			crate::image_input::review(state),
-			super::calendar::draft_editor(state, metrics)
-		])
-		.height(iced::Length::Fixed(
-			(metrics.size.height - 32.0).clamp(80.0, 640.0),
-		))
-	} else {
-		container(crate::ui::controls::scrollable(
-			container(form(state, draft, metrics)).padding(iced::Padding {
-				right: 14.0,
-				..iced::Padding::ZERO
-			}),
-		))
-		.padding(16)
-		.width(Fill)
+	let content = match state.inbox.preview.as_ref() {
+		Some(preview) => super::calendar::preview_view(state, preview, metrics),
+		None => creation_form(state, draft, metrics),
 	};
-	let card = card
+	if state.sidebar.is_some() && !state.task_creation_window {
+		return content;
+	}
+	// The card keeps one height whichever type is chosen, so switching types
+	// leaves it where it is rather than jumping.
+	let card = container(content)
+		.width(Fill)
+		.height(iced::Length::Fixed(
+			(metrics.size.height - 32.0).clamp(80.0, 720.0),
+		))
 		.max_width(if state.task_creation_window { 440 } else { 420 })
-		.max_height(
-			(metrics.size.height
-				- if state.task_creation_window {
-					0.0
-				} else {
-					32.0
-				})
-			.max(80.0),
-		)
 		.style(crate::ui::controls::surface);
 	if state.task_creation_window {
 		let viewport_height = metrics.size.height;
@@ -851,70 +786,142 @@ pub fn add_something_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element
 	stack![backdrop, foreground].into()
 }
 
-fn form<'a>(state: &'a State, draft: &'a Draft, metrics: &Metrics) -> Element<'a, Message> {
-	let locked = draft.saving;
-	let mut body = column![text("New task").size(20)].spacing(8);
-	if state.sidebar.is_none() || state.task_creation_window {
-		body = column![crate::image_input::review(state), body].spacing(8);
-	}
-	if let Some(event) = &draft.event {
-		body = body.push(super::timeblocking::fields(state, event, metrics));
-	}
-	if let Some(source) = &draft.source {
-		let mut chip = row![
-			source_icon::logo(source.kind, 16.0),
-			text(if draft.fetching {
-				format!("Reading {} link…", source.kind.name())
-			} else {
-				format!("From {}", source.kind.name())
+/// One form for every kind of new item: a heading, the type selector, the
+/// chosen type's fields, and the same actions at the foot. The fields scroll
+/// while the heading and the actions stay put.
+fn creation_form<'a>(
+	state: &'a State,
+	draft: &'a Draft,
+	metrics: &Metrics,
+) -> Element<'a, Message> {
+	let label = metrics.label();
+	let kind = draft.kind.unwrap_or(calendar::DraftKind::Task);
+	let busy =
+		draft.saving || draft.fetching || state.inbox.voice.active() || state.inbox.image.busy;
+	let cancel = (!draft.saving).then_some(msg(Action::Cancel));
+
+	let heading = row![
+		text(super::calendar::draft_heading(kind))
+			.size(label + 4.0)
+			.font(iced::Font {
+				weight: iced::font::Weight::Bold,
+				..iced::Font::DEFAULT
 			})
-			.size(metrics.label())
 			.width(Fill),
-		]
-		.spacing(6)
-		.align_y(Center);
-		if !locked {
-			chip = chip.push(
-				button(text("×").size(metrics.label()))
-					.padding([0, 6])
-					.style(crate::ui::controls::ghost)
-					.on_press(msg(Action::ClearSource)),
-			);
-		}
-		body = body.push(chip);
-	}
-	if let Some(error) = draft.error.as_ref() {
-		body = body.push(text(error).size(metrics.label()).style(text::danger));
+		button(text("✕").size(label).center())
+			.width(iced::Length::Fixed(metrics.icon_button()))
+			.height(iced::Length::Fixed(metrics.icon_button()))
+			.padding(0)
+			.style(crate::ui::controls::secondary)
+			.on_press_maybe(cancel.clone()),
+	]
+	.spacing(8)
+	.align_y(Center);
+
+	let type_button = |name: &'static str, value: calendar::DraftKind| {
+		button(text(name).size(label).center())
+			.width(Fill)
+			.style(crate::ui::controls::nav(kind == value))
+			.on_press_maybe((!busy).then_some(msg(Action::KindSelected(value))))
+	};
+	// Sleep is recorded from the calendar itself, so it is not offered here.
+	let types = row![
+		type_button("Task", calendar::DraftKind::Task),
+		type_button("Event", calendar::DraftKind::Event),
+		type_button("Time Block", calendar::DraftKind::TimeBlock),
+		type_button("Habit", calendar::DraftKind::Habit),
+	]
+	.spacing(4);
+
+	let mut form = column![heading, types, crate::image_input::review(state)]
+		.spacing(metrics.spacing)
+		.width(Fill)
+		.height(Fill);
+	if kind == calendar::DraftKind::Task
+		&& let Some(source) = &draft.source
+	{
+		form = form.push(source_chip(source, draft, metrics));
 	}
 
-	let mut add = crate::ui::controls::action_button(
+	let fields = match (&draft.event, kind) {
+		(Some(task), calendar::DraftKind::Task) => {
+			super::timeblocking::fields(state, task, metrics)
+		}
+		(None, calendar::DraftKind::Task) => Space::new().into(),
+		_ => super::calendar::draft_fields(state, metrics),
+	};
+	// Room on the right keeps the scrollbar off the fields' own controls.
+	form = form.push(
+		crate::ui::controls::scrollable(container(fields).padding(iced::Padding {
+			right: 14.0,
+			..iced::Padding::ZERO
+		}))
+		.height(Fill),
+	);
+	if let Some(error) = draft.error.as_ref() {
+		form = form.push(text(error).size(label).style(text::danger));
+	}
+
+	let add = button(
 		text(if draft.saving {
 			"Adding…"
 		} else if draft.fetching {
 			"Reading link…"
 		} else {
-			"Add task"
+			"Add"
 		})
-		.size(metrics.label()),
-	);
-	if !draft.saving && !draft.fetching && !state.inbox.voice.active() && !state.inbox.image.busy {
-		add = add.on_press(msg(Action::Create));
-	}
-	let mut cancel = button(text("Cancel").size(metrics.label())).style(crate::ui::controls::ghost);
-	if !draft.saving {
-		cancel = cancel.on_press(msg(Action::Cancel));
-	}
-	body.push(
-		row![
-			add,
-			cancel,
-			Space::new().width(Fill),
-			view_in_calendar_button(state, metrics)
-		]
-		.spacing(8)
-		.align_y(Center),
+		.size(label)
+		.center(),
 	)
-	.into()
+	.style(crate::ui::controls::primary)
+	.on_press_maybe((!busy).then_some(msg(Action::Create)));
+	form = form.push(
+		row![
+			view_in_calendar_button(state, metrics),
+			Space::new().width(Fill),
+			button(text("Cancel").size(label).center())
+				.style(crate::ui::controls::secondary)
+				.on_press_maybe(cancel),
+			add,
+		]
+		.spacing(metrics.spacing)
+		.align_y(Center),
+	);
+	// The same insets as the preview, so moving between them shifts nothing.
+	container(form)
+		.padding([8, 12])
+		.width(Fill)
+		.height(Fill)
+		.into()
+}
+
+/// Where a pasted link came from, and a way to stop treating it as one.
+fn source_chip<'a>(
+	source: &'a integrations::Source,
+	draft: &'a Draft,
+	metrics: &Metrics,
+) -> Element<'a, Message> {
+	let mut chip = row![
+		source_icon::logo(source.kind, 16.0),
+		text(if draft.fetching {
+			format!("Reading {} link…", source.kind.name())
+		} else {
+			format!("From {}", source.kind.name())
+		})
+		.size(metrics.label())
+		.width(Fill),
+	]
+	.spacing(6)
+	.align_y(Center);
+	if !draft.saving {
+		chip = chip.push(
+			button(text("×").size(metrics.label()))
+				.padding([0, 6])
+				.style(crate::ui::controls::ghost)
+				.on_press(msg(Action::ClearSource)),
+		);
+	}
+	chip.into()
 }
 
 /// Opens the calendar preview of what the form would create.
@@ -1279,7 +1286,7 @@ mod tests {
 			"Priority",
 			"Location",
 			"Description",
-			"Add task",
+			"Add",
 			"Cancel",
 		] {
 			assert!(ui.find(label).is_ok(), "{label}");
@@ -1359,6 +1366,44 @@ mod tests {
 			assert!(ui.find(label).is_ok(), "{label}");
 		}
 		assert!(ui.find("Sleep").is_err());
+	}
+
+	#[test]
+	fn the_dock_popover_offers_every_type_in_the_same_form() {
+		let mut state = state_with_task("");
+		state.task_creation_window = true;
+		let _ = crate::app::update(&mut state, msg(Action::NewTask));
+		for (label, heading, kind) in [
+			("Event", "New event", calendar::DraftKind::Event),
+			(
+				"Time Block",
+				"New time block",
+				calendar::DraftKind::TimeBlock,
+			),
+			("Habit", "New habit", calendar::DraftKind::Habit),
+			("Task", "New task", calendar::DraftKind::Task),
+		] {
+			let mut ui = simulator_of(&state, Size::new(440.0, 800.0));
+			assert!(ui.find("Sleep").is_err());
+			ui.click(label).unwrap();
+			let message = ui
+				.into_messages()
+				.find(|message| {
+					matches!(message,
+						Message::Inbox(Action::KindSelected(value)) if *value == kind
+					)
+				})
+				.expect("the dock offers the type selector");
+			let _ = crate::app::update(&mut state, message);
+			let mut ui = simulator_of(&state, Size::new(440.0, 800.0));
+			// Every type has the same heading, selector and actions.
+			for shared in [heading, "Task", "Event", "Time Block", "Habit", "Title"] {
+				assert!(ui.find(shared).is_ok(), "{label}: {shared}");
+			}
+			for action in ["View in calendar", "Cancel", "Add"] {
+				assert!(ui.find(action).is_ok(), "{label}: {action}");
+			}
+		}
 	}
 
 	#[test]
