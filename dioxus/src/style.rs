@@ -170,6 +170,7 @@ fn fixed_variables() -> String {
 		("block-row-over-text", look::BLOCK_ROW_OVER_TEXT),
 		("block-row-over", look::BLOCK_ROW_OVER),
 		("needle", colors::NEEDLE),
+		("alarm", colors::ALARM),
 		("gutter-text", colors::GUTTER_TEXT),
 		("pending-border", look::PENDING_BORDER),
 	] {

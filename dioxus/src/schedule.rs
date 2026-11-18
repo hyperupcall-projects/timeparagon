@@ -343,6 +343,7 @@ fn schedule_grid(
 							if index == 0 {
 								div { id: "timeline-anchor", class: "anchor", style: "top:{crate::scaled_px(8.0 * HOUR_HEIGHT)};" }
 							}
+							crate::alarms::AlarmNeedle { day: model.day, hour_start: model.hour_start, time_format }
 						}
 					}
 				}

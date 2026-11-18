@@ -3573,6 +3573,71 @@ textarea {
 }
 .calendar-drag-time.below { bottom: auto; top: calc(100% + 16px); }
 
+/* Only the needle claims a one-finger drag. The rest of the grid still pans. */
+.alarm-needle {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 44px;
+    transform: translateY(-50%);
+    z-index: 35;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    cursor: ns-resize;
+    color: var(--alarm);
+}
+.alarm-needle::before {
+    content: "";
+    position: absolute;
+    top: 21px;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: currentColor;
+}
+.alarm-needle-dot {
+    position: absolute;
+    top: 15px;
+    left: 0;
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--card);
+    border-radius: 50%;
+    background: currentColor;
+    box-shadow: 0 0 0 2px currentColor;
+}
+.alarm-needle-time {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    padding: 4px 10px;
+    border-radius: 99px;
+    background: var(--alarm);
+    color: white;
+    font-size: 12px;
+    font-weight: 600;
+    box-shadow: var(--shadow-row);
+}
+.alarm-placement-bar {
+    flex: none;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px 16px;
+    padding: 12px max(16px, env(safe-area-inset-right, 0px)) max(12px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+    background: var(--card);
+    border-top: 2px solid var(--alarm);
+    box-shadow: var(--shadow-floating);
+}
+.alarm-placement-summary { display: grid; gap: 4px; flex: 1 1 220px; }
+.alarm-placement-summary strong { font-size: 16px; }
+.alarm-placement-actions { display: flex; gap: 8px; flex: 1 1 200px; }
+.alarm-placement-actions .btn { min-height: 44px; }
+.alarm-placement-actions .primary { flex: 1; }
+.alarm-placement-bar .error-text { flex-basis: 100%; margin: 0; }
+
 /* Media entry follows the desktop draft: compact controls and a review queue. */
 .ai-title-row { display: flex; gap: 8px; align-items: start; flex-wrap: wrap; }
 .ai-title-row > .client-input { min-width: 0; flex: 1 1 160px; }

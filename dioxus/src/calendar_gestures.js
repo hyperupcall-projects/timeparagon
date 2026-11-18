@@ -4,6 +4,7 @@ window.__calendarGesture?.abort();
 const controller = new AbortController(), signal = controller.signal;
 let pending = null, timer = null, selected = null, drag = null, quietUntil = 0, raf = 0;
 let pinch = null, pinching = false;
+let alarmDrag = null, alarmTap = null;
 let zoom = +(document.documentElement.style.getPropertyValue('--calendar-zoom') || 1);
 // Only the timeline's vertical geometry scales; text and controls stay readable.
 const MIN_ZOOM = 0.5, MAX_ZOOM = 3;
@@ -45,11 +46,23 @@ function select(source) {
     render();
     navigator.vibrate?.(20);
 }
-const clock = minutes => {
-    const total = ((minutes + +selected.grid.dataset.hourStart * 60) % 1440 + 1440) % 1440;
+const clock = (minutes, grid = selected.grid) => {
+    const total = ((minutes + +grid.dataset.hourStart * 60) % 1440 + 1440) % 1440;
     const date = new Date(2000, 0, 1, Math.floor(total / 60), total % 60);
-    return date.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit', hour12: selected.grid.dataset.clock === '12'});
+    return date.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit', hour12: grid.dataset.clock === '12'});
 };
+const placingAlarm = () => document.querySelector('.alarm-placement-bar');
+function alarmAt(grid, y) {
+    const minute = Math.max(0, Math.min(1439, Math.round((y - grid.getBoundingClientRect().top) / grid.clientHeight * 1440)));
+    const needle = document.querySelector('.alarm-needle');
+    if (needle?.parentNode === grid) {
+        needle.style.top = minute / 1440 * 100 + '%';
+        needle.dataset.minute = String(minute);
+        needle.setAttribute('aria-valuenow', String(minute));
+        needle.querySelector('.alarm-needle-time').textContent = clock(minute, grid);
+    }
+    dioxus.send({alarm_day: grid.dataset.calendarDay, hour_start: +grid.dataset.hourStart, minute});
+}
 function render() {
     const s = selected;
     const start = Math.max(0, s.start + s.startDelta), end = Math.min(1440, s.end + s.endDelta);
@@ -60,6 +73,19 @@ function render() {
 }
 function begin(target, x, y, id) {
     if (selected?.saving || document.querySelector('.modal-backdrop')) return;
+    if (placingAlarm()) {
+        deselect();
+        const grid = target.closest('.grid[data-calendar-day]');
+        if (!grid) return;
+        const needle = target.closest('.alarm-needle');
+        if (needle) {
+            // Preserve where the finger grabbed the 44px target to avoid a jump.
+            alarmDrag = {id, grid, offset: y - grid.getBoundingClientRect().top - +needle.dataset.minute / 1440 * grid.clientHeight};
+        } else {
+            alarmTap = {id, grid, x, y};
+        }
+        return;
+    }
     const handle = target.closest('[data-resize]');
     if (selected && selected.preview.contains(target)) {
         drag = { x, y, id, mode: handle?.dataset.resize || 'move', grid: selected.grid,
@@ -81,6 +107,15 @@ function begin(target, x, y, id) {
     }, 400);
 }
 function update(x, y, id) {
+    if (alarmDrag?.id === id) {
+        if (!placingAlarm() || !alarmDrag.grid.isConnected) { alarmDrag = null; return; }
+        alarmDrag.lastX = x; alarmDrag.lastY = y;
+        // Stay within this needle's day; tap another column to select its day.
+        alarmAt(alarmDrag.grid, y - alarmDrag.offset);
+        if (!raf) raf = requestAnimationFrame(autoScroll);
+        return;
+    }
+    if (alarmTap?.id === id && Math.hypot(x - alarmTap.x, y - alarmTap.y) > 8) alarmTap = null;
     if (selected && !selected.source.isConnected) return deselect();
     if (!drag) {
         if (pending && Math.hypot(x - pending.x, y - pending.y) > 8) clearHold();
@@ -108,16 +143,26 @@ function update(x, y, id) {
 }
 function autoScroll() {
     raf = 0;
-    if (!drag || !selected || drag.lastY === undefined) return;
-    const scroller = selected.grid.closest('.timeline-scroll'), r = scroller.getBoundingClientRect();
-    const speed = drag.lastY < r.top + 44 ? -8 : drag.lastY > r.bottom - 44 ? 8 : 0;
+    const active = alarmDrag || (selected && drag);
+    if (!active || active.lastY === undefined) return;
+    const scroller = active.grid.closest('.timeline-scroll'), r = scroller.getBoundingClientRect();
+    const speed = active.lastY < r.top + 44 ? -8 : active.lastY > r.bottom - 44 ? 8 : 0;
     if (speed) {
         scroller.scrollTop += speed;
-        update(drag.lastX, drag.lastY, drag.id);
+        update(active.lastX, active.lastY, active.id);
     }
 }
 function finish(cancelled, id) {
     clearHold();
+    if (alarmTap?.id === id) {
+        if (!cancelled && placingAlarm()) alarmAt(alarmTap.grid, alarmTap.y);
+        alarmTap = null;
+        quietUntil = Date.now() + 600;
+    }
+    if (alarmDrag?.id === id) {
+        alarmDrag = null; cancelAnimationFrame(raf); raf = 0;
+        quietUntil = Date.now() + 600;
+    }
     if (!drag || drag.id !== id) return;
     quietUntil = Date.now() + 600;
     cancelAnimationFrame(raf); raf = 0; drag = null;
@@ -137,6 +182,7 @@ function startPinch(e) {
     const timeline = scroller.querySelector('.timeline');
     const span = distance(a, b);
     if (!timeline || span < 1) return;
+    alarmDrag = null; alarmTap = null;
     deselect();
     pinching = true;
     const midpoint = (a.clientY + b.clientY) / 2;
@@ -164,6 +210,7 @@ function finishPinch() {
 }
 document.addEventListener('touchstart', e => {
     if (e.touches.length > 1) {
+        alarmDrag = null; alarmTap = null;
         startPinch(e);
         if (pinching) { e.preventDefault(); pinch = e.touches.length === 2 ? pinch : null; }
         deselect(); return;
@@ -174,9 +221,9 @@ document.addEventListener('touchstart', e => {
 }, {signal, passive: false});
 document.addEventListener('touchmove', e => {
     if (pinching) { e.preventDefault(); movePinch(e); return; }
-    const t = [...e.touches].find(t => t.identifier === (drag?.id ?? pending?.id));
+    const t = [...e.touches].find(t => t.identifier === (alarmDrag?.id ?? alarmTap?.id ?? drag?.id ?? pending?.id));
     if (!t) return;
-    if (drag) e.preventDefault();
+    if (drag || alarmDrag) e.preventDefault();
     update(t.clientX, t.clientY, t.identifier);
 }, {signal, passive: false});
 for (const type of ['touchend', 'touchcancel']) document.addEventListener(type, e => {
@@ -195,10 +242,28 @@ for (const type of ['pointerup', 'pointercancel']) document.addEventListener(typ
     if (e.pointerType !== 'touch') finish(type === 'pointercancel', e.pointerId);
 }, {signal});
 document.addEventListener('click', e => {
+    // Confirm and Cancel must respond immediately, including just after a drag.
+    if (e.target.closest('.alarm-placement-bar')) return;
+    if (placingAlarm() && !document.querySelector('.modal-backdrop') && e.target.closest('.grid[data-calendar-day]')) {
+        e.preventDefault(); e.stopImmediatePropagation(); return;
+    }
     if (pinching || Date.now() < quietUntil || e.target.closest('.calendar-selection')) { e.preventDefault(); e.stopImmediatePropagation(); }
 }, {signal, capture: true});
-document.addEventListener('contextmenu', e => { if (pending || selected) e.preventDefault(); }, {signal});
-document.addEventListener('keydown', e => { if (e.key === 'Escape') deselect(); }, {signal});
-window.addEventListener('blur', () => { finishPinch(); deselect(); }, {signal});
-window.__calendarGesture = { saved: deselect, abort: () => { finishPinch(); deselect(); controller.abort(); } };
+document.addEventListener('contextmenu', e => { if (pending || selected || alarmDrag) e.preventDefault(); }, {signal});
+document.addEventListener('keydown', e => {
+    if (document.querySelector('.modal-backdrop')) return;
+    if (e.key === 'Escape') {
+        deselect(); alarmDrag = null; alarmTap = null;
+        if (placingAlarm()) dioxus.send({cancel_alarm: true});
+    }
+    const needle = e.target.closest('.alarm-needle');
+    if (!needle || !placingAlarm()) return;
+    const delta = {ArrowUp: -1, ArrowDown: 1, PageUp: -60, PageDown: 60}[e.key];
+    if (delta === undefined) return;
+    e.preventDefault();
+    const grid = needle.closest('.grid[data-calendar-day]');
+    alarmAt(grid, grid.getBoundingClientRect().top + (+needle.dataset.minute + delta) / 1440 * grid.clientHeight);
+}, {signal});
+window.addEventListener('blur', () => { finishPinch(); deselect(); alarmDrag = null; alarmTap = null; }, {signal});
+window.__calendarGesture = { saved: deselect, abort: () => { finishPinch(); deselect(); alarmDrag = null; alarmTap = null; controller.abort(); } };
 await new Promise(() => {});

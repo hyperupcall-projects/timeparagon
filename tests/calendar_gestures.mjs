@@ -21,10 +21,19 @@ function setup() {
         append(n) { n.remove(); this.children.push(n); n.parentNode = this; }
         remove() { if (this.parentNode) this.parentNode.children = this.parentNode.children.filter(n => n !== this); this.parentNode = null; }
         contains(n) { return n === this || this.children.some(c => c.contains(n)); }
-        querySelector() { return timeline; }
+        querySelector(selector) {
+            if (selector === '.timeline') return timeline;
+            for (const child of this.children) {
+                if (child.classes.has(selector.slice(1))) return child;
+                const nested = child.querySelector(selector);
+                if (nested) return nested;
+            }
+            return null;
+        }
         get clientHeight() { return 1440 * +(properties.get('--calendar-zoom') || 1); }
         closest(selector) {
             const matches = selector === '[data-resize]' ? this.dataset.resize
+                : selector === '.grid[data-calendar-day]' ? this.classes.has('grid') && this.dataset.calendarDay
                 : selector === '[data-calendar-event][data-draggable="true"]' ? this.dataset.calendarEvent && this.dataset.draggable === 'true'
                 : selector.startsWith('.') && this.classes.has(selector.slice(1));
             return matches ? this : this.parentNode?.closest(selector) || null;
@@ -36,11 +45,12 @@ function setup() {
     }
     const scroller = new Node('timeline-scroll'); scroller.scrollTop = 0;
     const timeline = new Node('timeline'); scroller.append(timeline);
-    const first = new Node('grid', {hourStart: '0', clock: '24'}), second = new Node('grid', {hourStart: '0', clock: '24'});
+    const first = new Node('grid', {calendarDay: '2026-11-17', hourStart: '0', clock: '24'}), second = new Node('grid', {calendarDay: '2026-11-18', hourStart: '0', clock: '24'});
     timeline.append(first); timeline.append(second);
     const source = new Node('grid-event', {calendarEvent: 'event', eventCalendar: 'work', draggable: 'true', startMin: '540', endMin: '600', duration: '60', beforeStart: '1000', beforeEnd: '4600'});
     first.append(source);
-    const doc = {documentElement: {style: rootStyle}, querySelector: () => doc.modalOpen ? {} : null,
+    const doc = {documentElement: {style: rootStyle}, querySelector: selector => selector === '.modal-backdrop' ? (doc.modalOpen ? {} : null)
+            : selector === '.alarm-placement-bar' ? doc.alarmBar || null : timeline.querySelector(selector),
         querySelectorAll: () => [first, second], createElement: () => new Node(),
         addEventListener: (type, fn, opts) => { listeners[type] = fn; options[type] = opts; }};
     const context = vm.createContext({ document: doc, window: {addEventListener() {}}, navigator: {vibrate() {}}, AbortController,
@@ -62,7 +72,13 @@ function setup() {
     };
     const zoom = () => +(properties.get('--calendar-zoom') || 1);
     const reload = () => vm.runInContext(`(async () => { ${script}\n })()`, context);
-    return {source, first, second, scroller, timeline, doc, options, listeners, writes, context, down, move, up, hold, preview, finger, touch, zoom, reload};
+    const alarm = (minute = 600) => {
+        doc.alarmBar = new Node('alarm-placement-bar');
+        const needle = new Node('alarm-needle', {minute: String(minute)});
+        needle.append(new Node('alarm-needle-time')); first.append(needle);
+        return needle;
+    };
+    return {source, first, second, scroller, timeline, doc, options, listeners, writes, context, down, move, up, hold, preview, finger, touch, zoom, reload, alarm};
 }
 {
     const s = setup(); s.down(); s.up(); s.hold();
@@ -230,4 +246,72 @@ for (const blocked of ['outside', 'modal']) {
     assert.equal(s.zoom(), 1, 'pinching outside the timeline or over a sheet leaves the calendar alone');
     assert.deepEqual(s.writes, []);
 }
-console.log('Calendar drag, resize, pinch zoom, anchoring, limits and cancellation checks passed');
+{
+    const s = setup(); s.alarm(); s.down(); s.up(); s.hold();
+    assert.deepEqual(s.writes, [{alarm_day: '2026-11-17', hour_start: 0, minute: 550}], 'an event tap selects an alarm time without moving or opening the event');
+    assert.equal(s.preview(), undefined, 'alarm mode never selects an event');
+    let suppressed = false;
+    s.listeners.click({target: s.source, preventDefault() {suppressed = true;}, stopImmediatePropagation() {}});
+    assert.ok(suppressed, 'a tap cannot open the event behind the alarm needle');
+    suppressed = false;
+    s.listeners.click({target: s.doc.alarmBar, preventDefault() {suppressed = true;}, stopImmediatePropagation() {}});
+    assert.equal(suppressed, false, 'confirm and cancel work immediately after adjusting the needle');
+}
+{
+    const s = setup(), needle = s.alarm();
+    s.down(needle, 100, 612); s.move(100, 643); s.up();
+    assert.deepEqual(s.writes, [{alarm_day: '2026-11-17', hour_start: 0, minute: 631}], 'dragging uses exact minutes and preserves the finger grab offset');
+    assert.equal(needle.dataset.minute, '631');
+    assert.equal(needle.style.top, (631 / 1440 * 100) + '%', 'the needle previews the chosen time before confirmation');
+}
+{
+    const s = setup(), needle = s.alarm();
+    s.scroller.scrollTop = 300;
+    s.down(needle, 100, 300); s.scroller.scrollTop = 360; s.move(100, 300); s.up();
+    assert.equal(s.writes[0].minute, 660, 'needle dragging accounts for scrolling');
+    s.down(needle, 100, 300); s.move(100, -5000); s.up();
+    assert.equal(s.writes.at(-1).minute, 0, 'needle clamps to the top of the day');
+    s.down(needle, 100, -360); s.move(100, 5000); s.up();
+    assert.equal(s.writes.at(-1).minute, 1439, 'needle clamps to the final minute');
+}
+{
+    const s = setup(); s.alarm();
+    const a = s.finger(7, 100, 300);
+    assert.equal(s.touch('touchstart', [a]), false);
+    assert.equal(s.touch('touchmove', [s.finger(7, 100, 200)]), false, 'swiping away from the needle retains native scrolling');
+    s.touch('touchend', [], [a]); s.hold();
+    assert.deepEqual(s.writes, [], 'a scroll never changes the selected alarm time');
+    s.down(s.second, 300, 570); s.up();
+    assert.deepEqual(s.writes, [{alarm_day: '2026-11-18', hour_start: 0, minute: 570}], 'tapping another visible day selects that date');
+}
+{
+    const s = setup(), needle = s.alarm();
+    const a = s.finger(7, 100, 600, needle), b = s.finger(8, 100, 800);
+    s.touch('touchstart', [a]);
+    assert.equal(s.touch('touchmove', [s.finger(7, 100, 617, needle)]), true, 'only dragging the needle claims one finger');
+    assert.equal(s.writes[0].minute, 617);
+    s.touch('touchstart', [a, b], [b]);
+    s.touch('touchmove', [s.finger(7, 100, 500), s.finger(8, 100, 900)]);
+    s.touch('touchend', [], [a, b]);
+    assert.equal(s.zoom(), 2, 'pinching during alarm placement zooms normally');
+    assert.deepEqual(s.writes.at(-1), {zoom: 2});
+    assert.equal(s.writes.filter(w => w.alarm_day).length, 1, 'pinching leaves the chosen alarm time alone');
+    s.touch('touchstart', [a, b]);
+    s.touch('touchmove', [s.finger(7, 100, 650), s.finger(8, 100, 750)]);
+    s.touch('touchend', [], [a, b]);
+    assert.equal(s.zoom(), 1, 'pinching back zooms out while setting an alarm');
+}
+{
+    const s = setup(), needle = s.alarm();
+    s.listeners.keydown({target: needle, key: 'ArrowDown', preventDefault() {}});
+    assert.equal(s.writes[0].minute, 601, 'the needle supports keyboard minute adjustments');
+    s.listeners.keydown({target: needle, key: 'Escape'});
+    assert.deepEqual(s.writes.at(-1), {cancel_alarm: true}, 'Escape cancels without saving');
+}
+{
+    const s = setup(); s.alarm(); s.down(); s.up(true);
+    assert.deepEqual(s.writes, [], 'a cancelled tap does not select an alarm time');
+    s.doc.modalOpen = true; s.down(); s.up();
+    assert.deepEqual(s.writes, [], 'a sheet blocks alarm gestures underneath it');
+}
+console.log('Calendar drag, resize, pinch zoom, alarm placement, scrolling and cancellation checks passed');

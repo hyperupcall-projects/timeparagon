@@ -55,7 +55,7 @@ const TIME_LINE: f32 = 15.0;
 const SCROLL_SCRIPT: &str = r#"
 await new Promise(resolve => requestAnimationFrame(resolve));
 const scroller = document.querySelector('.timeline-scroll');
-const anchor = document.getElementById('now-line') || document.getElementById('timeline-anchor');
+const anchor = document.querySelector('.alarm-needle') || document.getElementById('now-line') || document.getElementById('timeline-anchor');
 if (scroller && anchor && scroller.clientHeight) {
     scroller.scrollTop += anchor.getBoundingClientRect().top
         - scroller.getBoundingClientRect().top - scroller.clientHeight / 2;
@@ -215,6 +215,8 @@ fn Main() -> Element {
 	let mut revision = use_signal(|| 0u32);
 	// Shared by Do and Plan for the lifetime of this app session.
 	let calendar_zoom = use_signal(|| 1.0f32);
+	let mut alarm_placement = use_signal(|| None::<chrono::NaiveDateTime>);
+	use_context_provider(|| alarms::Placement(alarm_placement));
 	let mut selected_block = use_signal(|| None::<String>);
 	let mut editing = use_signal(|| None::<Event>);
 	let block_writing = use_signal(|| false);
@@ -261,6 +263,13 @@ fn Main() -> Element {
 	// Kept while the app runs, so the sheet reopens on what it showed.
 	let people_store = use_signal(people::Store::live);
 	let mut show_alarms = use_signal(|| false);
+	use_effect(move || {
+		if page() != Page::Do
+			&& !(page() == Page::Plan && matches!(plan_view(), PlanView::Day | PlanView::MultiDay))
+		{
+			alarm_placement.set(None);
+		}
+	});
 	let mut show_log = use_signal(|| false);
 	// Writes to Google as they are sent, saved or refused, newest last.
 	let mut google_log = use_signal(Vec::<calendar::operations::LogEntry>::new);
@@ -662,6 +671,30 @@ fn Main() -> Element {
 		follow_today,
 		pending_open,
 	};
+	let begin_alarm = use_callback(move |()| {
+		let hour_start = config.peek().calendar.day_start_hour();
+		let at = alarms::default_placement(*current_day.peek(), hour_start);
+		let day = (at - chrono::Duration::hours(i64::from(hour_start))).date();
+		show_actions.set(false);
+		show_alarms.set(false);
+		page.set(Page::Do);
+		day_nav.go_to(day, day == day::today(&config.peek().calendar));
+		alarm_placement.set(Some(at));
+		spawn(async move {
+			let _ = document::eval(
+				r#"
+				await new Promise(resolve => requestAnimationFrame(resolve));
+				window.__calendarGesture?.saved();
+				const needle = document.querySelector('.alarm-needle');
+				const scroller = needle?.closest('.timeline-scroll');
+				if (scroller) scroller.scrollTop += needle.getBoundingClientRect().top
+					- scroller.getBoundingClientRect().top - scroller.clientHeight / 2;
+				needle?.focus({preventScroll: true});
+			"#,
+			)
+			.await;
+		});
+	});
 	let plan_nav = PlanNav {
 		page,
 		view: plan_view,
@@ -764,8 +797,9 @@ fn Main() -> Element {
 		}
 	};
 
-	// View (Calendars and Filter) and Actions (Sync now), beside the picker.
+	// View (Calendars and Filter) and Actions, beside the picker.
 	let view_lit = view_sheet().is_some() || searching;
+	let can_place_alarm = model.is_some();
 	let header_buttons = move || {
 		rsx! {
 			button {
@@ -796,6 +830,9 @@ fn Main() -> Element {
 								revision.set(revision() + 1);
 							},
 							if pending { "Syncing…" } else { "Sync now" }
+						}
+						button { class: "btn", disabled: !can_place_alarm,
+							onclick: move |_| begin_alarm.call(()), "Set alarm"
 						}
 					}
 				}
@@ -1659,7 +1696,8 @@ fn Main() -> Element {
 				{day_header}
 				{body}
 			}
-			if model.is_some() && page() != Page::Habits {
+			alarms::PlacementControls { config }
+			if model.is_some() && page() != Page::Habits && alarm_placement().is_none() {
 				button {
 					class: "fab",
 					title: "Add",
@@ -1675,7 +1713,11 @@ fn Main() -> Element {
 			{create_sheet}
 			{scratch_sheet}
 			{more_sheet}
-			if show_alarms() { alarms::AlarmsSheet { config, day: selected_day, on_close: move |_| show_alarms.set(false) } }
+			if show_alarms() { alarms::AlarmsSheet {
+				config, day: selected_day,
+				on_place: model.as_ref().map(|_| begin_alarm),
+				on_close: move |_| show_alarms.set(false),
+			} }
 			{people_sheet}
 			if show_log() {
 				div { class: "modal-backdrop", onclick: move |_| show_log.set(false),
@@ -2115,6 +2157,7 @@ fn timeline(
 							{block_tasks.into_iter()}
 							{trips.into_iter()}
 							{now_line}
+							alarms::AlarmNeedle { day: model.day, hour_start: model.hour_start, time_format }
 							{empty}
 							div {
 								id: "timeline-anchor",

@@ -21,7 +21,17 @@ struct Move {
 #[derive(serde::Deserialize)]
 #[serde(untagged)]
 enum Gesture {
-	Zoom { zoom: f32 },
+	Zoom {
+		zoom: f32,
+	},
+	Alarm {
+		alarm_day: chrono::NaiveDate,
+		hour_start: u32,
+		minute: u32,
+	},
+	CancelAlarm {
+		cancel_alarm: bool,
+	},
 	Move(Move),
 }
 
@@ -35,10 +45,33 @@ pub fn Gestures(
 	let mut latest = use_signal(move || seed);
 	use_effect(use_reactive!(|context| latest.set(context)));
 	let mut error = use_signal(|| None::<String>);
+	let placement = try_use_context::<crate::alarms::Placement>();
 	use_future(move || async move {
 		let mut eval = document::eval(include_str!("calendar_gestures.js"));
 		while let Ok(gesture) = eval.recv::<Gesture>().await {
 			let change = match gesture {
+				Gesture::Alarm {
+					alarm_day,
+					hour_start,
+					minute,
+				} => {
+					if let Some(crate::alarms::Placement(mut placement)) = placement
+						&& placement.peek().is_some()
+						&& hour_start == latest.peek().settings.day_start_hour()
+						&& let Some(at) =
+							crate::alarms::placement_time(alarm_day, hour_start, minute)
+					{
+						placement.set(Some(at));
+					}
+					continue;
+				}
+				Gesture::CancelAlarm { cancel_alarm } => {
+					if cancel_alarm && let Some(crate::alarms::Placement(mut placement)) = placement
+					{
+						placement.set(None);
+					}
+					continue;
+				}
 				Gesture::Zoom { zoom: value } => {
 					if value.is_finite() {
 						zoom.set(value.clamp(0.5, 3.0));
