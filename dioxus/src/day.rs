@@ -120,8 +120,12 @@ pub fn today(settings: &CalendarSettings) -> NaiveDate {
 ///
 /// Blocking: callers run this on a worker thread. It uses the same OAuth token
 /// file as the iced app, so signing in there is enough for the Dioxus view.
+#[cfg(target_os = "android")]
 pub fn load_day(day: NaiveDate, settings: &CalendarSettings) -> Result<Snapshot, String> {
-	calendar::sleep::sync(settings, day, &[day])
+	let snapshot = calendar::sleep::sync(settings, day, &[day])?;
+	let path = timeparagon_core::task_db::path().ok_or("Cannot locate the local database")?;
+	calendar::view_cache::save(&path, &snapshot, &[day], settings.day_start_hour())?;
+	Ok(snapshot)
 }
 
 /// A day's snapshot narrowed to what a search shows. Only what is drawn goes
@@ -318,19 +322,6 @@ pub struct AgendaRow {
 	pub event: Event,
 	pub time: String,
 	pub color: timeparagon_core::Color,
-}
-
-/// Blocking: callers run this on a worker thread.
-pub fn load_agenda(dates: &[NaiveDate], settings: &CalendarSettings) -> Result<Snapshot, String> {
-	let first = *dates.first().ok_or("The range is empty")?;
-	calendar::sync_range(
-		&calendar::GoogleClient::from_settings(settings),
-		&settings.disabled,
-		first,
-		dates,
-		settings.day_start_hour(),
-		settings.app_calendar.as_deref(),
-	)
 }
 
 /// The days of a range with what is on each, all-day items first. A task that

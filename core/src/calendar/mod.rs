@@ -25,6 +25,7 @@ pub mod sources;
 pub mod task_metadata;
 pub mod task_sort;
 pub mod time_format;
+pub mod view_cache;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -1145,6 +1146,9 @@ pub struct Store {
 	/// `boot` and a reconnect do: a store built by hand must not read or
 	/// rewrite the cache the user's own days live in.
 	day_cache: Option<PathBuf>,
+	/// A worker may own snapshot persistence; UI cache reads must then never
+	/// write an older copy over its completed fetch.
+	persist_snapshots: bool,
 	/// The hour the calendar day ends, used to decide which day an event
 	/// belongs to when reading from or writing to the month cache on disk.
 	day_end_hour: u32,
@@ -1221,6 +1225,7 @@ impl Store {
 			cache: HashMap::new(),
 			visible_days: Vec::new(),
 			day_cache: None,
+			persist_snapshots: true,
 			day_end_hour,
 			day,
 			last_sync: None,
@@ -1261,6 +1266,7 @@ impl Store {
 			cache: HashMap::new(),
 			visible_days: Vec::new(),
 			day_cache: None,
+			persist_snapshots: true,
 			day_end_hour: 0,
 			day: snapshot.day,
 			last_sync: Some(snapshot.fetched_at),
@@ -1313,6 +1319,13 @@ impl Store {
 		}
 
 		self.trim_cache();
+	}
+
+	/// Use the database for restoring days and local edits, while a background
+	/// loader owns saving snapshots. Explicit edits still update disk history.
+	pub fn read_cached_days_in(&mut self, database: Option<PathBuf>) {
+		self.persist_snapshots = false;
+		self.cache_days_in(database);
 	}
 
 	/// The hour the calendar day ends, used to assign events to days when
@@ -1399,6 +1412,9 @@ impl Store {
 
 	/// Writes one day out, so the run after this one paints it at once.
 	fn write_day(&self, day: NaiveDate, events: &[Event]) {
+		if !self.persist_snapshots {
+			return;
+		}
 		let Some(database) = self.day_cache.as_ref() else {
 			return;
 		};
@@ -1604,7 +1620,8 @@ impl Store {
 		self.events = snapshot.events;
 		self.day = snapshot.day;
 		self.last_sync = Some(snapshot.fetched_at);
-		if let Some(database) = &self.day_cache
+		if self.persist_snapshots
+			&& let Some(database) = &self.day_cache
 			&& let Err(error) =
 				day_cache::save_sync_state(database, snapshot.fetched_at, &self.calendars)
 		{
@@ -3717,6 +3734,28 @@ mod tests {
 		let cached = day_cache::load(scratch.path(), next, 0).unwrap();
 		assert!(cached.contains(&neighbor));
 		assert!(!cached.iter().any(Event::is_task));
+	}
+
+	#[test]
+	fn a_store_with_worker_persistence_cannot_overwrite_a_newer_database_snapshot() {
+		let scratch = day_cache::Scratch::new("worker-persistence");
+		let mut old = sample_snapshot();
+		old.fetched_at -= chrono::Duration::hours(1);
+		let day = old.day;
+		view_cache::save(scratch.path(), &old, &[day], 0).unwrap();
+		let mut store = Store::new(0);
+		store.read_cached_days_in(Some(scratch.path().to_owned()));
+		let mut fresh = old.clone();
+		fresh.fetched_at = crate::clock::now();
+		fresh.events.clear();
+		view_cache::save(scratch.path(), &fresh, &[day], 0).unwrap();
+		store.cache_fetched_snapshot(old, &[day]);
+		store.set_day(day.succ_opt().unwrap(), day);
+		let restored = view_cache::load(scratch.path(), &[day], 0, false)
+			.unwrap()
+			.unwrap();
+		assert!(restored.events.is_empty());
+		assert_eq!(restored.fetched_at, fresh.fetched_at);
 	}
 
 	#[test]

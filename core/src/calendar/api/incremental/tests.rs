@@ -507,3 +507,72 @@ fn windows_merge_and_leave_gaps_only_where_nothing_is_held() {
 	let kept = prune(vec![window(0, 6), far], window(0, 1), hour(0));
 	assert_eq!(kept, [window(0, 6)]);
 }
+
+#[test]
+fn offline_views_use_coverage_and_changes_to_offscreen_dates_after_reopening() {
+	let harness = Harness::new();
+	let next = day().succ_opt().unwrap();
+	harness
+		.google
+		.borrow_mut()
+		.put(PRIMARY, event("old", day(), 10));
+	let first = harness.sync(day(), next);
+	crate::calendar::day_cache::save_sync_state(
+		&harness.path,
+		crate::clock::now(),
+		&first.calendars,
+	)
+	.unwrap();
+	// An old acknowledged local edit must not resurrect the deleted event
+	// when a later incremental pass changes its offscreen day.
+	let mut database = Database::open(&harness.path).unwrap();
+	database
+		.connection()
+		.execute(
+			"INSERT INTO google_entities(id,event,acknowledged_at) VALUES(?1,?2,?3)",
+			params![
+				format!("{PRIMARY}\nold"),
+				serde_json::to_string(&first.events[0]).unwrap(),
+				(crate::clock::now() - Duration::minutes(1)).to_rfc3339()
+			],
+		)
+		.unwrap();
+	// A fetched empty day is different from one outside the sync windows.
+	let cached = crate::calendar::view_cache::load(&harness.path, &[next], 0, true)
+		.unwrap()
+		.unwrap();
+	assert!(cached.events.is_empty());
+	assert!(
+		crate::calendar::view_cache::load(&harness.path, &[next.succ_opt().unwrap()], 0, true)
+			.unwrap()
+			.is_none()
+	);
+	{
+		let mut google = harness.google.borrow_mut();
+		google.cancel(PRIMARY, "old");
+		google.put(PRIMARY, event("new", day(), 14));
+	}
+	// Refresh only tomorrow; today's database copy must still catch up.
+	harness.sync(next, next);
+	let requests = harness.google.borrow().requests.len();
+	let cached = crate::calendar::view_cache::load(&harness.path, &[day()], 0, true)
+		.unwrap()
+		.unwrap();
+	assert_eq!(
+		cached
+			.events
+			.iter()
+			.map(|event| event.id.as_str())
+			.collect::<Vec<_>>(),
+		["new"]
+	);
+	assert_eq!(
+		harness.google.borrow().requests.len(),
+		requests,
+		"cache reads never contact Google"
+	);
+	// Reopening connections did not lose the tokens or widen the view.
+	harness.sync(day(), day());
+	assert_eq!(harness.full_listings(), 0);
+	assert_eq!(harness.requested("singleEvents=true"), 0);
+}

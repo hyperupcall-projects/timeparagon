@@ -8,7 +8,6 @@ use timeparagon_core::config::CalendarSettings;
 
 use crate::css_color;
 use crate::day;
-use crate::editor::worker;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Range {
@@ -65,24 +64,37 @@ pub fn AgendaDays(
 	on_day: EventHandler<NaiveDate>,
 	on_open: EventHandler<Event>,
 ) -> Element {
-	let load_settings = settings.clone();
-	let loaded = use_resource(use_reactive!(|(range, anchor)| {
-		let _ = revision();
-		let settings = load_settings.clone();
-		let dates = dates(range, anchor, &settings);
-		async move {
-			let wanted = dates.clone();
-			let snapshot = worker(move || crate::day::load_agenda(&wanted, &settings)).await;
-			snapshot.map(|snapshot| (snapshot, dates))
+	let dates = dates(range, anchor, &settings);
+	let (loaded, disk_view) =
+		crate::cache::use_calendar(dates.clone(), settings.clone(), revision, true);
+	let snapshot = loaded
+		.read()
+		.as_ref()
+		.and_then(|result| result.as_ref().ok())
+		.filter(|(wanted, _)| *wanted == dates)
+		.map(|(_, snapshot)| snapshot.clone())
+		.or_else(|| {
+			disk_view
+				.read()
+				.as_ref()
+				.filter(|(wanted, _)| *wanted == dates)
+				.map(|(_, snapshot)| snapshot.clone())
+		});
+	let error = loaded
+		.read()
+		.as_ref()
+		.and_then(|result| result.as_ref().err())
+		.cloned();
+	match snapshot {
+		None if error.is_some() => {
+			let message = error.as_deref().unwrap_or_default();
+			rsx! { p { class: "editor-error", role: "alert", "{message}" } }
 		}
-	}));
-	match &*loaded.read() {
 		None => rsx! { p { class: "hint", role: "status", "Loading…" } },
-		Some(Err(message)) => rsx! { p { class: "editor-error", role: "alert", "{message}" } },
-		Some(Ok((snapshot, dates))) => {
+		Some(snapshot) => {
 			let mut snapshot = snapshot.clone();
 			crate::habits::name_events(&mut snapshot.events);
-			let mut days = day::agenda(&snapshot, dates, &settings);
+			let mut days = day::agenda(&snapshot, &dates, &settings);
 			for (_, rows) in &mut days {
 				rows.retain(|row| {
 					filter
@@ -92,6 +104,9 @@ pub fn AgendaDays(
 				});
 			}
 			rsx! {
+				if let Some(message) = error {
+					p { class: "editor-error", role: "alert", "{message}" }
+				}
 				for (date, rows) in days {
 					section { key: "{date}", class: "agenda-day",
 						button {
