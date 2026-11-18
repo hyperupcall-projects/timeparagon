@@ -347,7 +347,7 @@ pub(super) fn view_button<'a>(state: &State, metrics: &Metrics) -> Element<'a, M
 		.into()
 }
 
-/// The Actions button, the way into Sync now and Set Alarm.
+/// The Actions button, the way into Sync now and Set alarm.
 pub(super) fn actions_button<'a>(state: &State, metrics: &Metrics) -> Element<'a, Message> {
 	button(text("Actions").size(metrics.label()).center())
 		.on_press(Message::Calendar(CalendarMessage::CalendarActionsToggled))
@@ -437,7 +437,7 @@ pub(super) fn view_sheet<'a>(
 /// How wide the Actions popup is: room for its labels and no more.
 const ACTIONS_WIDTH: f32 = 220.0;
 
-/// The Actions popup: Sync now above Set Alarm, as alike as two buttons.
+/// The Actions popup: Sync now above Set alarm, as alike as two buttons.
 /// `alarm` is false where there is no grid to set an alarm on.
 pub(super) fn actions_overlay<'a>(
 	state: &'a State,
@@ -465,7 +465,7 @@ pub(super) fn actions_overlay<'a>(
 		// Alarm setting mode turns the day view into a place to click a time,
 		// so the button that enters it is lit for as long as it lasts.
 		panel = panel.push(
-			button(text("Set Alarm").size(metrics.label()).center().width(Fill))
+			button(text("Set alarm").size(metrics.label()).center().width(Fill))
 				.width(Fill)
 				.on_press(Message::Alarms(crate::alarms::Action::ModeToggled))
 				.style(if state.alarms.mode {

@@ -1,10 +1,24 @@
-//! The Filter tab of the View sheet: narrows the calendar down to what matches. The rules, and what
-//! each filter means, are `timeparagon_core::calendar::search`.
+//! The Filter tab of the View sheet, in the same order as the desktop's.
+//! Filtering rules live in `timeparagon_core::calendar::search`.
 
 use dioxus::prelude::*;
 use timeparagon_core::calendar::projects;
 use timeparagon_core::calendar::search::{Action, AvailabilityFilter, Search};
 use timeparagon_core::config::ProjectsSettings;
+
+#[component]
+fn Toggle(label: &'static str, checked: bool, on_change: EventHandler<bool>) -> Element {
+	rsx! {
+		button {
+			class: "source-row",
+			role: "switch",
+			aria_checked: checked.to_string(),
+			onclick: move |_| on_change.call(!checked),
+			span { class: "source-name", "{label}" }
+			span { class: "source-switch", span { class: "source-knob" } }
+		}
+	}
+}
 
 #[component]
 pub fn SearchFields(
@@ -21,127 +35,114 @@ pub fn SearchFields(
 		.unwrap_or_default();
 	let chosen_location = current.location.clone().unwrap_or_default();
 	rsx! {
-				div { class: "search-fields",
-					input {
-						class: "client-input",
-						r#type: "search",
-						placeholder: "Search titles",
-						aria_label: "Search titles",
-						value: "{current.query}",
-						oninput: move |event| apply(Action::Query(event.value())),
-					}
-					label { class: "sheet-check",
-						input {
-							r#type: "checkbox",
-							checked: current.in_description,
-							onchange: move |event: FormEvent| apply(Action::InDescription(event.checked())),
-						}
-						"Look in descriptions too"
-					}
-					label { class: "sheet-check",
-						input {
-							r#type: "checkbox",
-							checked: current.public_only,
-							onchange: move |event: FormEvent| apply(Action::PublicOnly(event.checked())),
-						}
-						"Only public events"
-					}
-					label { class: "editor-label", r#for: "search-time", "Under way at" }
-					input {
-						id: "search-time",
-						class: "client-input",
-						r#type: "time",
-						value: "{time}",
-						onchange: move |event: FormEvent| {
-							let value = event.value();
-							apply(if value.is_empty() { Action::ClearTime } else { Action::Time(value) });
-						},
-					}
-					label { class: "editor-label", r#for: "search-availability", "Availability" }
-					select {
-						id: "search-availability",
-						class: "client-input",
-						onchange: move |event: FormEvent| {
-							let picked = AvailabilityFilter::ALL
-								.into_iter()
-								.find(|choice| choice.to_string() == event.value());
-							if let Some(picked) = picked {
-								apply(Action::Availability(picked));
-							}
-						},
-						for choice in AvailabilityFilter::ALL {
-							option {
-								key: "{choice}",
-								value: "{choice}",
-								selected: choice == current.availability,
-								"{choice}"
-							}
-						}
-					}
-					if !locations.is_empty() {
-						label { class: "editor-label", r#for: "search-location", "Location" }
-						select {
-							id: "search-location",
-							class: "client-input",
-							onchange: move |event: FormEvent| {
-								let value = event.value();
-								apply(Action::Location((!value.is_empty()).then_some(value)));
-							},
-							option { value: "", selected: chosen_location.is_empty(), "Anywhere" }
-							for location in locations {
-								option {
-									key: "{location}",
-									value: "{location}",
-									selected: location == chosen_location,
-									"{location}"
-								}
-							}
-						}
-					}
-					if !labels.is_empty() {
-						span { class: "editor-label", "Labels" }
-						div { class: "token-row",
-							for label in labels {
-								{
-									let on = current.labels.contains(&label);
-									let name = label.clone();
-									rsx! {
-										button {
-											key: "{label}",
-											class: "nav-tab",
-											aria_pressed: on.to_string(),
-											onclick: move |_| apply(Action::Label(name.clone(), !on)),
-											"{label}"
-										}
-									}
-								}
-							}
-						}
-					}
-					if !projects.items.is_empty() {
-						span { class: "editor-label", "Projects" }
-						div { class: "token-row",
-							for project in projects.sorted() {
-								{
-									let id = project.id;
-									let on = current.projects.ids.contains(&id);
-									rsx! {
-										button {
-											key: "{id}",
-											class: "nav-tab",
-											aria_pressed: on.to_string(),
-											onclick: move |_| {
-												let action = if on { projects::Action::Remove(id) } else { projects::Action::Add(id) };
-												apply(Action::Projects(action));
-											},
-											"{project.name}"
-										}
-									}
-								}
-							}
-						}
-					}
-					button { class: "btn", onclick: move |_| apply(Action::Clear), "Clear" }
+		div { class: "search-fields",
+			input {
+				class: "client-input",
+				r#type: "search",
+				placeholder: "Search",
+				aria_label: "Search",
+				value: "{current.query}",
+				oninput: move |event| apply(Action::Query(event.value())),
+			}
+			Toggle {
+				label: "Search description",
+				checked: current.in_description,
+				on_change: move |value| apply(Action::InDescription(value)),
+			}
+			h3 { class: "search-heading", "Search filters" }
+			div { class: "editor-field",
+				label { class: "editor-label", r#for: "search-time", "Time of day" }
+				input {
+					id: "search-time",
+					class: "client-input",
+					r#type: "time",
+					value: "{time}",
+					onchange: move |event: FormEvent| {
+						let value = event.value();
+						apply(if value.is_empty() { Action::ClearTime } else { Action::Time(value) });
+					},
 				}
+				if current.time.is_some() {
+					button { class: "btn editor-wide", onclick: move |_| apply(Action::ClearTime), "Any time" }
+				}
+			}
+			crate::editor::ProjectsField {
+				selected: current.projects.ids.clone(),
+				projects,
+				busy: false,
+				on_add: move |id| apply(Action::Projects(projects::Action::Add(id))),
+				on_remove: move |id| apply(Action::Projects(projects::Action::Remove(id))),
+			}
+			div { class: "editor-field",
+				span { class: "editor-label", "Labels" }
+				if labels.is_empty() {
+					p { class: "empty-note", "No labels on the events loaded so far" }
+				}
+				for label in labels {
+					{
+						let checked = current.labels.contains(&label);
+						let name = label.clone();
+						rsx! {
+							label { key: "{label}", class: "sheet-check",
+								input {
+									r#type: "checkbox",
+									checked,
+									onchange: move |event: FormEvent| apply(Action::Label(name.clone(), event.checked())),
+								}
+								"{label}"
+							}
+						}
+					}
+				}
+			}
+			h3 { class: "search-heading", "Event filters" }
+			div { class: "editor-field",
+				label { class: "editor-label", r#for: "search-availability", "Show events that are" }
+				select {
+					id: "search-availability",
+					class: "client-input",
+					onchange: move |event: FormEvent| {
+						if let Some(picked) = AvailabilityFilter::ALL.into_iter().find(|choice| choice.to_string() == event.value()) {
+							apply(Action::Availability(picked));
+						}
+					},
+					for choice in AvailabilityFilter::ALL {
+						option { key: "{choice}", value: "{choice}", selected: choice == current.availability, "{choice}" }
+					}
+				}
+			}
+			Toggle {
+				label: "Only show events with public visibility",
+				checked: current.public_only,
+				on_change: move |value| apply(Action::PublicOnly(value)),
+			}
+			div { class: "editor-field",
+				label { class: "editor-label", r#for: "search-location", "Location" }
+				select {
+					id: "search-location",
+					class: "client-input",
+					onchange: move |event: FormEvent| {
+						let value = event.value();
+						apply(Action::Location((!value.is_empty()).then_some(value)));
+					},
+					option { value: "", selected: chosen_location.is_empty(), "Any location" }
+					for location in locations {
+						option { key: "{location}", value: "{location}", selected: location == chosen_location, "{location}" }
+					}
+				}
+			}
+			h3 { class: "search-heading", "Detail filter" }
+			Toggle {
+				label: "Show details by visibility",
+				checked: current.details_by_visibility,
+				on_change: move |value| apply(Action::DetailsByVisibility(value)),
+			}
+			button {
+				class: "btn editor-wide",
+				disabled: !current.is_modified(),
+				onclick: move |_| apply(Action::Clear),
+				"Clear search"
+			}
+		}
 	}
 }

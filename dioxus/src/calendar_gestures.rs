@@ -4,6 +4,46 @@ use timeparagon_core::calendar::{self, Event};
 
 use crate::{day, editor::worker};
 
+const MIN_ZOOM: f32 = 0.5;
+const MAX_ZOOM: f32 = 3.0;
+const DEFAULT_ZOOM: f32 = 1.0;
+
+#[component]
+pub fn ZoomControls(mut zoom: Signal<f32>) -> Element {
+	let value = zoom();
+	let stepped = |factor: f32| {
+		let next = (value * factor).clamp(MIN_ZOOM, MAX_ZOOM);
+		if (next - DEFAULT_ZOOM).abs() < 0.01 {
+			DEFAULT_ZOOM
+		} else {
+			next
+		}
+	};
+	let larger = stepped(calendar::ZOOM_STEP);
+	let smaller = stepped(1.0 / calendar::ZOOM_STEP);
+	rsx! {
+		section { class: "calendar-zoom", aria_label: "Zoom",
+			h3 { class: "source-heading", "Zoom" }
+			button { class: "btn editor-wide", disabled: value >= MAX_ZOOM,
+				onclick: move |_| zoom.set(larger), "Zoom in"
+			}
+			button { class: "btn editor-wide", disabled: value == DEFAULT_ZOOM,
+				onclick: move |_| zoom.set(DEFAULT_ZOOM), "Reset zoom"
+			}
+			button { class: "btn editor-wide", disabled: value <= MIN_ZOOM,
+				onclick: move |_| zoom.set(smaller), "Zoom out"
+			}
+		}
+	}
+}
+
+/// Menu presses update the same scale as pinching, including when no grid is mounted.
+pub fn sync_zoom(value: f32) {
+	let _ = document::eval(&format!(
+		"if (window.__calendarGesture) {{ window.__calendarGesture.setZoom({value}); }} else {{ document.documentElement.style.setProperty('--calendar-zoom', {value}); }}"
+	));
+}
+
 pub fn can_drag(event: &Event) -> bool {
 	!event.all_day && !event.details.sending && !calendar::deadline::is_marker(event)
 }
@@ -41,7 +81,7 @@ pub fn Gestures(
 			let change = match gesture {
 				Gesture::Zoom { zoom: value } => {
 					if value.is_finite() {
-						zoom.set(value.clamp(0.5, 3.0));
+						zoom.set(value.clamp(MIN_ZOOM, MAX_ZOOM));
 					}
 					continue;
 				}

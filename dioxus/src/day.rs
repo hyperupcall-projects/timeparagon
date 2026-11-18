@@ -143,17 +143,27 @@ pub fn filter_snapshot(
 }
 
 /// The labels and locations a search can choose from on this day.
-pub fn search_choices(events: &[Event]) -> (Vec<String>, Vec<String>) {
+pub fn search_choices(events: &[Event], search: &Search) -> (Vec<String>, Vec<String>) {
 	let mut labels: Vec<String> = events
 		.iter()
-		.flat_map(|event| tb::metadata(event).labels)
+		.filter(|event| !search.hides_details(event))
+		.flat_map(|event| {
+			if event.is_task() {
+				tb::metadata(event).labels
+			} else {
+				event.details.labels.clone()
+			}
+		})
+		.chain(search.labels.iter().cloned())
 		.collect();
 	labels.sort_by_key(|label| label.to_lowercase());
 	labels.dedup();
 	let mut locations: Vec<String> = events
 		.iter()
+		.filter(|event| !search.hides_details(event))
 		.map(|event| event.details.location.trim().to_owned())
 		.filter(|location| !location.is_empty())
+		.chain(search.location.iter().cloned())
 		.collect();
 	locations.sort();
 	locations.dedup();
@@ -167,6 +177,28 @@ pub struct QuickTask {
 	pub due: Option<NaiveDate>,
 	pub deadline: Option<NaiveDate>,
 	pub metadata: tb::Metadata,
+}
+
+/// Display helpers keep visibility filtering out of the events used by editors.
+pub fn display_title(event: &Event, search: &Search) -> String {
+	if search.hides_details(event) {
+		calendar::search::PRIVATE_TITLE.to_owned()
+	} else {
+		event.title.clone()
+	}
+}
+
+pub fn display_color(
+	event: &Event,
+	settings: &CalendarSettings,
+	calendars: &[calendar::Calendar],
+	search: &Search,
+) -> timeparagon_core::Color {
+	if search.hides_details(event) {
+		calendar::search::PRIVATE_COLOR
+	} else {
+		event.display_color(settings, calendars)
+	}
 }
 
 /// Reads the keywords out of what was typed, like the desktop's add something box.

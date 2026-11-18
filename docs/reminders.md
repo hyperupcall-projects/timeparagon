@@ -28,6 +28,10 @@ Choosing a sound plays it on the desktop. **Test** posts a sample reminder.
 
 ## Desktop
 
+**More → Alarms** lists current alarms with their labels, dates and times.
+Use **Cancel** beside an alarm to remove it. Set new alarms from the day
+calendar's **Actions → Set alarm**.
+
 Reminders are freedesktop notifications posted by the side panel instance
 while it runs. Sounds play through PipeWire at the alarm volume. The device
 sounds are the files in installed sound themes (`/usr/share/sounds/*/stereo`);

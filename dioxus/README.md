@@ -11,7 +11,8 @@ own screen and the rest of the app in sheets over it:
 - Pinch with two fingers on the timed grid to zoom in or out, in Do, Day or
   Multi-day. The time under your fingers stays in place. Zoom changes the
   spacing between hours and is kept when switching days or views until the app
-  closes; text and controls keep their normal size.
+  closes; text and controls keep their normal size. **View → Calendars → Zoom**
+  also offers **Zoom in**, **Reset zoom** and **Zoom out**.
 - Adding tasks (with the desktop's quick-add keywords), events and time blocks.
 - Notes, with Markdown, colors and connections, kept as Markdown files in the
   notes directory chosen on each device.
@@ -221,7 +222,10 @@ scopes does not revoke existing tokens.
 
 **Do** shows the day's calendar,
 with the day picker, **View** (the Calendars and Filter tabs) and **Actions**
-(Sync now) at the left; the picker's ● goes back to today. **Plan** plans the
+(Sync now) at the left; the picker's ● goes back to today. **Filter** follows
+the desktop's Search filters, Event filters and Detail filter sections,
+including **Show details by visibility**, which draws non-public entries as
+**Private**. **Plan** plans the
 period named on it, and its ▾ chooses Day, Multi-day or Month. Planning
 shows a day schedule, two or three schedules side by side, or the full month.
 The compact date strip expands from one week to the whole month. Selecting a

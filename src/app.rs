@@ -152,6 +152,8 @@ pub enum Screen {
 	Notes,
 	/// Contacts from every signed-in Google account, and their directories.
 	People,
+	/// Pending alarms, with an action to cancel each one.
+	Alarms,
 	Settings,
 }
 

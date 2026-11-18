@@ -45,7 +45,7 @@ fn at<'a>(size: Size, element: Element<'a, Message>) -> Simulator<'a> {
 	Sim::with_size(Settings::default(), size, element)
 }
 
-/// Set Alarm has to be there, and has to work, at the narrowest size: it is
+/// Set alarm has to be there, and has to work, at the narrowest size: it is
 /// the one way into alarm setting mode. It lives in the Actions popup.
 #[test]
 fn set_alarm_is_clickable_at_the_minimum_width() -> Result<(), Error> {
@@ -53,7 +53,7 @@ fn set_alarm_is_clickable_at_the_minimum_width() -> Result<(), Error> {
 	state.calendar.actions_open = true;
 	let mut ui = render(&state, Size::new(180.0, 240.0));
 
-	let _ = ui.click("Set Alarm")?;
+	let _ = ui.click("Set alarm")?;
 
 	let messages: Vec<Message> = ui.into_messages().collect();
 
@@ -62,7 +62,7 @@ fn set_alarm_is_clickable_at_the_minimum_width() -> Result<(), Error> {
 			message,
 			Message::Alarms(timeparagon::alarms::Action::ModeToggled)
 		)),
-		"clicking Set Alarm produced {messages:?}"
+		"clicking Set alarm produced {messages:?}"
 	);
 
 	Ok(())

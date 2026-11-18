@@ -241,7 +241,7 @@ fn write(path: &Path, alarms: Vec<Alarm>) -> io::Result<()> {
 
 #[derive(Debug, Clone)]
 pub enum Action {
-	/// The Set Alarm button: enter or leave alarm setting mode.
+	/// The Set alarm button: enter or leave alarm setting mode.
 	ModeToggled,
 	/// A click in alarm setting mode, at the time under the needle.
 	Place(DateTime<Local>),

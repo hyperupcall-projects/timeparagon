@@ -201,7 +201,10 @@ pub fn Planner(
 								span { class: "planner-number", "{date.day()}" }
 								if full_month {
 									for row in rows.iter().take(2) {
-										span { class: "month-preview", style: "border-left-color: {crate::css_color(row.color)};", "{row.event.title}" }
+										{
+											let color = if search.hides_details(&row.event) { calendar::search::PRIVATE_COLOR } else { row.color };
+											rsx! { span { class: "month-preview", style: "border-left-color: {crate::css_color(color)};", "{day::display_title(&row.event, &search)}" } }
+										}
 									}
 									if rows.len() > 2 { span { class: "month-more", "+{rows.len() - 2} more" } }
 								}
@@ -237,7 +240,7 @@ pub fn Planner(
 					crate::calendar_gestures::Gestures { context, zoom, on_saved: move |_| revision.set(revision() + 1) }
 				}
 				if let Some(snapshot) = snapshot {
-					{schedule_grid(&snapshot, &dates, &settings, time_format, zoom(), shown_count, on_open, on_block, (!search.is_active()).then(|| config.read().clone()).as_ref())}
+					{schedule_grid(&snapshot, &dates, &settings, time_format, zoom(), shown_count, on_open, on_block, (!search.is_modified()).then(|| config.read().clone()).as_ref(), &search)}
 				}
 			}
 		}
@@ -255,6 +258,7 @@ fn schedule_grid(
 	on_open: EventHandler<Event>,
 	on_block: EventHandler<Event>,
 	travel_config: Option<&Config>,
+	search: &Search,
 ) -> Element {
 	let models: Vec<_> = dates
 		.iter()
@@ -276,9 +280,11 @@ fn schedule_grid(
 						for event in &model.all_day {
 							{
 								let opened = event.clone();
+								let color = day::display_color(event, settings, &model.calendars, search);
+								let title = day::display_title(event, search);
 								rsx! {
-									button { class: "all-day-chip", "data-sending": event.details.sending, disabled: event.details.sending, style: "background:{crate::css_color(event.display_color(settings, &model.calendars))};color:{crate::css_color(calendar::colors::on_color(event.display_color(settings, &model.calendars)))};",
-										onclick: move |_| on_open.call(opened.clone()), "{event.title}"
+									button { class: "all-day-chip", "data-sending": event.details.sending, disabled: event.details.sending, style: "background:{crate::css_color(color)};color:{crate::css_color(calendar::colors::on_color(color))};",
+										onclick: move |_| on_open.call(opened.clone()), "{title}"
 									}
 								}
 							}
@@ -312,7 +318,7 @@ fn schedule_grid(
 									shown.time_block = count == 1 && is_block;
 									rsx! {
 										button { key: "{timed.event.id}", class: if is_block { "grid-event block" } else { "grid-event" }, "data-sending": timed.event.details.sending, disabled: timed.event.details.sending,
-											style: "{crate::event_style(&shown)}",
+											style: "{crate::event_style(&shown, search)}",
 											"data-calendar-event": timed.event.id.clone(),
 											"data-event-calendar": timed.event.calendar_id.clone(),
 											"data-draggable": crate::calendar_gestures::can_drag(&timed.event).to_string(),
@@ -321,16 +327,16 @@ fn schedule_grid(
 											"data-duration": (timed.event.end - timed.event.start).num_minutes(),
 											"data-before-start": timed.event.start.timestamp(),
 											"data-before-end": timed.event.end.timestamp(),
-											title: "{timed.title}\n{crate::event_when(&timed.event, time_format)}",
+											title: "{day::display_title(&timed.event, search)}\n{crate::event_when(&timed.event, time_format)}",
 											onclick: move |_| { if is_block { on_block.call(opened.clone()); } else { on_open.call(opened.clone()); } },
-											{crate::event_label(timed, crate::event_height(timed, zoom), time_format)}
+											{crate::event_label(timed, crate::event_height(timed, zoom), time_format, search)}
 											if is_block { span { class: "block-plan", "Plan" } }
 										}
 									}
 								}
 							}
 							if count == 1 {
-								for timed in &model.timed { {crate::block_task_buttons(timed, on_open).into_iter()} }
+								for timed in &model.timed { {crate::block_task_buttons(timed, on_open, search).into_iter()} }
 							}
 							if let Some(config) = travel_config {
 								for trip in day::travel_boxes(model, &config.travel, config.appearance.distance_unit) {
@@ -444,6 +450,7 @@ mod tests {
 			EventHandler::new(|_| {}),
 			EventHandler::new(|_| {}),
 			None,
+			&Search::default(),
 		)
 	}
 

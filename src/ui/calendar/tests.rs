@@ -2364,7 +2364,7 @@ fn view_sits_beside_actions_on_every_header_width() {
 			);
 			assert!(ui.find("View").is_ok(), "header at {width}");
 			assert!(ui.find("Actions").is_ok(), "header at {width}");
-			assert!(ui.find("Set Alarm").is_err(), "header at {width}");
+			assert!(ui.find("Set alarm").is_err(), "header at {width}");
 		}
 		let mut ui = iced_test::Simulator::with_size(
 			Default::default(),
@@ -2514,7 +2514,7 @@ fn the_view_sheet_switches_tabs_and_actions_offers_sync_above_set_alarm() {
 	assert!(ui.find("Calendars").is_ok());
 	drop(ui);
 
-	// Actions puts the View sheet away and holds Sync now above Set Alarm.
+	// Actions puts the View sheet away and holds Sync now above Set alarm.
 	let _ = crate::app::update(
 		&mut state,
 		Message::Calendar(CalendarMessage::CalendarActionsToggled),
@@ -2527,8 +2527,8 @@ fn the_view_sheet_switches_tabs_and_actions_offers_sync_above_set_alarm() {
 		actions_overlay(&state, &metrics, true),
 	);
 	let sync = ui.find("Sync now").unwrap().bounds();
-	let alarm = ui.find("Set Alarm").unwrap().bounds();
-	assert!(sync.y < alarm.y, "Sync now sits above Set Alarm");
+	let alarm = ui.find("Set alarm").unwrap().bounds();
+	assert!(sync.y < alarm.y, "Sync now sits above Set alarm");
 	assert!((sync.width - alarm.width).abs() < 0.5, "the two look alike");
 	drop(ui);
 	let mut ui = iced_test::Simulator::with_size(

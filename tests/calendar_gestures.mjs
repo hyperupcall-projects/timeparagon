@@ -41,7 +41,7 @@ function setup() {
     const source = new Node('grid-event', {calendarEvent: 'event', eventCalendar: 'work', draggable: 'true', startMin: '540', endMin: '600', duration: '60', beforeStart: '1000', beforeEnd: '4600'});
     first.append(source);
     const doc = {documentElement: {style: rootStyle}, querySelector: () => doc.modalOpen ? {} : null,
-        querySelectorAll: () => [first, second], createElement: () => new Node(),
+        querySelectorAll: selector => selector === '.timeline-scroll' ? [scroller] : [first, second], createElement: () => new Node(),
         addEventListener: (type, fn, opts) => { listeners[type] = fn; options[type] = opts; }};
     const context = vm.createContext({ document: doc, window: {addEventListener() {}}, navigator: {vibrate() {}}, AbortController,
         setTimeout: fn => {timers.set(++serial, fn); return serial;}, clearTimeout: id => timers.delete(id),
@@ -63,6 +63,28 @@ function setup() {
     const zoom = () => +(properties.get('--calendar-zoom') || 1);
     const reload = () => vm.runInContext(`(async () => { ${script}\n })()`, context);
     return {source, first, second, scroller, timeline, doc, options, listeners, writes, context, down, move, up, hold, preview, finger, touch, zoom, reload};
+}
+{
+    const s = setup();
+    s.scroller.scrollTop = 480;
+    s.context.window.__calendarGesture.setZoom(2);
+    assert.equal(s.zoom(), 2, 'the View menu changes the same scale as pinch zoom');
+    assert.ok(Math.abs(s.scroller.scrollTop - 1360) < 0.01, 'menu zoom keeps the time at the center in place');
+    assert.deepEqual(s.writes, [], 'menu zoom never edits calendar data or echoes to Rust');
+    const a = s.finger(7, 100, 200), b = s.finger(8, 100, 400);
+    s.touch('touchstart', [a, b]);
+    s.touch('touchmove', [s.finger(7, 100, 250), s.finger(8, 100, 350)]);
+    assert.equal(s.zoom(), 1, 'pinching continues from the scale chosen in the menu');
+    s.touch('touchend', [], [a, b]);
+    const beforeReset = s.scroller.scrollTop;
+    s.context.window.__calendarGesture.setZoom(3);
+    s.context.window.__calendarGesture.setZoom(1);
+    assert.equal(s.zoom(), 1, 'Reset zoom restores the default');
+    assert.ok(Math.abs(s.scroller.scrollTop - beforeReset) < 0.01, 'zooming back restores the scroll position');
+    s.context.window.__calendarGesture.setZoom(100);
+    assert.equal(s.zoom(), 3, 'menu zoom respects the upper bound');
+    s.context.window.__calendarGesture.setZoom(-1);
+    assert.equal(s.zoom(), 0.5, 'menu zoom respects the lower bound');
 }
 {
     const s = setup(); s.down(); s.up(); s.hold();

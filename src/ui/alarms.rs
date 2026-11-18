@@ -1,4 +1,4 @@
-//! The popup that edits an alarm set on the calendar.
+//! The current alarms list and the popup that edits an alarm on the calendar.
 
 use iced::font::Weight;
 use iced::widget::{Space, button, column, container, mouse_area, row, stack, text};
@@ -19,6 +19,68 @@ const SCROLLBAR_GUTTER: f32 = 14.0;
 
 fn edit(edit: Edit) -> Message {
 	Message::Alarms(Action::Edit(edit))
+}
+
+/// More → Alarms lists pending alarms without opening their editors.
+pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+	let mut alarms: Vec<_> = state.alarms.items().iter().collect();
+	alarms.sort_by_key(|alarm| alarm.at);
+	let heading =
+		super::controls::page_heading("Alarms", "Current alarms", Some(alarms.len()), metrics);
+	let mut entries = column![].spacing(metrics.spacing).width(Fill);
+	if alarms.is_empty() {
+		entries = entries.push(
+			text("No current alarms.")
+				.size(metrics.label())
+				.style(text::secondary),
+		);
+	}
+	for alarm in alarms {
+		let label = if alarm.label.trim().is_empty() {
+			"Alarm"
+		} else {
+			alarm.label.trim()
+		};
+		let when = format!(
+			"{} · {}",
+			alarm.at.format("%a, %b %-d, %Y"),
+			crate::calendar::time_format::clock(alarm.at, state.config.appearance.time_format),
+		);
+		let details = column![
+			text(label).size(metrics.label()).width(Fill),
+			text(when)
+				.size(metrics.label() - 1.0)
+				.style(text::secondary)
+				.width(Fill),
+		]
+		.spacing(3)
+		.width(Fill);
+		let cancel = button(text("Cancel").size(metrics.label()).center())
+			.on_press(Message::Alarms(Action::Delete(alarm.id)))
+			.style(super::controls::danger);
+		entries = entries.push(
+			container(
+				row![details, cancel]
+					.spacing(metrics.spacing)
+					.align_y(Alignment::Center),
+			)
+			.padding(8)
+			.width(Fill)
+			.style(super::controls::card_surface),
+		);
+	}
+	let entries = entries.padding(iced::Padding::ZERO.right(SCROLLBAR_GUTTER));
+	column![
+		heading,
+		super::controls::scrollable(entries)
+			.width(Fill)
+			.height(Fill)
+	]
+	.spacing(metrics.spacing)
+	.padding(metrics.padding)
+	.width(Fill)
+	.height(Fill)
+	.into()
 }
 
 /// The alarm popup: when it goes off, and everything it does when it does.

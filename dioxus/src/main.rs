@@ -215,6 +215,7 @@ fn Main() -> Element {
 	let mut revision = use_signal(|| 0u32);
 	// Shared by Do and Plan for the lifetime of this app session.
 	let calendar_zoom = use_signal(|| 1.0f32);
+	use_effect(move || calendar_gestures::sync_zoom(calendar_zoom()));
 	let mut selected_block = use_signal(|| None::<String>);
 	let mut editing = use_signal(|| None::<Event>);
 	let block_writing = use_signal(|| false);
@@ -579,7 +580,7 @@ fn Main() -> Element {
 
 	// Only what is drawn is filtered. The widget above keeps the whole day, and
 	// trips join up the whole day's events, so they go while a search is on.
-	let searching = search_state.read().is_active();
+	let searching = search_state.read().is_modified();
 	let (model, travel) = if searching {
 		let filtered = snapshot.as_ref().map(|snapshot| {
 			day::build_model(
@@ -879,7 +880,7 @@ fn Main() -> Element {
 							div { class: "sidebar-scroll", {lists} }
 						}
 					}
-					{timeline(model, &travel, &settings, time_format, selected_block, editing, sleep_timer, calendar_zoom())}
+					{timeline(model, &travel, &settings, time_format, selected_block, editing, sleep_timer, calendar_zoom(), &search_state.read())}
 					if let Some(snapshot) = &snapshot {
 						calendar_gestures::Gestures {
 							context: EditContext::new(&config.read(), snapshot),
@@ -1565,10 +1566,13 @@ fn Main() -> Element {
 					}
 				}
 			});
-		let (labels, locations) = snapshot
-			.as_ref()
-			.map(|snapshot| day::search_choices(&snapshot.events))
-			.unwrap_or_default();
+		let (labels, locations) = day::search_choices(
+			snapshot
+				.as_ref()
+				.map(|snapshot| snapshot.events.as_slice())
+				.unwrap_or_default(),
+			&search_state.read(),
+		);
 		let view_tab_button = |label: &'static str, this: ViewTab| {
 			rsx! {
 				button {
@@ -1615,6 +1619,7 @@ fn Main() -> Element {
 						} else {
 							{error}
 							{sections}
+							calendar_gestures::ZoomControls { zoom: calendar_zoom }
 							if no_calendars {
 								p { class: "empty-note",
 									if signed_in() {
@@ -1986,19 +1991,20 @@ fn all_day_chip(
 	settings: &CalendarSettings,
 	calendars: &[calendar::Calendar],
 	editing: Signal<Option<Event>>,
+	search: &Search,
 ) -> Element {
 	let mut editing = editing;
 	let opened = event.clone();
-	let color = event.display_color(settings, calendars);
+	let color = day::display_color(event, settings, calendars, search);
 	let style = format!(
 		"background:{};color:{};",
 		css_color(color),
 		css_color(calendar::colors::on_color(color))
 	);
-	let title = if event.completed {
+	let title = if event.completed && !search.hides_details(event) {
 		format!("✓ {}", event.title)
 	} else {
-		event.title.clone()
+		day::display_title(event, search)
 	};
 	rsx! {
 		button {
@@ -2023,6 +2029,7 @@ fn timeline(
 	editing: Signal<Option<Event>>,
 	sleep_timer: SleepTimer,
 	zoom: f32,
+	search: &Search,
 ) -> Element {
 	let grid_height = scaled_px(24.0 * HOUR_HEIGHT);
 	let hours: Vec<Element> = (0..24u32)
@@ -2050,12 +2057,22 @@ fn timeline(
 	let events: Vec<Element> = model
 		.timed
 		.iter()
-		.map(|timed| timed_event_view(timed, time_format, open_block, editing, sleep_timer, zoom))
+		.map(|timed| {
+			timed_event_view(
+				timed,
+				time_format,
+				open_block,
+				editing,
+				sleep_timer,
+				zoom,
+				search,
+			)
+		})
 		.collect();
 	let block_tasks: Vec<Element> = model
 		.timed
 		.iter()
-		.flat_map(|timed| block_task_rows(timed, editing))
+		.flat_map(|timed| block_task_rows(timed, editing, search))
 		.collect();
 
 	let trips: Vec<Element> = travel
@@ -2099,7 +2116,7 @@ fn timeline(
 					"{summary.unfinished} unfinished. \u{a0}{summary.inbox} in inbox. \u{a0}{summary.unslotted} not slotted in"
 				}
 				for event in &model.all_day {
-					{all_day_chip(event, settings, &model.calendars, editing)}
+					{all_day_chip(event, settings, &model.calendars, editing, search)}
 				}
 			}
 			div { class: "timeline-card",
@@ -2164,10 +2181,19 @@ fn event_when(event: &Event, time_format: TimeFormat) -> String {
 	}
 }
 
-fn event_label(timed: &TimedEvent, height: f32, time_format: TimeFormat) -> Element {
+fn event_label(
+	timed: &TimedEvent,
+	height: f32,
+	time_format: TimeFormat,
+	search: &Search,
+) -> Element {
 	let when = event_when(&timed.event, time_format);
 	let fit = text_fit(height, when.lines().count());
-	let title = timed.title.clone();
+	let title = if search.hides_details(&timed.event) {
+		calendar::search::PRIVATE_TITLE.to_owned()
+	} else {
+		timed.title.clone()
+	};
 	let times = when
 		.lines()
 		.take(fit.time_lines)
@@ -2200,19 +2226,28 @@ fn timed_event_view(
 	editing: Signal<Option<Event>>,
 	sleep_timer: SleepTimer,
 	zoom: f32,
+	search: &Search,
 ) -> Element {
 	let mut editing = editing;
 	let opened = timed.event.clone();
 	let id = timed.event.id.clone();
-	let style = event_style(timed);
+	let style = event_style(timed, search);
 	let height = event_height(timed, zoom);
 	let tooltip = format!(
 		"{}\n{}\n{}",
-		timed.title,
+		if search.hides_details(&timed.event) {
+			calendar::search::PRIVATE_TITLE
+		} else {
+			&timed.title
+		},
 		event_when(&timed.event, time_format),
-		timed.calendar_name
+		if search.hides_details(&timed.event) {
+			""
+		} else {
+			&timed.calendar_name
+		}
 	);
-	let label = event_label(timed, height, time_format);
+	let label = event_label(timed, height, time_format, search);
 
 	if timed.time_block {
 		let mut open = open_block;
@@ -2243,7 +2278,8 @@ fn timed_event_view(
 				span { class: "block-plan", "Plan" }
 			}
 		}
-	} else if let Some(timer) = calendar::sleep::timer(&timed.event, timeparagon_core::clock::now())
+	} else if !search.hides_details(&timed.event)
+		&& let Some(timer) = calendar::sleep::timer(&timed.event, timeparagon_core::clock::now())
 	{
 		// A night splits like a time block: its label opens it, and the
 		// button beside it starts or finishes the timer.
@@ -2303,14 +2339,23 @@ fn timed_event_view(
 
 /// A time block's tasks, listed in the space it leaves beside itself. The
 /// ones that run past the block's end are marked.
-fn block_task_rows(timed: &TimedEvent, mut editing: Signal<Option<Event>>) -> Vec<Element> {
+fn block_task_rows(
+	timed: &TimedEvent,
+	mut editing: Signal<Option<Event>>,
+	search: &Search,
+) -> Vec<Element> {
 	block_task_buttons(
 		timed,
 		EventHandler::new(move |event| editing.set(Some(event))),
+		search,
 	)
 }
 
-fn block_task_buttons(timed: &TimedEvent, on_open: EventHandler<Event>) -> Vec<Element> {
+fn block_task_buttons(
+	timed: &TimedEvent,
+	on_open: EventHandler<Event>,
+	search: &Search,
+) -> Vec<Element> {
 	let top = scaled_px(timed.start_min as f32 * HOUR_HEIGHT / 60.0);
 	let duration = (timed.scheduled_end_min - timed.scheduled_start_min).max(1) as u32;
 	let (left, span) = column_position(timed.column, timed.columns, timed.column_span);
@@ -2328,8 +2373,11 @@ fn block_task_buttons(timed: &TimedEvent, on_open: EventHandler<Event>) -> Vec<E
                 "block-task"
             };
             let icon = status_icon(task.status);
-            let title = tb::task_label(&task.event);
-            let minutes = task.minutes;
+            let title = if search.hides_details(&task.event) {
+                calendar::search::PRIVATE_TITLE.to_owned()
+            } else {
+                format!("{icon} {} · {}m", tb::task_label(&task.event), task.minutes)
+            };
             let row_offset = index as f32 * look::TIME_BLOCK_ROW;
             let inset = look::EVENT_GAP / 2.0;
             let gap = look::TIME_BLOCK_ROW_GAP;
@@ -2342,7 +2390,7 @@ fn block_task_buttons(timed: &TimedEvent, on_open: EventHandler<Event>) -> Vec<E
                     disabled: task.event.details.sending,
                     style: "top:calc({top} + {row_offset:.1}px);left:calc({left:.4}% + {inset}px + {width} + {gap}px);width:{width};",
                     onclick: move |_| on_open.call(opened.clone()),
-                    "{icon} {title} · {minutes}m"
+                    "{title}"
                 }
             }
         })
@@ -2506,7 +2554,7 @@ fn time_block_width(span: f32) -> String {
 	)
 }
 
-fn event_style(timed: &TimedEvent) -> String {
+fn event_style(timed: &TimedEvent, search: &Search) -> String {
 	let top = scaled_px(timed.start_min as f32 * HOUR_HEIGHT / 60.0);
 	let duration = scaled_px((timed.end_min - timed.start_min) as f32 * HOUR_HEIGHT / 60.0);
 	let height = format!("max({EVENT_MIN_HEIGHT}px, {duration})");
@@ -2517,8 +2565,13 @@ fn event_style(timed: &TimedEvent) -> String {
 		column_width(span)
 	};
 	let inset = look::EVENT_GAP / 2.0;
-	let background = css_color(timed.color);
-	let ink = css_color(calendar::colors::on_color(timed.color));
+	let color = if search.hides_details(&timed.event) {
+		calendar::search::PRIVATE_COLOR
+	} else {
+		timed.color
+	};
+	let background = css_color(color);
+	let ink = css_color(calendar::colors::on_color(color));
 
 	format!(
 		"top:{top};height:{height};left:calc({left:.4}% + {inset}px);width:{width};background:{background};color:{ink};"
@@ -2710,7 +2763,10 @@ mod sheet_tests {
 	#[test]
 	fn the_filter_tab_offers_each_filter() {
 		fn app() -> Element {
-			let search = use_signal(Search::default);
+			let search = use_signal(|| Search {
+				time: chrono::NaiveTime::from_hms_opt(9, 30, 0),
+				..Search::default()
+			});
 			rsx! {
 				search::SearchFields {
 					search,
@@ -2720,19 +2776,144 @@ mod sheet_tests {
 				}
 			}
 		}
+		let html = render(app);
 		assert_offers(
-			&render(app),
+			&html,
 			&[
-				"Search titles",
-				"Look in descriptions",
-				"Only public",
-				"Under way at",
+				"Search description",
+				"Search filters",
+				"Time of day",
+				"Any time",
+				"Projects",
+				"+ Add project",
+				"Labels",
+				"Event filters",
+				"Show events that are",
+				"Only show events with public visibility",
 				"Busy or free",
 				"Office",
 				"deep",
-				">Clear<",
+				"Detail filter",
+				"Show details by visibility",
+				">Clear search<",
 			],
 		);
+		let order = [
+			"Search description",
+			"Search filters",
+			"Time of day",
+			"Projects",
+			"Labels",
+			"Event filters",
+			"Show events that are",
+			"Only show events with public visibility",
+			"Location",
+			"Detail filter",
+			"Show details by visibility",
+			"Clear search",
+		];
+		for pair in order.windows(2) {
+			assert!(
+				html.find(pair[0]).unwrap() < html.find(pair[1]).unwrap(),
+				"{} must be above {}",
+				pair[0],
+				pair[1]
+			);
+		}
+	}
+
+	#[test]
+	fn the_filter_keeps_empty_fields_visible() {
+		fn app() -> Element {
+			let search = use_signal(Search::default);
+			rsx! { search::SearchFields { search, labels: Vec::new(), locations: Vec::new(), projects: ProjectsSettings::default() } }
+		}
+		let html = render(app);
+		assert_offers(
+			&html,
+			&[
+				"No projects",
+				"+ Add project",
+				"Labels",
+				"No labels on the events loaded so far",
+				"Location",
+				"Any location",
+			],
+		);
+	}
+
+	#[test]
+	fn the_detail_filter_masks_timed_and_all_day_events_on_the_calendar() {
+		fn app() -> Element {
+			let start = Local.with_ymd_and_hms(2026, 11, 4, 9, 0, 0).unwrap();
+			let mut private = Event {
+				id: "private-event".into(),
+				calendar_id: "work".into(),
+				title: "Sensitive appointment".into(),
+				start,
+				end: start + chrono::Duration::hours(1),
+				all_day: false,
+				color: calendar::colors::DEFAULT_EVENT,
+				completed: false,
+				details: calendar::Details::default(),
+			};
+			let mut public = private.clone();
+			public.id = "public-event".into();
+			public.title = "Public lecture".into();
+			public.details.options.visibility = calendar::event_options::Visibility::Public;
+			let mut all_day = private.clone();
+			all_day.id = "all-day".into();
+			all_day.title = "Personal day".into();
+			all_day.all_day = true;
+			all_day.start = Local.with_ymd_and_hms(2026, 11, 4, 0, 0, 0).unwrap();
+			all_day.end = all_day.start + chrono::Duration::days(1);
+			private.details.location = "Secret office".into();
+			let snapshot = calendar::Snapshot {
+				calendars: Vec::new(),
+				events: vec![private, public, all_day],
+				day: today(),
+				fetched_at: start,
+				notice: None,
+			};
+			let settings = CalendarSettings::default();
+			let model = day::build_model(&snapshot, &settings);
+			let editing = use_signal(|| None::<Event>);
+			let block = use_signal(|| None::<String>);
+			let search = Search {
+				details_by_visibility: true,
+				..Search::default()
+			};
+			assert_eq!(
+				model
+					.timed
+					.iter()
+					.find(|timed| timed.event.id == "private-event")
+					.unwrap()
+					.event
+					.title,
+				"Sensitive appointment"
+			);
+			timeline(
+				&model,
+				&[],
+				&settings,
+				TimeFormat::TwentyFourHour,
+				block,
+				editing,
+				SleepTimer {
+					busy: false,
+					press: Callback::new(|_| {}),
+				},
+				1.0,
+				&search,
+			)
+		}
+		let html = render(app);
+		assert!(html.contains("Public lecture"));
+		assert!(html.matches(">Private<").count() >= 2);
+		assert!(!html.contains("Sensitive appointment"));
+		assert!(!html.contains("Personal day"));
+		assert!(!html.contains("Secret office"));
 	}
 
 	#[test]

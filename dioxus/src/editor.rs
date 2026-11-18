@@ -2155,7 +2155,7 @@ fn Field(label: String, children: Element) -> Element {
 
 /// The add/search/remove flow for an item's projects.
 #[component]
-fn ProjectsField(
+pub(crate) fn ProjectsField(
 	selected: Vec<u64>,
 	projects: ProjectsSettings,
 	busy: bool,

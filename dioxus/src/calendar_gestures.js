@@ -7,6 +7,23 @@ let pinch = null, pinching = false;
 let zoom = +(document.documentElement.style.getPropertyValue('--calendar-zoom') || 1);
 // Only the timeline's vertical geometry scales; text and controls stay readable.
 const MIN_ZOOM = 0.5, MAX_ZOOM = 3;
+function setZoom(value) {
+    if (!Number.isFinite(value)) return;
+    value = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, value));
+    if (value === zoom) return;
+    deselect();
+    const anchors = [...document.querySelectorAll('.timeline-scroll')].map(scroller => {
+        const timeline = scroller.querySelector('.timeline');
+        const rect = scroller.getBoundingClientRect();
+        const center = (rect.top + rect.bottom) / 2;
+        return timeline && { scroller, timeline, center, fraction: (center - timeline.getBoundingClientRect().top) / timeline.clientHeight };
+    }).filter(Boolean);
+    zoom = value;
+    document.documentElement.style.setProperty('--calendar-zoom', zoom);
+    for (const {scroller, timeline, center, fraction} of anchors) {
+        scroller.scrollTop += timeline.getBoundingClientRect().top + fraction * timeline.clientHeight - center;
+    }
+}
 const grids = () => [...document.querySelectorAll('.grid[data-calendar-day]')];
 const clearHold = () => { clearTimeout(timer); timer = null; pending = null; };
 function deselect() {
@@ -200,5 +217,5 @@ document.addEventListener('click', e => {
 document.addEventListener('contextmenu', e => { if (pending || selected) e.preventDefault(); }, {signal});
 document.addEventListener('keydown', e => { if (e.key === 'Escape') deselect(); }, {signal});
 window.addEventListener('blur', () => { finishPinch(); deselect(); }, {signal});
-window.__calendarGesture = { saved: deselect, abort: () => { finishPinch(); deselect(); controller.abort(); } };
+window.__calendarGesture = { setZoom, saved: deselect, abort: () => { finishPinch(); deselect(); controller.abort(); } };
 await new Promise(() => {});

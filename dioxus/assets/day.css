@@ -3011,6 +3011,21 @@ textarea {
     gap: 8px;
 }
 
+.search-heading {
+    margin: 0;
+    font-size: 15px;
+}
+
+.search-fields .editor-label {
+    font-weight: 400;
+}
+
+.calendar-zoom {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
 /* A phone keeps every tab on one line by shortening Settings and tightening. */
 @media (max-width: 480px) {
     .nav-card .nav-tab,

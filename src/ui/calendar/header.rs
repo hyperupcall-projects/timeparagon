@@ -4,7 +4,7 @@ use super::*;
 use iced::widget::column;
 
 /// The top of the calendar: the month picker, View (the Calendars and Filter
-/// tabs) and Actions (Sync now and Set Alarm).
+/// tabs) and Actions (Sync now and Set alarm).
 ///
 /// In the day view the picker is labelled with the day in view; in the week
 /// view it is labelled with the range on screen, and the picker is the way to

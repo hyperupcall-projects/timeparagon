@@ -1131,7 +1131,7 @@ pub struct Store {
 	pub connection: Connection,
 	pub sync: SyncState,
 	pub menu_open: bool,
-	/// The Actions popup in the calendar header: Sync now and Set Alarm.
+	/// The Actions popup in the calendar header: Sync now and Set alarm.
 	pub actions_open: bool,
 	pub search: search::Search,
 	pub calendars: Vec<Calendar>,

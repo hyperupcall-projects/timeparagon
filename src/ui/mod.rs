@@ -338,6 +338,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
 			// somewhere to write, not somewhere to watch the clock from.
 			(Screen::Notes, _) => notes::view(state, &metrics),
 			(Screen::People, _) => people::view(state, &metrics),
+			(Screen::Alarms, _) => alarms::view(state, &metrics),
 			(Screen::Notepad, _) => notepad::view(state, &metrics),
 			(Screen::BrainDump, _) => brain_dump::view(state, &metrics),
 			(Screen::Overdue, _) => inbox::overdue(state, &main_metrics),
@@ -646,7 +647,14 @@ pub fn plan_view_label(state: &State) -> &'static str {
 pub const TASKS_LABELS: [&str; 4] = ["Unfinished", "Inbox", "Today", "Backlog"];
 
 /// The destinations kept inside the More menu.
-pub const MORE_LABELS: [&str; 5] = ["Travel", "Habits", "Notes", "People", "Brain dump"];
+pub const MORE_LABELS: [&str; 6] = [
+	"Travel",
+	"Habits",
+	"Notes",
+	"People",
+	"Brain dump",
+	"Alarms",
+];
 
 /// A little breathing room between the menu and the top of the window.
 const TAB_TOP_MARGIN: f32 = 6.0;
@@ -735,7 +743,12 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 	let more_active = state.more_menu_open
 		|| matches!(
 			state.screen,
-			Screen::Travel | Screen::Habits | Screen::Notes | Screen::People | Screen::BrainDump
+			Screen::Travel
+				| Screen::Habits
+				| Screen::Notes
+				| Screen::People
+				| Screen::BrainDump
+				| Screen::Alarms
 		);
 
 	let view = tab(
@@ -1033,7 +1046,7 @@ fn view_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 	iced::widget::stack(layers).into()
 }
 
-/// The More menu: Travel, Habits, Notes, People and Brain dump, in a card below the menu bar.
+/// The More destinations, in a card below the menu bar.
 fn more_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 	let dismiss = mouse_area(container(Space::new()).width(Fill).height(Fill))
 		.on_press(Message::Navigation(NavigationMessage::MoreMenuToggled));
@@ -1045,6 +1058,7 @@ fn more_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 		Screen::Notes,
 		Screen::People,
 		Screen::BrainDump,
+		Screen::Alarms,
 	]) {
 		panel = panel.push(
 			button(text(*label).size(metrics.label()).center().width(Fill))
