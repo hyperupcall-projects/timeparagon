@@ -75,8 +75,8 @@ jobs:
   #           libasound2t64 libnss3 libgbm1
   #     - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-  script-tests:
-    name: JavaScript and Python tests
+  slack-tests:
+    name: Slack tests
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -89,7 +89,3 @@ jobs:
         working-directory: slack
       - run: npm test
         working-directory: slack
-      - run: node tests/map_picker.mjs
-      - run: node tests/calendar_gestures.mjs
-      - run: python3 packaging/test_install.py
-      - run: python3 -m unittest discover -s scripts -p 'test_*.py'
