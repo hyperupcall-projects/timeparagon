@@ -66,3 +66,79 @@ fn sync_logs_update_without_rendering_the_root_or_calendar() {
 	assert_eq!(handles.root_renders.get(), root_before);
 	assert_eq!(handles.calendar_renders.get(), calendar_before + 1);
 }
+
+#[test]
+fn settings_button_selects_a_page_and_task_navigation_remains_available() {
+	use dioxus::core::Mutation;
+	use dioxus::html::{
+		PlatformEventData, SerializedHtmlEventConverter, SerializedMouseData, set_event_converter,
+	};
+	use std::any::Any;
+
+	fn navigation_only(handle: Rc<Cell<Option<Navigation>>>) -> Element {
+		let config = use_signal(Config::default);
+		let navigation = navigation::use_navigation(config);
+		let mut page = navigation.page;
+		use_hook(move || page.set(Page::Tasks));
+		use_context_provider(|| navigation);
+		let panels = navigation::use_panels();
+		use_context_provider(|| panels);
+		handle.set(Some(navigation));
+		rsx! { navigation::Topbar {} }
+	}
+
+	set_event_converter(Box::new(SerializedHtmlEventConverter));
+	// Exercise each real navigation listener to find the Settings action without
+	// depending on the renderer's order for static and dynamic button nodes.
+	for index in 0.. {
+		let handle = Rc::new(Cell::new(None));
+		let mut dom = VirtualDom::new_with_props(navigation_only, handle.clone());
+		let initial = dom.rebuild_to_vec();
+		let buttons: Vec<_> = initial
+			.edits
+			.iter()
+			.filter_map(|edit| match edit {
+				Mutation::NewEventListener { name, id } if name == "click" => Some(*id),
+				_ => None,
+			})
+			.collect();
+		let Some(&button) = buttons.get(index) else {
+			break;
+		};
+		let event = dioxus::core::Event::new(
+			Rc::new(PlatformEventData::new(Box::<SerializedMouseData>::default())) as Rc<dyn Any>,
+			true,
+		);
+		dom.runtime().handle_event("click", event, button);
+		dom.render_immediate_to_vec();
+		let mut navigation = handle.get().unwrap();
+		if *navigation.page.peek() != Page::Settings {
+			continue;
+		}
+		let html = dioxus_ssr::render(&dom);
+		let settings = html
+			.split_once("title=\"Settings\"")
+			.unwrap()
+			.1
+			.split_once("</button>")
+			.unwrap()
+			.0;
+		assert!(settings.contains("aria-pressed=\"true\""));
+		assert!(!html.contains("task-tabs"));
+		assert!(!html.contains("modal-backdrop"));
+		dom.in_runtime(|| navigation.page.set(Page::Tasks));
+		dom.render_immediate_to_vec();
+		let html = dioxus_ssr::render(&dom);
+		assert!(html.contains("task-tabs"));
+		let settings = html
+			.split_once("title=\"Settings\"")
+			.unwrap()
+			.1
+			.split_once("</button>")
+			.unwrap()
+			.0;
+		assert!(settings.contains("aria-pressed=\"false\""));
+		return;
+	}
+	panic!("Settings button did not select the Settings page");
+}

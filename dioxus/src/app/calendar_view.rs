@@ -10,14 +10,25 @@ pub(super) fn Workspace() -> Element {
 	rsx! {
 		navigation::SelectionLifetime {}
 		CalendarEffects {}
-		Warnings {}
 		sleep_controls::SleepStatus {}
-		DayScreen {}
+		PageContent {}
 		sheets::CalendarSheets {}
 		sheets::AuxiliarySheets {}
 		sheets::LogSheet {}
-		settings::SettingsSheet {}
 		sheets::ViewSheet {}
+	}
+}
+
+#[component]
+pub(super) fn PageContent() -> Element {
+	let Navigation { page, .. } = use_context::<Navigation>();
+	rsx! {
+		if page() == Page::Settings {
+			settings::SettingsPage {}
+		} else {
+			Warnings {}
+			DayScreen {}
+		}
 	}
 }
 

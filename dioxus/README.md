@@ -1,7 +1,7 @@
 # TimeParagon
 
-The mobile application is built around the day view, with the Habits tab as its
-own screen and the rest of the app in sheets over it:
+The mobile application has full pages for Do, Plan, Tasks, Habits and Settings,
+with editors and other tools opening in sheets:
 
 - In Day and Multi-day, hold a timed event or time block to select it. Drag
   its body to move it with its duration intact (including between visible days),
@@ -25,6 +25,10 @@ own screen and the rest of the app in sheets over it:
 - **Do**, **Plan** (Day, Multi-day, Month or Schedule), **Tasks**
   with its **Unfinished**, **Inbox**, **Today** and **Backlog** lists,
   **More** and **Settings**.
+- **Settings → Preferences** has the desktop's time formats, first day of the
+  week, days shown in week view, end-of-day hour, distance units and themes.
+  Settings fills the page below the navigation, just like Do and Tasks.
+  Preference changes save immediately; theme is chosen separately on each device.
 - Joining meetings and answering invitations.
 - The notepad and daily brain dumps, shared through Turso. **More → Brain dump**
   lists every page newest first, with dated previews and search across text and

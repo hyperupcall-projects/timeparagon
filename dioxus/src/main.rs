@@ -296,6 +296,7 @@ enum Page {
 	/// Unfinished, Inbox, Today and Backlog.
 	Tasks,
 	Habits,
+	Settings,
 }
 
 /// The tabs of the View sheet.

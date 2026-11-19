@@ -9,7 +9,6 @@ use std::collections::{HashMap, HashSet};
 use timeparagon_core::calendar::ids;
 
 use chrono::{DateTime, Duration, Local, NaiveDate, Timelike};
-use timeparagon_core::calendar::first_day::FirstDayOfWeek;
 use timeparagon_core::calendar::layout::{self, Span};
 use timeparagon_core::calendar::search::Search;
 use timeparagon_core::calendar::sources::TimeParagonSource;
@@ -452,13 +451,6 @@ pub fn save_google_client(client_id: &str, client_secret: &str) -> Result<Config
 	}
 	timeparagon_core::config::save_google_client(client_id, client_secret)
 		.map_err(|error| format!("Could not save the Google client: {error}"))?;
-	Ok(load_config())
-}
-
-/// Saves which day weeks start on and returns the config as it now reads.
-pub fn set_first_day_of_week(first_day: FirstDayOfWeek) -> Result<Config, String> {
-	timeparagon_core::config::save_first_day_of_week(first_day)
-		.map_err(|error| format!("Could not save the first day of the week: {error}"))?;
 	Ok(load_config())
 }
 

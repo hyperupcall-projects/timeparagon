@@ -28,7 +28,6 @@ pub(super) struct Panels {
 	pub show_alarms: Signal<bool>,
 	pub show_travel: Signal<bool>,
 	pub show_log: Signal<bool>,
-	pub show_settings: Signal<bool>,
 	pub note_opening: Signal<Option<String>>,
 	pub create_range: Signal<Option<calendar_gestures::TimeRange>>,
 }
@@ -83,7 +82,6 @@ pub(super) fn use_panels() -> Panels {
 	let show_alarms = use_signal(|| false);
 	let show_travel = use_signal(|| false);
 	let show_log = use_signal(|| false);
-	let show_settings = use_signal(|| false);
 	let note_opening = use_signal(|| None::<String>);
 	let create_range = use_signal(|| None::<calendar_gestures::TimeRange>);
 	use_context_provider(|| notes::NoteOpening(note_opening));
@@ -100,7 +98,6 @@ pub(super) fn use_panels() -> Panels {
 		show_alarms,
 		show_travel,
 		show_log,
-		show_settings,
 		note_opening,
 		create_range,
 	}
@@ -165,6 +162,7 @@ pub(super) fn Topbar() -> Element {
 		task_tab,
 		mut plan_menu_open,
 		plan_anchor,
+		mut scrolled,
 		..
 	} = use_context::<Navigation>();
 	let Panels {
@@ -173,13 +171,13 @@ pub(super) fn Topbar() -> Element {
 		mut show_more,
 		show_travel,
 		show_log,
-		mut show_settings,
 		..
 	} = use_context::<Panels>();
 	let mut open_settings = move || {
 		show_more.set(false);
 		plan_menu_open.set(false);
-		show_settings.set(true);
+		scrolled.set(false);
+		page.set(Page::Settings);
 	};
 	let plan_nav = PlanNav {
 		page,
@@ -265,7 +263,7 @@ pub(super) fn Topbar() -> Element {
 					class: "nav-tab nav-icon",
 					title: "Settings",
 					aria_label: "Settings",
-					aria_pressed: show_settings().to_string(),
+					aria_pressed: (page() == Page::Settings).to_string(),
 					onclick: move |_| open_settings(),
 					{nav_icon(true)}
 				}
