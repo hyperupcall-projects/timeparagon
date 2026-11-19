@@ -5,7 +5,6 @@ pub mod api;
 pub mod calendar_tasks;
 pub mod client;
 pub mod colors;
-pub(crate) mod day_cache;
 pub mod deadline;
 mod event_color;
 pub mod event_options;
@@ -16,6 +15,7 @@ pub mod meeting;
 pub mod oauth;
 pub mod operations;
 pub mod projects;
+pub mod repository;
 pub mod schedule;
 pub mod scheduled;
 pub mod search;
@@ -25,7 +25,6 @@ pub mod sources;
 pub mod task_metadata;
 pub mod task_sort;
 pub mod time_format;
-pub mod view_cache;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -56,10 +55,11 @@ pub enum SyncState {
 	Syncing,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Calendar {
 	pub id: String,
 	pub name: String,
+	#[serde(with = "crate::hex::serde_color")]
 	pub color: Color,
 	pub primary: bool,
 	pub selected_by_google: bool,
@@ -909,7 +909,7 @@ pub fn at_clock(day: NaiveDate, hour: u32, minute: u32) -> DateTime<Local> {
 
 /// The parts of a Google event that are worth reading, beyond the chip.
 ///
-/// It carries serde derives so a day can be written out to the cache whole.
+/// Source records and local operations use the same serialized event format.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Details {
@@ -971,6 +971,8 @@ pub struct Details {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Snapshot {
+	/// Database revision used to reject a result older than the displayed data.
+	pub revision: i64,
 	pub calendars: Vec<Calendar>,
 	pub events: Vec<Event>,
 	pub day: NaiveDate,
@@ -989,7 +991,7 @@ pub const MAX_HOUR_HEIGHT: f32 = 180.0;
 /// notch, which comes in runs.
 pub const ZOOM_STEP: f32 = 1.25;
 
-/// Shared membership rule for both memory and disk snapshots.
+/// Membership rule used by the repository and range selectors.
 fn event_on_day(event: &Event, day: NaiveDate, day_end_hour: u32) -> bool {
 	if event.is_task() {
 		return true;
@@ -1003,39 +1005,68 @@ fn event_on_day(event: &Event, day: NaiveDate, day_end_hour: u32) -> bool {
 	event.start < end && event.end > start
 }
 
-/// How far either side of the day in view a cached day can be and still be
-/// kept whatever else is cached: the previous day and the next one, once they
-/// have been viewed.
-const ALWAYS_KEPT_DISTANCE: i64 = 1;
-
-/// How many days beyond that window stay cached, counted from the day in view
-/// outwards. The memory cache and the days on disk are trimmed by the same
-/// rule, so both end up holding the same days.
-const EXTRA_CACHED_DAYS: usize = 10;
-
-/// The days that should leave a cache while `current` is in view.
-///
-/// The day in view, the day before it and the day after it are never dropped,
-/// and the [`EXTRA_CACHED_DAYS`] closest days beyond that window survive too.
-/// Everything further out goes, furthest first.
-fn days_to_drop(days: impl IntoIterator<Item = NaiveDate>, current: NaiveDate) -> Vec<NaiveDate> {
-	let mut far: Vec<NaiveDate> = days
-		.into_iter()
-		.filter(|day| (*day - current).num_days().abs() > ALWAYS_KEPT_DISTANCE)
-		.collect();
-
-	far.sort_by_key(|day| (*day - current).num_days().abs());
-	if far.len() <= EXTRA_CACHED_DAYS {
-		Vec::new()
-	} else {
-		far.split_off(EXTRA_CACHED_DAYS)
-	}
-}
-
 /// A task list's color: the user's choice if there is one, otherwise Google's
 /// blue.
 fn task_color(settings: &CalendarSettings, calendar_id: &str) -> Color {
 	settings.task_color(calendar_id).unwrap_or(colors::TASK)
+}
+
+pub fn display_sources(calendars: &[Calendar], settings: &CalendarSettings) -> Vec<Calendar> {
+	let mut sources: Vec<_> = calendars
+		.iter()
+		.filter(|calendar| !calendar.is_managed_task_list(settings))
+		.cloned()
+		.map(|mut calendar| {
+			if calendar.is_task_list() {
+				calendar.color = task_color(settings, &calendar.id);
+			} else if let Some(color) = settings.calendar_colors.get(&calendar.id) {
+				calendar.color = color.0;
+			}
+			calendar
+		})
+		.collect();
+	sources.push(Calendar {
+		id: sleep::SOURCE_ID.to_owned(),
+		name: "Sleep".to_owned(),
+		color: settings.sleep_color(),
+		primary: false,
+		selected_by_google: true,
+	});
+	// Stable sorting appends newly discovered sources in Google's order.
+	sources.sort_by_key(|source| {
+		settings
+			.source_order
+			.iter()
+			.position(|id| id == &source.id)
+			.or_else(|| {
+				// Expand the old shared source in place for existing settings.
+				source
+					.is_task_list()
+					.then(|| {
+						settings
+							.source_order
+							.iter()
+							.position(|id| id == CalendarSettings::GOOGLE_TASKS_ID)
+					})
+					.flatten()
+			})
+			.unwrap_or(usize::MAX)
+	});
+	sources
+}
+
+pub fn default_calendar_id(sources: &[Calendar], settings: &CalendarSettings) -> Option<String> {
+	let calendars: Vec<_> = sources
+		.iter()
+		.filter(|calendar| !calendar.is_task_list() && !calendar.is_app_calendar(settings))
+		.collect();
+	settings
+		.default_calendar
+		.as_ref()
+		.and_then(|id| calendars.iter().find(|calendar| &calendar.id == id))
+		.or_else(|| calendars.iter().find(|calendar| calendar.primary))
+		.or_else(|| calendars.first())
+		.map(|calendar| calendar.id.clone())
 }
 
 /// Everything the calendar view and its settings pane need.
@@ -1048,21 +1079,13 @@ pub struct Store {
 	pub search: search::Search,
 	pub calendars: Vec<Calendar>,
 	pub events: Vec<Event>,
-	/// Events for the days already visited, so stepping back to one paints it
-	/// at once while the fresh sync runs. The day in view lives in `events`.
-	cache: HashMap<NaiveDate, Vec<Event>>,
-	/// Dates currently displayed by a range view must survive cache pruning.
+	/// A single event set for the selected range, with explicit coverage.
 	visible_days: Vec<NaiveDate>,
-	/// The database those days are also written to, so they survive a
-	/// restart. `None` until [`Store::cache_days_in`] is called, which only
-	/// `boot` and a reconnect do: a store built by hand must not read or
-	/// rewrite the cache the user's own days live in.
-	day_cache: Option<PathBuf>,
-	/// A worker may own snapshot persistence; UI cache reads must then never
-	/// write an older copy over its completed fetch.
-	persist_snapshots: bool,
+	covered_days: std::collections::HashSet<NaiveDate>,
+	database: Option<PathBuf>,
+	pub revision: i64,
 	/// The hour the calendar day ends, used to decide which day an event
-	/// belongs to when reading from or writing to the month cache on disk.
+	/// belongs to when selecting events from a loaded range.
 	day_end_hour: u32,
 	pub day: NaiveDate,
 	pub last_sync: Option<DateTime<Local>>,
@@ -1134,10 +1157,10 @@ impl Store {
 			search: search::Search::default(),
 			calendars: Vec::new(),
 			events: Vec::new(),
-			cache: HashMap::new(),
 			visible_days: Vec::new(),
-			day_cache: None,
-			persist_snapshots: true,
+			covered_days: Default::default(),
+			database: None,
+			revision: 0,
 			day_end_hour,
 			day,
 			last_sync: None,
@@ -1163,9 +1186,7 @@ impl Store {
 
 	/// A store with events already in hand, for tests and screenshots.
 	///
-	/// The day boundary defaults to midnight (0), which is also the config
-	/// default, so cached days are filed under the same days they were fetched
-	/// for.
+	/// The day boundary defaults to midnight (0), the configuration default.
 	pub fn with_snapshot(snapshot: Snapshot) -> Self {
 		Self {
 			connection: Connection::SignedIn,
@@ -1175,10 +1196,10 @@ impl Store {
 			search: search::Search::default(),
 			calendars: snapshot.calendars,
 			events: snapshot.events,
-			cache: HashMap::new(),
-			visible_days: Vec::new(),
-			day_cache: None,
-			persist_snapshots: true,
+			visible_days: vec![snapshot.day],
+			covered_days: [snapshot.day].into(),
+			database: None,
+			revision: snapshot.revision,
 			day_end_hour: 0,
 			day: snapshot.day,
 			last_sync: Some(snapshot.fetched_at),
@@ -1204,136 +1225,70 @@ impl Store {
 		}
 	}
 
-	/// Points the store at the database cached days are written to, so they
-	/// outlive the process.
-	///
-	/// The day in view is read straight back when a previous run left it
-	/// there, which is what gives the window something to show before the
-	/// first sync lands, and days that fell out of the cache while the app
-	/// was closed are dropped. Called at boot and when a reconnect replaces
-	/// the store: a store built by hand keeps its days in memory only.
-	pub fn cache_days_in(&mut self, database: Option<PathBuf>) {
-		self.day_cache = database;
-		if self.last_sync.is_none()
-			&& let Some((fetched_at, calendars)) = self
-				.day_cache
-				.as_ref()
-				.and_then(|database| day_cache::load_sync_state(database))
-		{
-			self.last_sync = Some(fetched_at);
-			self.calendars = calendars;
-		}
-
-		if self.events.is_empty()
-			&& let Some(events) = self.read_day(self.day)
-		{
-			self.events = events;
-		}
-
-		self.trim_cache();
+	/// Attach the local repository and restore the selected day.
+	pub fn restore(&mut self, database: Option<PathBuf>) {
+		self.database = database;
+		self.select_range(&[self.day]);
 	}
 
-	/// Use the database for restoring days and local edits, while a background
-	/// loader owns saving snapshots. Explicit edits still update disk history.
-	pub fn read_cached_days_in(&mut self, database: Option<PathBuf>) {
-		self.persist_snapshots = false;
-		self.cache_days_in(database);
-	}
-
-	/// The hour the calendar day ends, used to assign events to days when
-	/// reading from or writing to the month cache on disk.
 	pub fn day_end_hour(&self) -> u32 {
 		self.day_end_hour
 	}
 
-	/// Moves the day in view, restoring whatever was cached for it.
-	///
-	/// The day being left is parked in the cache, so stepping back to it paints
-	/// at once rather than waiting for the sync. A day that has not been seen
-	/// yet comes back from the database if an earlier run left it there,
-	/// and empty otherwise, filling in when the sync lands. `today` is the
-	/// real day the clock is on, used to decide whether the view keeps
-	/// following it.
 	pub fn set_day(&mut self, day: NaiveDate, today: NaiveDate) {
 		if day != self.day {
-			let left = self.day;
-			self.cache.insert(left, std::mem::take(&mut self.events));
-
-			let restored = match self.cache.remove(&day) {
-				Some(events) => events,
-				None => self.read_day(day).unwrap_or_default(),
-			};
-			self.events = restored;
 			self.open_event = None;
 			self.day = day;
-			self.trim_cache();
-
-			// The day we left only stays on disk if the cache still wants it.
-			if let Some(events) = self.cache.get(&left) {
-				self.write_day(left, events);
+			if !self.visible_days.contains(&day) {
+				self.select_range(&[day]);
 			}
 		}
-
-		self.day = day;
 		self.follow_today = day == today;
 	}
 
-	/// Drops every cached day, so the next visit to each fetches it afresh.
-	///
-	/// The day boundary moving changes which events a day holds, so the cache
-	/// no longer describes the days filed under it.
-	pub fn invalidate_other_days(&mut self) {
-		self.cache.clear();
-		if let Some(database) = self.day_cache.as_ref() {
-			day_cache::clear(database);
-		}
-	}
-	pub fn forget_cached_days(&mut self) {
-		self.cache.clear();
-		self.events.clear();
-		self.open_event = None;
-		// The events the pending writes belonged to are gone; the answers will
-		// arrive to find nothing to confirm or put back.
-		self.pending.clear();
-
-		// The days on disk were filed under the old boundary too.
-		if let Some(database) = self.day_cache.as_ref() {
-			day_cache::clear(database);
-		}
+	/// The boundary changes range selection, without invalidating source data.
+	pub fn set_day_end_hour(&mut self, hour: u32) {
+		self.day_end_hour = hour;
 	}
 
-	/// Bound memory use while retaining every visited month on disk.
-	fn trim_cache(&mut self) {
-		let current = self.day;
-
-		for day in days_to_drop(
-			self.cache
-				.keys()
-				.copied()
-				.filter(|day| !self.visible_days.contains(day)),
-			current,
-		) {
-			self.cache.remove(&day);
+	/// Select one range from the repository. The UI keeps no historical copies.
+	pub fn select_range(&mut self, days: &[NaiveDate]) {
+		let mut days = days.to_vec();
+		if !days.contains(&self.day) {
+			days.push(self.day);
+		}
+		if let Some(path) = &self.database {
+			match repository::read(path, &days, self.day_end_hour) {
+				Ok(read) => self.install(read, &days),
+				Err(error) => self.error = Some(error),
+			}
+		} else {
+			self.events.retain(|event| {
+				days.iter()
+					.any(|&day| event_on_day(event, day, self.day_end_hour))
+			});
+			self.visible_days = days;
 		}
 	}
 
-	/// The day's events as an earlier run left them, if it left them.
-	fn read_day(&self, day: NaiveDate) -> Option<Vec<Event>> {
-		day_cache::load(self.day_cache.as_ref()?, day, self.day_end_hour)
-	}
-
-	/// Writes one day out, so the run after this one paints it at once.
-	fn write_day(&self, day: NaiveDate, events: &[Event]) {
-		if !self.persist_snapshots {
+	pub fn install(&mut self, read: repository::Read, days: &[NaiveDate]) {
+		if read.revision < self.revision {
 			return;
 		}
-		let Some(database) = self.day_cache.as_ref() else {
-			return;
-		};
+		self.revision = read.revision;
+		self.covered_days = read.covered.into_iter().collect();
+		self.visible_days = days.to_vec();
+		let day = self.day;
+		let sync = self.sync;
+		let connection = self.connection;
+		self.apply_snapshot(read.snapshot);
+		self.sync = sync;
+		self.connection = connection;
+		self.day = day;
+	}
 
-		if let Err(error) = day_cache::save(database, day, events, self.day_end_hour) {
-			log::warn!("could not cache {}: {error}", day);
-		}
+	pub fn is_covered(&self, day: NaiveDate) -> bool {
+		self.covered_days.contains(&day)
 	}
 
 	/// Grows or shrinks the hour rows. `factor` above 1 spreads the day out.
@@ -1372,48 +1327,7 @@ impl Store {
 
 	/// Calendars and individual task lists, excluding the app's managed lists.
 	pub fn display_sources(&self, settings: &CalendarSettings) -> Vec<Calendar> {
-		let mut sources: Vec<_> = self
-			.calendars
-			.iter()
-			.filter(|calendar| !calendar.is_managed_task_list(settings))
-			.cloned()
-			.map(|mut calendar| {
-				if calendar.is_task_list() {
-					calendar.color = task_color(settings, &calendar.id);
-				} else if let Some(color) = settings.calendar_colors.get(&calendar.id) {
-					calendar.color = color.0;
-				}
-				calendar
-			})
-			.collect();
-		sources.push(Calendar {
-			id: sleep::SOURCE_ID.to_owned(),
-			name: "Sleep".to_owned(),
-			color: settings.sleep_color(),
-			primary: false,
-			selected_by_google: true,
-		});
-		// Stable sorting appends newly discovered sources in Google's order.
-		sources.sort_by_key(|source| {
-			settings
-				.source_order
-				.iter()
-				.position(|id| id == &source.id)
-				.or_else(|| {
-					// Expand the old shared source in place for existing settings.
-					source
-						.is_task_list()
-						.then(|| {
-							settings
-								.source_order
-								.iter()
-								.position(|id| id == CalendarSettings::GOOGLE_TASKS_ID)
-						})
-						.flatten()
-				})
-				.unwrap_or(usize::MAX)
-		});
-		sources
+		display_sources(&self.calendars, settings)
 	}
 
 	pub fn calendar_enabled(&self, id: &str, settings: &CalendarSettings) -> bool {
@@ -1428,12 +1342,7 @@ impl Store {
 
 	/// Resolve display names again after a library edit or a calendar refresh.
 	pub fn apply_habit_names(&mut self, library: &crate::habits::Library) {
-		for event in self
-			.events
-			.iter_mut()
-			.chain(self.cache.values_mut().flatten())
-			.chain(self.detail_event.iter_mut())
-		{
+		for event in self.events.iter_mut().chain(self.detail_event.iter_mut()) {
 			library.name_event(event);
 		}
 		if let Some(draft) = &mut self.edit_draft {
@@ -1464,122 +1373,31 @@ impl Store {
 		}
 	}
 
-	/// The database the day cache and the local edits live in, when this
-	/// store is backed by one.
 	pub fn local_database(&self) -> Option<&std::path::Path> {
-		self.day_cache.as_deref()
+		self.database.as_deref()
 	}
 
-	/// Reads the local edits and puts them over every day in memory.
-	/// Blocking: the poll reads the overlay on a worker thread with
-	/// [`operations::load_overlay`] and hands it to [`Store::apply_overlay`].
-	pub fn apply_local_operations(&mut self) -> Result<(), String> {
-		let Some(path) = &self.day_cache else {
-			return Ok(());
-		};
-		let overlay = operations::load_overlay(path)?;
-		self.apply_overlay(&overlay);
-		Ok(())
-	}
-
-	/// Puts already-read local edits over every day in memory. Touches no
-	/// files, so it is safe on the UI thread.
-	pub fn apply_overlay(&mut self, overlay: &operations::Overlay) {
-		if self.day_cache.is_none() {
+	pub fn apply_snapshot(&mut self, snapshot: Snapshot) {
+		if snapshot.revision < self.revision {
 			return;
 		}
-		overlay.apply(&mut self.events, None);
-		self.events
-			.retain(|e| event_on_day(e, self.day, self.day_end_hour));
-		for (day, events) in &mut self.cache {
-			overlay.apply(events, None);
-			events.retain(|e| event_on_day(e, *day, self.day_end_hour));
-		}
-		if let Some(event) = &mut self.detail_event {
-			let id = event.id.clone();
-			let mut detail = vec![event.clone()];
-			overlay.apply(&mut detail, None);
-			if let Some(updated) = detail.into_iter().find(|e| e.id == id) {
-				*event = updated;
-			}
-		}
-	}
-
-	/// Shows nights reread from the database (see [`sleep::stored_nights`])
-	/// on every day in memory, so a night changed on another device appears
-	/// without waiting for this one's next Google sync.
-	pub fn apply_stored_nights(&mut self, nights: &[Event]) {
-		if self.day_cache.is_none() {
-			return;
-		}
-		sleep::merge_stored(&mut self.events, nights, self.day, self.day_end_hour);
-		for (day, events) in &mut self.cache {
-			sleep::merge_stored(events, nights, *day, self.day_end_hour);
-		}
-	}
-
-	pub fn apply_snapshot(&mut self, mut snapshot: Snapshot) {
-		if let Some(path) = &self.day_cache
-			&& let Err(e) =
-				operations::overlay(path, &mut snapshot.events, Some(snapshot.fetched_at))
-		{
-			log::warn!("{e}");
-		}
-		snapshot
-			.events
-			.retain(|e| event_on_day(e, snapshot.day, self.day_end_hour));
+		self.revision = snapshot.revision;
 		self.calendars = snapshot.calendars;
 		self.events = snapshot.events;
 		self.day = snapshot.day;
-		self.last_sync = Some(snapshot.fetched_at);
-		if self.persist_snapshots
-			&& let Some(database) = &self.day_cache
-			&& let Err(error) =
-				day_cache::save_sync_state(database, snapshot.fetched_at, &self.calendars)
-		{
-			log::warn!("could not cache calendar sync state: {error}");
+		self.last_sync =
+			(snapshot.fetched_at > chrono::DateTime::UNIX_EPOCH).then_some(snapshot.fetched_at);
+		if self.last_sync.is_some() {
+			self.connection = Connection::SignedIn;
 		}
-		self.connection = Connection::SignedIn;
 		self.sync = SyncState::Idle;
 		self.error = snapshot.notice;
-		if self
-			.open_event
-			.as_ref()
-			.is_some_and(|id| self.event(id).is_none())
-		{
-			self.open_event = None;
-		}
-
-		// A write that is still in flight wins over the snapshot: Google may
-		// not have processed it yet, and the chip must not snap back to the
-		// old time while the user is watching.
 		for (id, pending) in &self.pending {
 			if let Some(event) = self.events.iter_mut().find(|event| &event.id == id) {
 				event.start = pending.start;
 				event.end = pending.end;
 			}
 		}
-
-		// The day in view has fresh events now, so the run after this one
-		// opens on them rather than on an empty grid.
-		self.write_day(self.day, &self.events);
-	}
-
-	/// Puts a series' occurrences, fetched after a write changed many of them,
-	/// into the days held in memory. The worker has already updated the disk.
-	pub fn apply_series_refresh(&mut self, refresh: &series::Refresh) {
-		let mut fresh = refresh.events.clone();
-		for event in &mut fresh {
-			if let Some(pending) = self.pending.get(&event.id) {
-				event.start = pending.start;
-				event.end = pending.end;
-			}
-		}
-		let day_end_hour = self.day_end_hour;
-		refresh.apply_to_day(self.day, &mut self.events, &fresh, day_end_hour);
-		for (&day, events) in &mut self.cache {
-			refresh.apply_to_day(day, events, &fresh, day_end_hour);
-		}
 		if self
 			.open_event
 			.as_ref()
@@ -1589,61 +1407,35 @@ impl Store {
 		}
 	}
 
-	/// Install a range fetch as ordinary per-day snapshots, retaining all tasks
-	/// on each day just as a day fetch does.
-	pub fn apply_week_snapshot(&mut self, mut snapshot: Snapshot, days: &[NaiveDate]) {
-		if let Some(path) = &self.day_cache
-			&& let Err(e) =
-				operations::overlay(path, &mut snapshot.events, Some(snapshot.fetched_at))
-		{
-			log::warn!("{e}");
+	/// Results for an obsolete range are already persisted by the worker.
+	pub fn accept_snapshot(&mut self, snapshot: Snapshot, days: &[NaiveDate]) {
+		self.sync = SyncState::Idle;
+		if self.database.is_some() {
+			self.connection = Connection::SignedIn;
+			// A worker may have fetched only the panel day, or completed after
+			// navigation. Re-read the selected range; never merge view snapshots.
+			let wanted = self.loaded_days();
+			self.select_range(&wanted);
+			self.error = snapshot.notice;
+			return;
 		}
-		self.visible_days.extend_from_slice(days);
-		self.visible_days.sort_unstable();
-		self.visible_days.dedup();
-		let current = self.day;
-		for event in &mut snapshot.events {
-			if let Some(pending) = self.pending.get(&event.id) {
-				event.start = pending.start;
-				event.end = pending.end;
-			}
+		if snapshot.revision < self.revision {
+			return;
 		}
-		let mut current_snapshot = snapshot.clone();
-		// A background fetch can complete after navigation. Cache the fetched
-		// dates while preserving the current day's events and selection.
-		current_snapshot.day = current;
-		current_snapshot.events = self.events.clone();
-		for &day in days {
-			let events: Vec<_> = snapshot
-				.events
-				.iter()
-				.filter(|event| event_on_day(event, day, self.day_end_hour))
-				.cloned()
-				.collect();
-			if day == current {
-				current_snapshot.events = events;
-				current_snapshot.day = day;
-			} else {
-				self.write_day(day, &events);
-				self.cache.insert(day, events);
-			}
+		if !days.contains(&self.day) && !self.visible_days.iter().any(|day| days.contains(day)) {
+			return;
 		}
-		self.apply_snapshot(current_snapshot);
-		self.trim_cache();
+		self.covered_days.extend(days);
+		self.visible_days = days.to_vec();
+		let day = self.day;
+		self.apply_snapshot(snapshot);
+		self.day = day;
 	}
 
-	/// Accept results for any previously requested view without navigating or
-	/// scheduling a follow-up fetch. Keep the active view pinned in the cache.
-	pub fn cache_fetched_snapshot(&mut self, snapshot: Snapshot, days: &[NaiveDate]) {
-		let visible = self.visible_days.clone();
-		self.apply_week_snapshot(snapshot, days);
-		self.visible_days = visible;
-		self.trim_cache();
-	}
-
-	/// The current view's cached data, without making a network request.
-	pub fn cached_snapshot(&self) -> Option<Snapshot> {
+	/// A copy of the current loaded range for view adapters and previews.
+	pub fn snapshot(&self) -> Option<Snapshot> {
 		Some(Snapshot {
+			revision: self.revision,
 			calendars: self.calendars.clone(),
 			events: self.events.clone(),
 			day: self.day,
@@ -1665,7 +1457,6 @@ impl Store {
 		let mut seen = std::collections::HashSet::new();
 		self.events
 			.iter()
-			.chain(self.cache.values().flatten())
 			.filter(|event| seen.insert(event.id.clone()))
 			.filter(|event| {
 				self.event_enabled(event, settings) && self.search_shows(event, day, settings)
@@ -1675,104 +1466,40 @@ impl Store {
 			.collect()
 	}
 
-	pub fn events_on(&self, day: NaiveDate) -> &[Event] {
-		if day == self.day {
-			&self.events
-		} else {
-			self.cache.get(&day).map(Vec::as_slice).unwrap_or(&[])
-		}
-	}
-
-	/// The events of `day` from memory, or from the copy an earlier run left
-	/// on disk, without loading them into the view. `None` when the day has
-	/// never been fetched. Reading the disk copy is a database read, so this
-	/// belongs in an update rather than in a view.
-	pub fn events_for_day(&self, day: NaiveDate) -> Option<Vec<Event>> {
-		if day == self.day {
-			return Some(self.events.clone());
-		}
-		if let Some(events) = self.cache.get(&day) {
-			return Some(events.clone());
-		}
-		self.read_day(day)
-	}
-
-	/// Shared backlog tasks and off-day linked blocks do not establish that
-	/// this day's calendar data has been loaded.
-	pub fn has_calendar_events_on(&self, day: NaiveDate) -> bool {
-		self.events_on(day)
+	pub fn events_on(&self, day: NaiveDate) -> Vec<&Event> {
+		self.events
 			.iter()
-			.any(|event| !event.is_task() && event_on_day(event, day, self.day_end_hour))
+			.filter(|event| event_on_day(event, day, self.day_end_hour))
+			.collect()
 	}
 
-	/// Update only existing copies of this occurrence, including disk history.
-	pub fn replace_habit_occurrence(&mut self, updated: &Event) {
-		let replace = |events: &mut Vec<Event>| {
-			for event in events {
-				if event.id == updated.id && event.calendar_id == updated.calendar_id {
-					*event = updated.clone();
-				}
+	pub fn events_for_day(&self, day: NaiveDate) -> Option<Vec<Event>> {
+		if self.visible_days.contains(&day) {
+			return Some(self.events_on(day).into_iter().cloned().collect());
+		}
+		let read = repository::read(self.database.as_ref()?, &[day], self.day_end_hour).ok()?;
+		Some(read.snapshot.events)
+	}
+
+	pub fn replace_event(&mut self, updated: &Event) {
+		for event in self.events.iter_mut().chain(self.detail_event.iter_mut()) {
+			if event.id == updated.id && event.calendar_id == updated.calendar_id {
+				*event = updated.clone();
 			}
-		};
-		replace(&mut self.events);
-		for events in self.cache.values_mut() {
-			replace(events);
-		}
-		if let Some(event) = self.detail_event.as_mut()
-			&& event.id == updated.id
-			&& event.calendar_id == updated.calendar_id
-		{
-			*event = updated.clone();
-		}
-		if let Some(database) = &self.day_cache {
-			day_cache::update_events(database, replace);
 		}
 	}
 
-	pub fn replace_cached_task(&mut self, previous_id: &str, task: &Event) {
+	pub fn replace_task(&mut self, previous_id: &str, task: &Event) {
 		let key = crate::timeblocking::task_key(task);
-		let replace = |events: &mut Vec<Event>| {
-			events.retain(|event| {
-				event.id != previous_id
-					&& (!event.is_task() || crate::timeblocking::task_key(event) != key)
-			});
-			events.push(task.clone());
-		};
-		for events in self.cache.values_mut() {
-			replace(events);
-		}
-		if let Some(database) = &self.day_cache {
-			day_cache::update_events(database, replace);
-		}
+		self.events.retain(|event| {
+			event.id != previous_id
+				&& (!event.is_task() || crate::timeblocking::task_key(event) != key)
+		});
+		self.add_event(task.clone());
 	}
 
-	pub fn clear_disk_cache(&self) {
-		if let Some(database) = self.day_cache.as_ref() {
-			day_cache::clear(database);
-		}
-	}
-
-	pub fn forget_event_everywhere(&mut self, id: &str) {
+	pub fn forget_event(&mut self, id: &str) {
 		self.events.retain(|event| event.id != id);
-		for events in self.cache.values_mut() {
-			events.retain(|event| event.id != id);
-		}
-		if let Some(database) = &self.day_cache {
-			day_cache::update_events(database, |events| events.retain(|event| event.id != id));
-		}
-	}
-
-	pub fn load_cached_days(&mut self, days: &[NaiveDate]) {
-		self.visible_days = days.to_vec();
-		for &day in days {
-			if day != self.day
-				&& !self.cache.contains_key(&day)
-				&& let Some(events) = self.read_day(day)
-			{
-				self.cache.insert(day, events);
-			}
-		}
-		self.trim_cache();
 	}
 
 	pub fn all_day_events_on<'a>(
@@ -1780,7 +1507,7 @@ impl Store {
 		day: NaiveDate,
 		settings: &'a CalendarSettings,
 	) -> impl Iterator<Item = &'a Event> {
-		let events = self.events_on(day);
+		let events = &self.events;
 		let blocks: Vec<Event> = events
 			.iter()
 			.filter(|event| crate::timeblocking::is_block(event, settings))
@@ -1790,7 +1517,8 @@ impl Store {
 			.iter()
 			.filter(|event| self.event_enabled(event, settings))
 			.filter(move |event| {
-				event.all_day
+				event_on_day(event, day, settings.day_start_hour())
+					&& event.all_day
 					&& (!event.is_task()
 						|| (event.start.date_naive() != crate::timeblocking::UNDATED
 							&& event.start.date_naive() == day)
@@ -1805,6 +1533,7 @@ impl Store {
 	) -> impl Iterator<Item = &'a Event> {
 		self.events
 			.iter()
+			.filter(|event| event_on_day(event, self.day, settings.day_start_hour()))
 			.filter(|event| self.event_enabled(event, settings))
 	}
 
@@ -1828,9 +1557,7 @@ impl Store {
 		self.events.iter_mut().find(|event| event.id == id)
 	}
 
-	/// Sets the location text of every copy of an event, so the details pane
-	/// and the trips, which read different copies, both change at once rather
-	/// than after the next sync.
+	/// Preview the location in the displayed event and its open detail form.
 	pub fn set_location(&mut self, id: &str, location: &str) {
 		let set = |events: &mut Vec<Event>| {
 			for event in events.iter_mut().filter(|event| event.id == id) {
@@ -1838,25 +1565,16 @@ impl Store {
 			}
 		};
 		set(&mut self.events);
-		for events in self.cache.values_mut() {
-			set(events);
-		}
 		if let Some(event) = self.detail_event.as_mut().filter(|event| event.id == id) {
 			event.details.location = location.to_owned();
 		}
-		if let Some(database) = &self.day_cache {
-			day_cache::update_events(database, set);
-		}
 	}
 
-	/// A mutable handle to an event, whether it is on the day in view or parked
-	/// in the cache. A write can land while the user is looking at another day.
 	/// The night whose sleep timer is running, on any loaded day.
 	pub fn active_sleep(&self) -> Option<&Event> {
 		self.detail_event
 			.iter()
 			.chain(self.events.iter())
-			.chain(self.cache.values().flatten())
 			.filter(|event| {
 				event
 					.details
@@ -1865,23 +1583,6 @@ impl Store {
 					.is_some_and(sleep::Record::sleeping)
 			})
 			.max_by_key(|event| event.start)
-	}
-
-	pub fn event_mut_anywhere(&mut self, id: &str) -> Option<&mut Event> {
-		if self
-			.detail_event
-			.as_ref()
-			.is_some_and(|event| event.id == id)
-		{
-			return self.detail_event.as_mut();
-		}
-		if let Some(event) = self.events.iter_mut().find(|event| event.id == id) {
-			return Some(event);
-		}
-		self.cache
-			.values_mut()
-			.flatten()
-			.find(|event| event.id == id)
 	}
 
 	/// Applies a dragged time to the event and remembers it as unconfirmed.
@@ -1941,14 +1642,7 @@ impl Store {
 
 	/// The configured regular calendar, otherwise the primary or first one.
 	pub fn default_calendar_id(&self, settings: &CalendarSettings) -> Option<String> {
-		let calendars: Vec<_> = self.event_calendars(settings).collect();
-		settings
-			.default_calendar
-			.as_ref()
-			.and_then(|id| calendars.iter().find(|calendar| &calendar.id == id))
-			.or_else(|| calendars.iter().find(|calendar| calendar.primary))
-			.or_else(|| calendars.first())
-			.map(|calendar| calendar.id.clone())
+		default_calendar_id(&self.calendars, settings)
 	}
 
 	/// The calendars `event` can be on, including its current one.
@@ -1988,17 +1682,11 @@ impl Store {
 			}
 		};
 		apply(&mut self.events);
-		for events in self.cache.values_mut() {
-			apply(events);
-		}
 		if let Some(event) = self.detail_event.as_mut().filter(|event| event.id == id) {
 			event.calendar_id = calendar_id.to_owned();
 			if event.details.color_id.is_none() {
 				event.color = color;
 			}
-		}
-		if let Some(database) = &self.day_cache {
-			day_cache::update_events(database, apply);
 		}
 	}
 
@@ -2040,29 +1728,12 @@ impl Store {
 		self.month_open = false;
 	}
 
-	/// Drops a deleted task, every cached copy of it, and the calendar blocks
-	/// that were standing in for it.
+	/// Removes a task from the displayed range.
 	pub fn forget_task(&mut self, id: &str) {
-		let drop_copies = |events: &mut Vec<Event>| {
-			events.retain(|event| event.id != id);
-		};
-		if let Some(database) = &self.day_cache {
-			day_cache::update_events(database, drop_copies);
-		}
-		drop_copies(&mut self.events);
-		for events in self.cache.values_mut() {
-			drop_copies(events);
-		}
-		if self.open_event.as_ref().is_some_and(|open| {
-			!self.events.iter().any(|event| &event.id == open)
-				&& !self
-					.cache
-					.values()
-					.any(|events| events.iter().any(|event| &event.id == open))
-		}) {
+		self.forget_event(id);
+		if self.open_event.as_deref() == Some(id) {
 			self.open_event = None;
 		}
-		self.write_day(self.day, &self.events);
 	}
 
 	/// Puts a freshly created event into the day in view, keeping the order the
@@ -2071,7 +1742,6 @@ impl Store {
 		self.events.push(event);
 		self.events
 			.sort_by(|left, right| left.start.cmp(&right.start).then(right.end.cmp(&left.end)));
-		self.write_day(self.day, &self.events);
 	}
 
 	/// Google refused the write, so the event goes back to the time it had.
@@ -2079,7 +1749,7 @@ impl Store {
 		let Some(pending) = self.pending.remove(id) else {
 			return;
 		};
-		if let Some(event) = self.event_mut_anywhere(id) {
+		if let Some(event) = self.event_mut(id) {
 			event.start = pending.previous_start;
 			event.end = pending.previous_end;
 		}
@@ -2121,7 +1791,7 @@ impl Store {
 		let start = at_clock(day, settings.day_start_hour(), 0);
 		let end = at_clock(day.succ_opt().unwrap_or(day), settings.day_start_hour(), 0);
 		let mut events: Vec<_> = self
-			.events_on(day)
+			.events
 			.iter()
 			.filter(|event| event.details.sleep.is_none())
 			.filter(|event| self.event_enabled(event, settings))
@@ -2147,14 +1817,7 @@ impl Store {
 		day: NaiveDate,
 		settings: &'a CalendarSettings,
 	) -> Vec<&'a Event> {
-		let events: &[Event] = if day == self.day {
-			&self.events
-		} else {
-			match self.cache.get(&day) {
-				Some(events) => events,
-				None => return Vec::new(),
-			}
-		};
+		let events = &self.events;
 
 		let blocks = events
 			.iter()
@@ -2177,14 +1840,10 @@ impl Store {
 	/// Every day whose events are in hand: the day in view and the days
 	/// visited before it, oldest first.
 	pub fn loaded_days(&self) -> Vec<NaiveDate> {
-		let mut days: Vec<NaiveDate> = self
-			.cache
-			.keys()
-			.copied()
-			.filter(|day| *day != self.day)
-			.collect();
+		let mut days = self.visible_days.clone();
 		days.push(self.day);
 		days.sort();
+		days.dedup();
 		days
 	}
 
@@ -3429,6 +3088,7 @@ pub fn sample_snapshot() -> Snapshot {
 	};
 
 	Snapshot {
+		revision: 0,
 		calendars: vec![personal.clone(), work.clone(), tasks.clone()],
 		events: vec![
 			Event {
@@ -3693,63 +3353,17 @@ mod tests {
 	}
 
 	#[test]
-	fn task_edits_and_deletions_preserve_unrelated_cached_dates_on_disk() {
-		let scratch = day_cache::Scratch::new("task-edits");
-		let snapshot = sample_snapshot();
-		let day = snapshot.day;
-		let next = day.succ_opt().unwrap();
-		let mut neighbor = snapshot.events[1].clone();
-		neighbor.id = "neighbor-event".into();
-		neighbor.start += chrono::Duration::days(1);
-		neighbor.end += chrono::Duration::days(1);
-		let mut task = snapshot.events[1].clone();
-		task.id = "task:one".into();
-		task.calendar_id = "tasks:list".into();
-		day_cache::save(scratch.path(), day, &[task.clone()], 0).unwrap();
-		day_cache::save(scratch.path(), next, &[neighbor.clone(), task.clone()], 0).unwrap();
-		let mut store = Store::with_snapshot(snapshot);
-		store.cache_days_in(Some(scratch.path().to_path_buf()));
-		task.title = "Updated task".into();
-		store.replace_cached_task("task:one", &task);
-		let cached = day_cache::load(scratch.path(), next, 0).unwrap();
-		assert!(cached.contains(&neighbor));
-		assert!(cached.contains(&task));
-		store.forget_task("task:one");
-		let cached = day_cache::load(scratch.path(), next, 0).unwrap();
-		assert!(cached.contains(&neighbor));
-		assert!(!cached.iter().any(Event::is_task));
-	}
-
-	#[test]
-	fn a_store_with_worker_persistence_cannot_overwrite_a_newer_database_snapshot() {
-		let scratch = day_cache::Scratch::new("worker-persistence");
-		let mut old = sample_snapshot();
-		old.fetched_at -= chrono::Duration::hours(1);
-		let day = old.day;
-		view_cache::save(scratch.path(), &old, &[day], 0).unwrap();
-		let mut store = Store::new(0);
-		store.read_cached_days_in(Some(scratch.path().to_owned()));
-		let mut fresh = old.clone();
-		fresh.fetched_at = crate::clock::now();
-		fresh.events.clear();
-		view_cache::save(scratch.path(), &fresh, &[day], 0).unwrap();
-		store.cache_fetched_snapshot(old, &[day]);
-		store.set_day(day.succ_opt().unwrap(), day);
-		assert!(day_cache::load(scratch.path(), day, 0).unwrap().is_empty());
-		let (fetched_at, _) = day_cache::load_sync_state(scratch.path()).unwrap();
-		assert_eq!(fetched_at, fresh.fetched_at);
-	}
-
-	#[test]
 	fn recent_sync_time_and_calendar_sources_survive_restart() {
-		let scratch = day_cache::Scratch::new("sync-state");
+		let temporary = tempfile::tempdir().unwrap();
+		let path = temporary.path().join("calendar.sqlite3");
 		let mut snapshot = sample_snapshot();
 		snapshot.fetched_at = crate::clock::now();
 		let mut previous = Store::new(0);
-		previous.cache_days_in(Some(scratch.path().to_path_buf()));
+		previous.restore(Some(path.clone()));
+		repository::seed(&path, &snapshot, &[snapshot.day], 0);
 		previous.apply_snapshot(snapshot.clone());
 		let mut restarted = Store::new(0);
-		restarted.cache_days_in(Some(scratch.path().to_path_buf()));
+		restarted.restore(Some(path.clone()));
 		assert_eq!(restarted.last_sync, Some(snapshot.fetched_at));
 		assert_eq!(restarted.calendars, snapshot.calendars);
 		assert!(!restarted.sync_due(
@@ -3763,26 +3377,6 @@ mod tests {
 	}
 
 	#[test]
-	fn calendar_cache_coverage_ignores_shared_tasks_and_off_day_events() {
-		let snapshot = sample_snapshot();
-		let day = snapshot.day;
-		let mut store = Store::with_snapshot(snapshot);
-		assert!(store.has_calendar_events_on(day));
-		for event in &mut store.events {
-			event.id = format!("task:{}", event.id);
-		}
-		assert!(!store.has_calendar_events_on(day));
-		for event in &mut store.events {
-			event.id = ids::bare_task(&event.id).to_owned();
-			event.start += chrono::Duration::days(5);
-			event.end += chrono::Duration::days(5);
-		}
-		assert!(!store.has_calendar_events_on(day));
-		store.events.clear();
-		assert!(!store.has_calendar_events_on(day));
-	}
-
-	#[test]
 	fn a_range_result_after_navigation_is_cached_without_changing_the_active_view() {
 		let snapshot = sample_snapshot();
 		let fetched_day = snapshot.day;
@@ -3790,14 +3384,14 @@ mod tests {
 		let current = fetched_day + chrono::Duration::days(10);
 		store.set_day(current, fetched_day);
 		let visible = week_dates(current, 7);
-		store.load_cached_days(&visible);
+		store.select_range(&visible);
 		store.sync = SyncState::Syncing;
-		store.cache_fetched_snapshot(snapshot.clone(), &[fetched_day]);
+		store.accept_snapshot(snapshot.clone(), &[fetched_day]);
 		assert_eq!(store.day, current);
 		assert!(store.events.is_empty());
 		assert_eq!(store.visible_days, visible);
 		assert_eq!(store.sync, SyncState::Idle);
-		assert_eq!(store.events_on(fetched_day), snapshot.events.as_slice());
+		assert!(store.events_on(fetched_day).is_empty());
 	}
 
 	#[test]
@@ -3999,7 +3593,8 @@ mod tests {
 
 	#[test]
 	fn habit_colors_stay_the_same_across_disk_cache_and_sync() {
-		let scratch = day_cache::Scratch::new("habit-colors");
+		let temporary = tempfile::tempdir().unwrap();
+		let path = temporary.path().join("calendar.sqlite3");
 		let mut snapshot = sample_snapshot();
 		let day = snapshot.day;
 		let settings = CalendarSettings::default();
@@ -4012,11 +3607,12 @@ mod tests {
 		habit.color = colors::HABIT;
 		let id = habit.id.clone();
 		let mut previous = Store::with_snapshot(empty_snapshot(day));
-		previous.cache_days_in(Some(scratch.path().to_path_buf()));
+		previous.restore(Some(path.clone()));
+		repository::seed(&path, &snapshot, &[snapshot.day], 0);
 		previous.apply_snapshot(snapshot.clone());
 		let mut store = Store::with_snapshot(empty_snapshot(day));
 		store.apply_task_colors(&settings);
-		store.cache_days_in(Some(scratch.path().to_path_buf()));
+		store.restore(Some(path.clone()));
 		assert_eq!(
 			store
 				.event(&id)
@@ -4136,12 +3732,10 @@ mod tests {
 		planned.details.recurring_event_id = Some("planned-series".into());
 		snapshot.events = vec![occurrence.clone(), planned.clone()];
 		let mut store = Store::with_snapshot(snapshot.clone());
-		store
-			.cache
-			.insert(snapshot.day.succ_opt().unwrap(), snapshot.events.clone());
+
 		library.habit_mut("read").unwrap().name = "Read a book 📖".into();
 		store.apply_habit_names(&library);
-		for event in store.events.iter().chain(store.cache.values().flatten()) {
+		for event in store.events.iter() {
 			assert_eq!(event.title, "Read a book 📖");
 		}
 		// A refresh with Google's old copied summary must not restore that name.
@@ -4506,8 +4100,13 @@ mod tests {
 	}
 
 	#[test]
-	fn stepping_back_to_a_day_brings_its_events_back() {
-		let mut store = Store::with_snapshot(sample_snapshot());
+	fn stepping_back_to_a_day_reads_its_confirmed_events() {
+		let temporary = tempfile::tempdir().unwrap();
+		let path = temporary.path().join("calendar.sqlite3");
+		let snapshot = sample_snapshot();
+		repository::seed(&path, &snapshot, &[snapshot.day], 0);
+		let mut store = Store::with_snapshot(snapshot);
+		store.restore(Some(path));
 		let today = store.day;
 		let parked = store.events.len();
 		assert!(parked > 0);
@@ -4523,148 +4122,17 @@ mod tests {
 		);
 	}
 
-	#[test]
-	fn forgetting_the_cache_drops_the_days_it_held() {
-		let mut store = Store::with_snapshot(sample_snapshot());
-		let today = store.day;
-
-		store.set_day(today.succ_opt().unwrap(), today);
-		store.forget_cached_days();
-		store.set_day(today, today);
-
-		assert!(
-			store.events.is_empty(),
-			"a forgotten day has to be fetched again"
-		);
-	}
-
 	/// A snapshot with nothing in it, standing in for a run that has not
 	/// synced yet.
 	fn empty_snapshot(day: NaiveDate) -> Snapshot {
 		Snapshot {
+			revision: 0,
 			calendars: Vec::new(),
 			events: Vec::new(),
 			day,
 			fetched_at: crate::clock::now(),
 			notice: None,
 		}
-	}
-
-	/// The day in view, the day before it and the day after it are never
-	/// dropped, and ten more days beyond that window survive; everything
-	/// further out goes.
-	#[test]
-	fn the_cache_keeps_the_day_in_view_its_neighbours_and_ten_more() {
-		let today = NaiveDate::from_ymd_opt(2026, 10, 8).unwrap();
-		let all: Vec<NaiveDate> = (-40..=40)
-			.map(|offset| today + chrono::Duration::days(i64::from(offset)))
-			.collect();
-
-		let dropped = days_to_drop(all.clone(), today);
-		let kept: Vec<NaiveDate> = all
-			.into_iter()
-			.filter(|day| !dropped.contains(day))
-			.collect();
-
-		assert_eq!(
-			kept.len(),
-			13,
-			"the day in view, its neighbours and ten more"
-		);
-		for offset in [-6, -1, 0, 1, 6] {
-			let day = today + chrono::Duration::days(i64::from(offset));
-			assert!(kept.contains(&day), "day {offset} should stay");
-		}
-		for offset in [-7, 7, 40] {
-			let day = today + chrono::Duration::days(i64::from(offset));
-			assert!(!kept.contains(&day), "day {offset} should go");
-		}
-	}
-
-	/// A day parked by one run is painted by the next one, straight from the
-	/// cache directory, without a sync having run.
-	#[test]
-	fn a_day_parked_by_one_run_is_painted_by_the_next() {
-		let scratch = day_cache::Scratch::new("across-runs");
-		let directory = scratch.path().to_path_buf();
-
-		let mut first = Store::with_snapshot(sample_snapshot());
-		first.cache_days_in(Some(directory.clone()));
-		let today = first.day;
-		let parked = first.events.clone();
-		assert!(!parked.is_empty());
-
-		let tomorrow = today.succ_opt().unwrap();
-		first.set_day(tomorrow, today);
-		drop(first);
-
-		// The next run starts with nothing in memory, and tomorrow was never
-		// fetched by anyone.
-		let mut second = Store::with_snapshot(empty_snapshot(tomorrow));
-		second.cache_days_in(Some(directory));
-		assert!(second.events.is_empty(), "tomorrow has never been fetched");
-
-		second.set_day(today, today);
-		assert_eq!(second.events, parked, "the day should come back from disk");
-	}
-
-	/// The months on disk are trimmed by the same rule as the memory cache.
-	#[test]
-	fn visited_months_remain_on_disk_after_distant_navigation() {
-		let scratch = day_cache::Scratch::new("pruning");
-		let directory = scratch.path().to_path_buf();
-		let today = NaiveDate::from_ymd_opt(2026, 10, 8).unwrap();
-
-		for offset in -600..=600 {
-			let day = today + chrono::Duration::days(i64::from(offset));
-			day_cache::save(&directory, day, &[], 0).unwrap();
-		}
-
-		let mut store = Store::with_snapshot(empty_snapshot(today));
-		store.cache_days_in(Some(directory.clone()));
-
-		let left = day_cache::days(&directory);
-		// September and October are the current month and its neighbour;
-		// nothing reaches November.
-		assert!(
-			left.len() > 30,
-			"all visited months remain available offline"
-		);
-		let september = NaiveDate::from_ymd_opt(2026, 9, 1).unwrap();
-		let october = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
-		assert!(left.contains(&september), "september should stay on disk");
-		assert!(left.contains(&october), "october should stay on disk");
-	}
-
-	#[test]
-	fn forgetting_the_cache_drops_the_days_on_disk_too() {
-		let scratch = day_cache::Scratch::new("forgetting");
-		let directory = scratch.path().to_path_buf();
-
-		let mut store = Store::with_snapshot(sample_snapshot());
-		store.cache_days_in(Some(directory.clone()));
-		let today = store.day;
-
-		store.set_day(today.succ_opt().unwrap(), today);
-		assert!(
-			day_cache::days(&directory).contains(&today),
-			"the day we left is on disk"
-		);
-
-		store.forget_cached_days();
-		assert!(
-			day_cache::days(&directory).is_empty(),
-			"the boundary moved, so the days filed under it go too"
-		);
-		assert!(store.events.is_empty());
-	}
-
-	/// `State::new` builds its store by hand, and a state built by hand must
-	/// not read or rewrite the days the real app has cached.
-	#[test]
-	fn a_store_built_by_hand_keeps_its_days_in_memory() {
-		assert!(Store::new(0).day_cache.is_none());
-		assert!(Store::with_snapshot(sample_snapshot()).day_cache.is_none());
 	}
 
 	/// The standup in the sample day, and a time an hour later.
@@ -4753,8 +4221,12 @@ mod tests {
 	}
 
 	#[test]
-	fn a_refused_drag_reaches_an_event_parked_in_the_cache() {
+	fn a_refused_drag_restores_confirmed_data_after_navigation() {
+		let temporary = tempfile::tempdir().unwrap();
+		let path = temporary.path().join("calendar.sqlite3");
 		let (mut store, start, end) = standup_and_later();
+		repository::seed(&path, &store.snapshot().unwrap(), &[store.day], 0);
+		store.restore(Some(path));
 		let day = store.day;
 		store.begin_time_change("standup", start, end);
 
@@ -4852,49 +4324,6 @@ mod tests {
 			draft.recurrence_lines().unwrap(),
 			vec!["RRULE:FREQ=DAILY;INTERVAL=1".to_owned()]
 		);
-	}
-
-	/// Every copy of an event has to agree on its location: trips are worked
-	/// out from the days, the details pane reads the open copy, and the disk is
-	/// what the next run paints first.
-	#[test]
-	fn a_location_reaches_every_copy_of_an_event() {
-		let temporary = tempfile::tempdir().unwrap();
-		let directory = temporary.path().join("timeparagon.sqlite3");
-		let snapshot = sample_snapshot();
-		let day = snapshot.day;
-		let other = day.succ_opt().unwrap();
-
-		let mut store = Store::with_snapshot(snapshot.clone());
-		store.cache_days_in(Some(directory.clone()));
-		store.apply_snapshot(snapshot);
-		let copy = store.event("standup").unwrap().clone();
-		store.cache.insert(other, vec![copy.clone()]);
-		store.detail_event = Some(copy);
-
-		store.set_location("standup", "Campus");
-
-		let location = |events: &[Event]| {
-			events
-				.iter()
-				.find(|event| event.id == "standup")
-				.map(|event| event.details.location.clone())
-		};
-		let campus = Some("Campus".to_owned());
-		assert_eq!(location(&store.events), campus, "the day in view");
-		assert_eq!(location(&store.cache[&other]), campus, "a parked day");
-		assert_eq!(
-			store.detail_event.as_ref().unwrap().details.location,
-			"Campus",
-			"the open copy"
-		);
-		assert_eq!(
-			location(&store.read_day(day).unwrap()),
-			campus,
-			"the day on disk"
-		);
-
-		let _ = std::fs::remove_dir_all(directory);
 	}
 
 	#[test]

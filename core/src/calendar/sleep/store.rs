@@ -21,7 +21,6 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use super::super::Event;
-use super::super::day_cache::SavedEvent;
 use crate::task_db::Database;
 
 /// A UTC timestamp in one fixed format, so stored times compare as text.
@@ -30,14 +29,12 @@ fn stamp(at: DateTime<Utc>) -> String {
 }
 
 fn parse(text: &str) -> Option<Event> {
-	serde_json::from_str::<SavedEvent>(text)
-		.ok()
-		.map(Event::from)
+	serde_json::from_str::<Event>(text).ok()
 }
 
 /// Writes a night, replacing any other copy of the same night: one row per
 /// wake-up date, as on Google. A night stored exactly as given is left alone.
-fn upsert(connection: &Connection, night: &Event) -> Result<(), String> {
+pub(in crate::calendar) fn upsert(connection: &Connection, night: &Event) -> Result<(), String> {
 	let Some(record) = night.details.sleep.as_ref() else {
 		return Ok(());
 	};
@@ -59,7 +56,7 @@ fn upsert(connection: &Connection, night: &Event) -> Result<(), String> {
 	if stored.as_deref().and_then(parse).as_ref() == Some(night) {
 		return Ok(());
 	}
-	let event = serde_json::to_string(&SavedEvent::from(night)).map_err(|e| e.to_string())?;
+	let event = serde_json::to_string(night).map_err(|e| e.to_string())?;
 	connection
 		.execute(
 			"INSERT INTO sleep_nights (calendar_id,id,wake_date,start_at,end_at,event)
@@ -155,7 +152,8 @@ pub(in crate::calendar) fn remove(path: &Path, calendar_id: &str, id: &str) -> R
 
 /// The stored nights overlapping `from..to`. A database without the table
 /// yet simply has no nights.
-pub(in crate::calendar) fn overlapping(
+#[cfg(test)]
+pub(super) fn overlapping(
 	connection: &Connection,
 	from: DateTime<Utc>,
 	to: DateTime<Utc>,
@@ -169,8 +167,7 @@ pub(in crate::calendar) fn overlapping(
 	match rows() {
 		Ok(rows) => rows
 			.iter()
-			.filter_map(|row| serde_json::from_str::<SavedEvent>(row).ok())
-			.map(Event::from)
+			.filter_map(|row| serde_json::from_str::<Event>(row).ok())
 			.collect(),
 		Err(error) => {
 			if !error.to_string().contains("no such table") {
@@ -178,31 +175,6 @@ pub(in crate::calendar) fn overlapping(
 			}
 			Vec::new()
 		}
-	}
-}
-
-/// Puts the stored nights into a cached day's events, in place of any older
-/// copy of the same night the month row kept.
-pub(in crate::calendar) fn merge_into(
-	connection: &Connection,
-	from: DateTime<Utc>,
-	to: DateTime<Utc>,
-	events: &mut Vec<Event>,
-) {
-	merge(overlapping(connection, from, to), events);
-}
-
-/// Puts `nights` into `events`, each replacing any copy of the same night:
-/// the same event, or another event for the same wake-up date.
-pub(in crate::calendar) fn merge(nights: impl IntoIterator<Item = Event>, events: &mut Vec<Event>) {
-	for night in nights {
-		let wake_date = night.details.sleep.as_ref().map(|s| s.wake_date);
-		events.retain(|event| {
-			event.calendar_id != night.calendar_id
-				|| (event.id != night.id
-					&& event.details.sleep.as_ref().map(|s| s.wake_date) != wake_date)
-		});
-		events.push(night);
 	}
 }
 
@@ -249,8 +221,9 @@ mod tests {
 
 	#[test]
 	fn google_replaces_the_window_and_writes_keep_one_row_per_night() {
-		let scratch = crate::calendar::day_cache::Scratch::new("sleep-store");
-		let path = scratch.path();
+		let temporary = tempfile::tempdir().unwrap();
+		let database_path = temporary.path().join("calendar.sqlite3");
+		let path = database_path.as_path();
 		let window = |a: u32, b: u32| {
 			(
 				Local
@@ -289,8 +262,9 @@ mod tests {
 
 	#[test]
 	fn only_real_changes_reach_the_sync_journal() {
-		let scratch = crate::calendar::day_cache::Scratch::new("sleep-store-journal");
-		let path = scratch.path();
+		let temporary = tempfile::tempdir().unwrap();
+		let database_path = temporary.path().join("calendar.sqlite3");
+		let path = database_path.as_path();
 		// Opening a database file sets it up, and enrolls it for sync.
 		Database::open(path).unwrap();
 		let journaled = || {
@@ -315,44 +289,21 @@ mod tests {
 
 	#[test]
 	fn a_night_stored_by_another_device_shows_on_the_days_in_memory() {
-		let scratch = crate::calendar::day_cache::Scratch::new("sleep-store-reread");
-		let path = scratch.path();
+		let temporary = tempfile::tempdir().unwrap();
+		let database_path = temporary.path().join("calendar.sqlite3");
+		let path = database_path.as_path();
 		let day = |d| NaiveDate::from_ymd_opt(2030, 11, d).unwrap();
 		let mut store = crate::calendar::Store::new(0);
-		store.cache_days_in(Some(path.to_path_buf()));
+		store.restore(Some(path.to_path_buf()));
 		store.set_day(day(5), day(5));
 		store.set_day(day(6), day(5));
 		store.events = vec![night("app", "old", 6, 8)];
 
 		// As database sync would write it: a new copy of the same night.
 		put(path, &night("app", "new", 6, 9)).unwrap();
-		let (first, last) = {
-			let days = store.loaded_days();
-			(days[0], *days.last().unwrap())
-		};
-		let nights = crate::calendar::sleep::stored_nights(path, first, last).unwrap();
-		store.apply_stored_nights(&nights);
-		assert_eq!(store.events_on(day(6)), [night("app", "new", 6, 9)]);
-		// 9h before 08:00 on the 6th starts on the 5th, so it shows there too.
-		assert!(store.events_on(day(5)).iter().any(|e| e.id == "new"));
-		assert!(store.events_on(day(5)).iter().all(|e| e.id != "old"));
-	}
-
-	#[test]
-	fn a_cached_day_takes_the_stored_copy_of_its_night() {
-		let scratch = crate::calendar::day_cache::Scratch::new("sleep-store-merge");
-		let path = scratch.path();
-		put(path, &night("app", "fresh", 6, 9)).unwrap();
-		let mut events = vec![night("app", "stale", 6, 8), night("other", "y", 6, 8)];
-		merge_into(
-			Database::open(path).unwrap().connection(),
-			ever().0,
-			ever().1,
-			&mut events,
-		);
-		assert_eq!(
-			events.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(),
-			["y", "fresh"]
-		);
+		store.select_range(&[day(5), day(6)]);
+		assert_eq!(store.events_on(day(6)), [&night("app", "new", 6, 9)]);
+		assert!(store.events_on(day(5)).into_iter().any(|e| e.id == "new"));
+		assert!(store.events_on(day(5)).into_iter().all(|e| e.id != "old"));
 	}
 }

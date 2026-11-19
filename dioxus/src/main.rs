@@ -9,7 +9,7 @@
 mod agenda;
 mod ai_input;
 mod alarms;
-mod cache;
+mod calendar_data;
 mod calendar_gestures;
 mod create;
 mod day;
@@ -206,7 +206,7 @@ fn App() -> Element {
 #[component]
 fn Main() -> Element {
 	let setup::Finished(mut setup_finished) = use_context::<setup::Finished>();
-	use_context_provider(cache::Loader::default);
+	use_context_provider(calendar_data::Loader::default);
 	// Local settings can change under the view when the iced app saves them.
 	let mut config = use_signal(day::load_config);
 	let settings = config.read().calendar.clone();
@@ -292,13 +292,12 @@ fn Main() -> Element {
 	// Bumped when the local edits change (a write was answered, say), so the
 	// day is drawn again with its items unlocked.
 	let mut local_edits = use_signal(|| 0u64);
-	let mut local_overlay = use_signal(|| None::<calendar::operations::Overlay>);
-	use_context_provider(|| cache::Changes(local_edits));
+	use_context_provider(|| calendar_data::Changes(local_edits));
 	let mut habit_names = use_signal(timeparagon_core::habits::Library::default);
 	use_context_provider(|| habits::EventNames(habit_names));
 	// Nights of the days in memory as the database has them, reread whenever
 	// one changes there, as when another device's night arrives by sync.
-	let mut stored_nights = use_signal(Vec::<calendar::Event>::new);
+	let mut nearby_events = use_signal(Vec::<calendar::Event>::new);
 	let mut database_sync_status = use_signal(timeparagon_core::database_sync::status);
 	// What database sync has done, for the Log sheet. The core keeps a bounded
 	// log with sequence numbers, so each poll only pulls the new entries.
@@ -312,26 +311,8 @@ fn Main() -> Element {
 	let mut calendars_error = use_signal(|| None::<String>);
 	let mut full_sync_running = use_signal(|| false);
 	let mut signed_in = use_signal(day::signed_in);
-	let mut cached_days = use_signal(move || {
-		let mut store = calendar::Store::new(config.peek().calendar.day_start_hour());
-		store.read_cached_days_in(timeparagon_core::task_db::path());
-		store
-	});
-	// Keep the shared Store for editors and sleep, without treating an empty
-	// calendar as a cache miss. The loader checks database coverage instead.
-	use_effect(move || {
-		let day = current_day();
-		let settings = &config.read().calendar;
-		let today = day::today(settings);
-		if cached_days.peek().day_end_hour() != settings.day_start_hour() {
-			let mut store = calendar::Store::new(settings.day_start_hour());
-			store.read_cached_days_in(timeparagon_core::task_db::path());
-			cached_days.set(store);
-		}
-		cached_days.write().set_day(day, today);
-	});
 
-	let (data, disk_view) = cache::use_calendar(
+	let (data, disk_view) = calendar_data::use_calendar(
 		vec![current_day()],
 		settings.clone(),
 		revision,
@@ -358,17 +339,17 @@ fn Main() -> Element {
 	// Keep the last good day on screen through a transient sync failure.
 	use_effect(move || {
 		let value = data.read();
-		if let Some(Ok((_, snapshot))) = value.as_ref() {
-			cached_days
-				.write()
-				.cache_fetched_snapshot(snapshot.clone(), &[snapshot.day]);
-			signed_in.set(true);
-			connect_error.set(None);
+		if let Some(Ok(_)) = value.as_ref() {
+			let connected = day::signed_in();
+			signed_in.set(connected);
+			if connected {
+				connect_error.set(None);
+			}
 		}
 	});
 
-	// Re-plan reminders from the cache the effect above just wrote, whenever
-	// a day loads or the settings change. Planning reads the database, so it
+	// Re-plan reminders after a sync or settings change. The sync worker
+	// has already persisted source records. Planning reads the database, so it
 	// runs on a worker thread.
 	#[cfg(target_os = "android")]
 	use_effect(move || {
@@ -430,8 +411,13 @@ fn Main() -> Element {
 					log.drain(..excess);
 				});
 			}
-			let days = cached_days.peek().loaded_days();
-			let range = days.first().copied().zip(days.last().copied());
+			let today = day::today(&config.peek().calendar);
+			let nearby_dates = vec![
+				today - chrono::Duration::days(1),
+				today,
+				today + chrono::Duration::days(1),
+			];
+			let hour = config.peek().calendar.day_start_hour();
 			let config_before_read = config.peek().clone();
 			let result = editor::worker(move || {
 				let path = timeparagon_core::task_db::path();
@@ -447,22 +433,21 @@ fn Main() -> Element {
 				let moved = |part: fn(&timeparagon_core::local_changes::Counters) -> i64| {
 					counters.is_none_or(|now| changes.is_none_or(|seen| part(&seen) != part(&now)))
 				};
-				let nights = if moved(|c| c.sleep) {
-					path.as_ref().zip(range).map(|(path, (first, last))| {
-						calendar::sleep::stored_nights(path, first, last)
+				let nearby = if moved(|c| c.calendar) {
+					path.as_ref().map(|path| {
+						calendar::repository::read(path, &nearby_dates, hour)
+							.map(|read| read.snapshot.events)
 					})
 				} else {
 					None
 				};
-				let overlay = (moved(|c| c.overlay) || moved(|c| c.config))
-					.then(|| path.as_deref().map(calendar::operations::load_overlay))
-					.flatten();
+
 				let names = moved(|c| c.habits).then(|| habits::read(path).library);
 				let reloaded = (changes.is_some() && moved(|c| c.config)).then(day::load_config);
-				Ok((reader, counters, nights, names, reloaded, overlay))
+				Ok((reader, counters, nearby, names, reloaded))
 			})
 			.await;
-			let (next_reader, counters, nights, names, reloaded, overlay) = match result {
+			let (next_reader, counters, nearby, names, reloaded) = match result {
 				Ok(result) => result,
 				Err(error) => {
 					eprintln!("Could not poll local changes: {error}");
@@ -472,15 +457,7 @@ fn Main() -> Element {
 				}
 			};
 			reader = next_reader;
-			if let Some(overlay) = overlay {
-				match overlay {
-					Ok(overlay) if local_overlay.peek().as_ref() != Some(&overlay) => {
-						local_overlay.set(Some(overlay))
-					}
-					Err(error) => eprintln!("Could not load local edits: {error}"),
-					_ => {}
-				}
-			}
+
 			let moved = |part: fn(&timeparagon_core::local_changes::Counters) -> i64| {
 				counters.is_none_or(|now| changes.is_none_or(|seen| part(&seen) != part(&now)))
 			};
@@ -499,18 +476,16 @@ fn Main() -> Element {
 			if sending != *google_sending.peek() {
 				google_sending.set(sending);
 			}
-			if moved(|c| c.overlay) || moved(|c| c.sleep) {
+			if moved(|c| c.calendar) {
 				local_edits.set(local_edits() + 1);
 			}
-			if let Some(nights) = nights {
-				match nights {
-					Ok(nights) => {
-						cached_days.write().apply_stored_nights(&nights);
-						stored_nights.set(nights);
-					}
-					Err(error) => eprintln!("Could not load stored sleep: {error}"),
+			if let Some(nearby) = nearby {
+				match nearby {
+					Ok(events) => nearby_events.set(events),
+					Err(error) => eprintln!("Could not read nearby calendar: {error}"),
 				}
 			}
+
 			if let Some(names) = names
 				&& names != *habit_names.peek()
 			{
@@ -586,10 +561,11 @@ fn Main() -> Element {
 			_ => None,
 		};
 		let known = fetched.clone().or_else(|| {
-			cached_days
+			disk_view
 				.read()
-				.cached_snapshot()
-				.filter(|snapshot| snapshot.day == day)
+				.as_ref()
+				.filter(|(dates, _)| dates == &[day])
+				.map(|(_, snapshot)| snapshot.clone())
 		});
 		// A note connects to a task by its task ID rather than its event's.
 		let found = known.and_then(|snapshot| linked_event(snapshot, &id));
@@ -621,25 +597,10 @@ fn Main() -> Element {
 				.read()
 				.as_ref()
 				.filter(|(dates, _)| dates == &[requested_day])
-				.map(|(_, snapshot)| snapshot.clone())
-				.or_else(|| {
-					cached_days
-						.read()
-						.cached_snapshot()
-						.filter(|snapshot| snapshot.day == requested_day)
-				}),
+				.map(|(_, snapshot)| snapshot.clone()),
 		};
 		drop(resource);
 		if let Some(snapshot) = &mut snapshot {
-			calendar::sleep::merge_stored(
-				&mut snapshot.events,
-				&stored_nights.read(),
-				snapshot.day,
-				config.read().calendar.day_start_hour(),
-			);
-			if let Some(overlay) = local_overlay.read().as_ref() {
-				overlay.apply(&mut snapshot.events, Some(snapshot.fetched_at));
-			}
 			let names = habit_names.read();
 			for event in &mut snapshot.events {
 				names.name_event(event);
@@ -686,6 +647,11 @@ fn Main() -> Element {
 			});
 		}
 	});
+	let calendar_sources = use_memo(move || {
+		snapshot_memo()
+			.map(|snapshot| snapshot.calendars)
+			.unwrap_or_default()
+	});
 	let snapshot = snapshot_memo();
 	let model = day_model();
 	let travel = day_travel();
@@ -710,12 +676,7 @@ fn Main() -> Element {
 	let time_format = config.read().appearance.time_format;
 
 	// The night being timed, wherever the view is, kept in the notification.
-	let running = sleep::running(
-		snapshot.as_ref(),
-		&cached_days.read(),
-		today,
-		local_overlay.read().as_ref(),
-	);
+	let running = sleep::running(&nearby_events.read());
 	let settled = snapshot
 		.as_ref()
 		.is_some_and(|snapshot| (snapshot.day - today).num_days().abs() <= 1);
@@ -738,12 +699,10 @@ fn Main() -> Element {
 			let result = editor::worker(move || sleep::press(&settings, night, format)).await;
 			sleep_busy.set(false);
 			match result {
-				Ok(saved) => {
-					// Other cached days holding the night must not say it is
-					// still running.
-					cached_days.write().replace_habit_occurrence(&saved);
+				Ok(_) => {
 					revision.set(revision() + 1);
 				}
+
 				Err(message) => sleep_error.set(Some(message)),
 			}
 		});
@@ -1219,10 +1178,8 @@ fn Main() -> Element {
 		});
 
 	let create_sheet = show_create().then(|| {
-		let store = cached_days.read();
-		let calendars = store.calendars.clone();
-		let default_calendar = store.default_calendar_id(&settings);
-		drop(store);
+		let calendars = calendar_sources();
+		let default_calendar = calendar::default_calendar_id(&calendars, &settings);
 		rsx! {
 			create::CreateSheet {
 				models: config.read().voice.clone(),
@@ -1303,12 +1260,7 @@ fn Main() -> Element {
 	});
 
 	let travel_sheet = show_travel().then(|| {
-		let connections = travel::connections(
-			selected_day,
-			snapshot.as_ref(),
-			&cached_days.read(),
-			&config.read(),
-		);
+		let connections = travel::connections(selected_day, snapshot.as_ref(), &config.read());
 		rsx! {
 			travel::TravelSheet {
 				config,
@@ -1598,10 +1550,10 @@ fn Main() -> Element {
 	});
 
 	let view_modal = view_sheet().map(|view_tab| {
-		let store = cached_days.read();
-		let sections = day::source_sections(&store.display_sources(&settings), &settings);
-		let no_calendars = store.calendars.is_empty();
-		drop(store);
+		let calendars = calendar_sources();
+		let sections =
+			day::source_sections(&calendar::display_sources(&calendars, &settings), &settings);
+		let no_calendars = calendars.is_empty();
 		let travel_shown = config.read().travel.show;
 		let error = calendars_error().map(|message| {
 			rsx! { p { class: "error-text", "{message}" } }
@@ -1621,7 +1573,7 @@ fn Main() -> Element {
 							role: "switch",
 							aria_checked: enabled.to_string(),
 							onclick: move |_| {
-								let calendars = cached_days.peek().calendars.clone();
+								let calendars = calendar_sources();
 								match day::set_source_enabled(&calendars, &id, !enabled) {
 									Ok(saved) => {
 										config.set(saved);
@@ -3121,6 +3073,7 @@ mod sheet_tests {
 			all_day.end = all_day.start + chrono::Duration::days(1);
 			private.details.location = "Secret office".into();
 			let snapshot = calendar::Snapshot {
+				revision: 0,
 				calendars: Vec::new(),
 				events: vec![private, public, all_day],
 				day: today(),
@@ -3200,6 +3153,7 @@ mod sheet_tests {
 	fn list_app(tab: TaskTab) -> Element {
 		let start = Local.with_ymd_and_hms(2026, 11, 4, 0, 0, 0).unwrap();
 		let snapshot = calendar::Snapshot {
+			revision: 0,
 			calendars: Vec::new(),
 			events: Vec::new(),
 			day: today(),

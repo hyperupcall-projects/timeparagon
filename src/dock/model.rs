@@ -81,7 +81,7 @@ pub fn segments(
 		})
 		.collect();
 
-	let all = store.events_on(day);
+	let all = &store.events;
 	let sources = store.display_sources(settings);
 
 	let mut found: Vec<Segment> = timed
@@ -268,6 +268,7 @@ mod tests {
 
 	fn store(events: Vec<Event>, day: NaiveDate) -> Store {
 		Store::with_snapshot(Snapshot {
+			revision: 0,
 			calendars: vec![calendar("work"), calendar("home")],
 			events,
 			day,

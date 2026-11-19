@@ -120,8 +120,10 @@ pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message>
 			if previous.calendar.day_start_hour() != state.config.calendar.day_start_hour() {
 				let day =
 					calendar::day_at(crate::clock::now(), state.config.calendar.day_start_hour());
+				state
+					.calendar
+					.set_day_end_hour(state.config.calendar.day_start_hour());
 				state.calendar.set_day(day, day);
-				state.calendar.forget_cached_days();
 			}
 			let mut tasks = vec![adopted];
 			let pane_widths_changed =
@@ -152,12 +154,11 @@ pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message>
 				}
 			}
 			if previous.calendar != state.config.calendar {
-				tasks.push(show_cached_calendar(state));
+				tasks.push(show_calendar(state));
 				if previous.calendar.sleep_schedule != state.config.calendar.sleep_schedule
 					|| previous.calendar.sleep_schedule_changes
 						!= state.config.calendar.sleep_schedule_changes
 				{
-					state.calendar.invalidate_other_days();
 					tasks.push(refresh_week_after_write(state));
 				}
 			}
@@ -229,9 +230,7 @@ pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message>
 			}
 			for event in added {
 				state.timeblocking.revision += 1;
-				state.calendar.events.retain(|other| other.id != event.id);
-				state.calendar.replace_cached_task(&event.id, &event);
-				state.calendar.add_event(event);
+				state.calendar.replace_task(&event.id, &event);
 			}
 			Task::done(Message::Calendar(CalendarMessage::CalendarSyncRequested))
 		}

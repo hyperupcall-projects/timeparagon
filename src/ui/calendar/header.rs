@@ -159,10 +159,10 @@ pub(super) fn all_day_row<'a>(state: &'a State, metrics: &Metrics) -> Option<Ele
 }
 
 /// A day task needs a slot unless its linked block is present on that day.
-pub(super) fn task_needs_slot(state: &State, event: &Event, day: NaiveDate) -> bool {
+pub(super) fn task_needs_slot(state: &State, event: &Event, _day: NaiveDate) -> bool {
 	crate::timeblocking::needs_slot(
 		event,
-		state.calendar.events_on(day),
+		&state.calendar.events,
 		crate::timeblocking::day_start_hour(state),
 	)
 }
@@ -204,7 +204,7 @@ pub(super) fn all_day_row_on<'a>(
 	let unslotted = state
 		.calendar
 		.events_on(day)
-		.iter()
+		.into_iter()
 		.filter(|event| crate::timeblocking::unslotted_on(event, day, now))
 		.count();
 	events.retain(|event| {

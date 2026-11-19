@@ -38,11 +38,12 @@ The schema version is stored in `PRAGMA user_version`.
 | `user_version` | Meaning |
 | --- | --- |
 | `0` | New file. `Database::open` creates the schema. |
-| `2`, `3`, `4`, `5`, `6`, `7` | Upgraded to 8 on open: see below. |
+| `2` through `8` | Upgraded to 9 on open: see below. |
 | `6` | Like 5, with the app's tables, indexes and triggers prefixed `timeparagon_` instead of `timeslay_`, and the built-in calendar sources' IDs prefixed `timeparagon:` instead of `timeslay:`. |
 | `7` | Adds the synced `notes` metadata table. |
-| `8` | Current (`task_db::SCHEMA_VERSION`). Creates the incremental Google sync cache during upgrade and reinstalls synced data tables and triggers. |
-| anything else | Refused: `Unsupported database schema N; expected 8`. |
+| `8` | Creates the incremental Google sync cache during upgrade and reinstalls synced data tables and triggers. |
+| `9` | Current (`task_db::SCHEMA_VERSION`). Removes monthly view snapshots, separates confirmed tasks from desired edits, and tracks changes to all calendar inputs. |
+| anything else | Refused: `Unsupported database schema N; expected 9`. |
 
 Builds from before version 5 refuse a version 5 file, so every TimeParagon
 process on a device (panel, dock, shortcut daemon, browser host) has to be
@@ -54,6 +55,15 @@ Every statement in setup is idempotent (`CREATE … IF NOT EXISTS`,
 processes setting up at once, or a crash halfway through, cause no harm. Once a
 file is stamped with the current version, setup is skipped, because the apps
 open the database many times a minute.
+
+**8 → 9** drops `calendar_months` and the `calendar_task_snapshot` marker.
+Confirmed Google Tasks are rebuilt from `google_sync_tasks`; pending edits,
+stable ID mappings, sync tokens, coverage and sleep records are preserved.
+Stored Calendar and sleep event JSON is converted from channel-array colors to
+the same `Event` format used by task and local-operation records. New triggers
+track source event, task and coverage changes for the shared calendar reader.
+The conversion and table removal share the schema transaction; there is no
+runtime reader for the retired format.
 
 **7 → 8** creates the six `google_sync_*` tables and the
 `google_sync_events_series` index, which were previously created only when
@@ -105,10 +115,6 @@ erDiagram
     documents {
         TEXT key PK
         TEXT value "JSON"
-    }
-    calendar_months {
-        TEXT month PK "YYYY-MM"
-        TEXT events "JSON"
     }
     google_task_records {
         TEXT id PK
@@ -176,7 +182,7 @@ The tables fall into six groups:
 | --- | --- | --- |
 | [Tasks](#tasks) | `tasks`, `task_aliases` | `task_db::Database::set_up` |
 | [Documents](#documents) | `documents` | `task_db::Database::set_up` |
-| [Google cache](#google-cache) | `calendar_months`, `google_task_records` | `task_db::Database::set_up` |
+| [Google cache](#google-cache) | `google_sync_events`, `google_task_records`, `google_sync_windows` | `task_db::Database::set_up` |
 | [Google writes](#google-writes) | `google_entities`, `google_id_map`, `google_task_backend_state` | `task_db::Database::set_up` |
 | [Settings](#settings) | `settings`, `device_settings`, `calendar_sources`, `sleep_schedule`, `sleep_schedule_changes`, `weekly_task_order`, `places`, `event_places`, `travel_modes`, `travel_routes`, `reminders` | `settings::schema::CREATE`, from `task_db::Database::set_up` |
 | [Change detection](#change-detection) | `timeparagon_change_counters` + triggers | `local_changes::install` |
@@ -267,8 +273,7 @@ empty value, so callers can refuse to save over data they could not read.
 | `shared_data_modified_ms` | — | integer as text | `shared_data::store` | When a `shared.*` document last changed, in ms since the epoch |
 | `contacts` | — | `people::cache::File` | People screen | Raw Google People API responses per signed-in account |
 | `routes` | — | `Vec<travel::Stored>` | Desktop travel | Cached Mapbox trip times: `[{from,to,mode,seconds,meters}]` |
-| `calendar_sync_state` | — | `day_cache::SyncState` | Calendar refresh | `{"fetched_at", "calendars": [{id,name,color,primary,selected_by_google}]}` |
-| `calendar_task_snapshot` | — | `true` | Google task refresh | Marks that `google_task_records` holds a complete task snapshot |
+| `calendar_sync_state` | — | `repository::SyncState` | Calendar refresh | `{"fetched_at", "calendars": [{id,name,color,primary,selected_by_google}], "notice"}` |
 | `dioxus_theme` | — | `String` | Android app | Theme name. The Android home-screen widget reads it directly with SQL (`DayRenderer.kt`) |
 | `settings_imported_at` | — | RFC 3339 string | Schema 5 setup | When this database imported `config.toml`, or found none to import. Present means it never imports one again |
 
@@ -302,39 +307,29 @@ These tables let a cold start show the calendar right away and let the app
 work offline. You can delete their contents at any time. The next refresh
 fetches them again.
 
-### `calendar_months`
-
-```sql
-CREATE TABLE calendar_months (
-  month  TEXT PRIMARY KEY,   -- "YYYY-MM"
-  events TEXT NOT NULL       -- JSON: {"events": [SavedEvent]}
-);
-```
-
-One row per calendar month that has been viewed, holding every event fetched
-for it. `SavedEvent` is an [`Event`](./data-model.md#event) with the color
-written as four `f32` channels `[r,g,b,a]`, because the UI color type has no
-serde support. Times are RFC 3339 with an offset.
-
-The memory cache and this table are trimmed by the same rule: the day in view,
-the day either side of it, and the 10 nearest other days are kept
-(`calendar::days_to_drop`). `day_cache::clear` empties the table and the
-`calendar_sync_state` document together.
-
 ### `google_task_records`
 
 ```sql
 CREATE TABLE google_task_records (
-  id    TEXT PRIMARY KEY,   -- Event.id ("task:<googleTaskId>" or a Calendar task id)
-  event TEXT NOT NULL       -- JSON: calendar::Event
+  id    TEXT PRIMARY KEY,   -- Event.id: "task:<googleTaskId>"
+  event TEXT NOT NULL       -- JSON: calendar::Event, confirmed data only
 );
 ```
 
-The last known copy of every task, both undated Google Tasks and dated Calendar
-tasks. Unlike calendar events, tasks are not bound to a month, so they are
-kept here. A full refresh replaces the whole table in one transaction
-(and sets `calendar_task_snapshot`). Local edits update rows as they are made,
-and a write Google refuses puts the previous row back.
+Normalized confirmed Google Tasks, built from the raw incremental task feed.
+A successful complete Tasks refresh replaces the table in one transaction;
+a failed Tasks refresh preserves its records. Scheduled Calendar tasks belong
+to `google_sync_events`. Desired local changes live only in `google_entities`;
+a rejected edit reveals the confirmed row without a rollback copy.
+
+All calendar consumers call `calendar::repository::read`. In one read
+transaction it reads the confirmed source rows, applies local operations once,
+filters the requested dates and sorts the result. `sleep_nights` owns sleep
+records; sleep copies in the Google feed are excluded from view assembly.
+The result includes explicit date coverage and a database revision. An empty
+covered date is a cache hit, and an uncovered date can still show local items.
+The UI holds one event set for its loaded range. Navigation and rendering never
+write snapshots to the database.
 
 ### Incremental Google sync cache
 
@@ -369,7 +364,7 @@ sequenceDiagram
     participant DB as SQLite
     participant W as Write worker (one per process)
     participant G as Google
-    UI->>DB: record (one IMMEDIATE tx):<br/>google_entities ← new event JSON, sending_since = now<br/>google_task_records / tasks / task_aliases
+    UI->>DB: record (one IMMEDIATE tx):<br/>google_entities ← new event JSON, sending_since = now<br/>tasks / task_aliases
     UI->>UI: overlay shows the edit, greyed out and locked
     UI->>W: the Job, over a channel
     W->>W: log "Saving to Google: …"
@@ -378,7 +373,7 @@ sequenceDiagram
         W->>DB: record google_id_map / backend state,<br/>stamp acknowledged_at, clear sending_since
         W->>W: log "Saved to Google: …"
     else failure
-        W->>DB: delete the google_entities row,<br/>put the previous google_task_records row back
+        W->>DB: delete the google_entities row;<br/>confirmed source data remains available
         W->>W: log "Could not save to Google: …: error"
         UI->>G: fetch again, so the item shows what Google has
     end

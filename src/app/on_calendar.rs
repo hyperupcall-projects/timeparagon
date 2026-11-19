@@ -53,7 +53,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 				} else {
 					Task::none()
 				};
-				Task::batch([navigation, close, scroll, show_cached_calendar(state)])
+				Task::batch([navigation, close, scroll, show_calendar(state)])
 			} else {
 				Task::batch([navigation, close])
 			}
@@ -70,7 +70,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 				state.week_anchor = state.calendar.day;
 			}
 			let resize = range_view_transition(state, was_wide, Task::none());
-			Task::batch([navigation, resize, show_cached_calendar(state)])
+			Task::batch([navigation, resize, show_calendar(state)])
 		}
 		CalendarMessage::CalendarScheduleViewSelected => {
 			let navigation = planning_sidebar(state);
@@ -88,7 +88,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 				navigation,
 				resize,
 				ui::calendar::scroll_week_to_start(),
-				show_cached_calendar(state),
+				show_calendar(state),
 			])
 		}
 		CalendarMessage::CalendarTwoWeekViewSelected => {
@@ -105,7 +105,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 				state.week_anchor = state.calendar.day;
 			}
 			let resize = range_view_transition(state, was_wide, Task::none());
-			Task::batch([navigation, resize, show_cached_calendar(state)])
+			Task::batch([navigation, resize, show_calendar(state)])
 		}
 		CalendarMessage::CalendarTwoWeekMore(day) => {
 			state.two_week_more = day;
@@ -147,7 +147,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 				calendar::day_at(crate::clock::now(), state.config.calendar.day_start_hour());
 			state.calendar.set_day(day, today);
 			let close = crate::timeblocking::close(state);
-			Task::batch([close, show_cached_calendar(state)])
+			Task::batch([close, show_calendar(state)])
 		}
 		CalendarMessage::WeekHover(day) => {
 			state.week_hover = day;
@@ -339,13 +339,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 		CalendarMessage::CalendarAutoSyncRequested => {
 			Task::batch([auto_sync_calendar(state), crate::notes::refresh(state)])
 		}
-		CalendarMessage::CalendarResyncRequested => {
-			// Days parked in memory and on disk would paint before the next
-			// visit fetched them. Drop them so the resync is the source of
-			// truth. The day in view stays up until its own fetch lands.
-			state.calendar.invalidate_other_days();
-			sync_calendar(state)
-		}
+		CalendarMessage::CalendarResyncRequested => sync_calendar(state),
 		CalendarMessage::CalendarSyncedAt(revision, result) => {
 			if revision != state.timeblocking.revision {
 				state.calendar.sync = SyncState::Idle;
@@ -374,7 +368,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 						});
 					}
 					let remember = remember_app_calendar(state, &snapshot);
-					state.calendar.cache_fetched_snapshot(snapshot, &dates);
+					state.calendar.accept_snapshot(snapshot, &dates);
 					state.calendar.apply_task_colors(&state.config.calendar);
 					let reconcile = reconcile_completed_task(state);
 					let fetch = fetch_pending_calendar_days(state, &dates);
@@ -406,7 +400,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 			}
 			let remember = remember_app_calendar(state, &snapshot);
 			let day = snapshot.day;
-			state.calendar.cache_fetched_snapshot(snapshot, &[day]);
+			state.calendar.accept_snapshot(snapshot, &[day]);
 			state.calendar.apply_task_colors(&state.config.calendar);
 			let reconcile = reconcile_completed_task(state);
 			let fetch = fetch_pending_calendar_days(state, &[day]);
@@ -478,7 +472,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 			} else {
 				Task::none()
 			};
-			Task::batch([close, scroll, show_cached_calendar(state)])
+			Task::batch([close, scroll, show_calendar(state)])
 		}
 		CalendarMessage::CalendarDaySelected(day) => {
 			state.two_week_more = None;
@@ -504,7 +498,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 			} else {
 				Task::none()
 			};
-			Task::batch([close, scroll, show_cached_calendar(state)])
+			Task::batch([close, scroll, show_calendar(state)])
 		}
 		CalendarMessage::CalendarMonthToggled(MonthPicker::Panel) => {
 			state.calendar.month_open = !state.calendar.month_open;
@@ -552,10 +546,10 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 			state.calendar.set_day(day, today);
 			state.calendar.month_open = false;
 			if !state.range_view_active() {
-				return show_cached_calendar(state);
+				return show_calendar(state);
 			}
 			state.panel_day_wanted = state.calendar.is_signed_in()
-				&& !state.calendar.has_calendar_events_on(day)
+				&& !state.calendar.is_covered(day)
 				&& !state.calendar_dates().contains(&day);
 			if state.panel_day_wanted {
 				sync_calendar(state)
@@ -574,7 +568,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 			Task::batch([
 				close,
 				ui::calendar::scroll_week_to_start(),
-				show_cached_calendar(state),
+				show_calendar(state),
 			])
 		}
 	}

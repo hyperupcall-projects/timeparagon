@@ -104,7 +104,10 @@ pub fn load(
 	if !super::operations::replaying()
 		&& let Some(data) = database.pending_task_data(event)?
 	{
-		return Ok(data);
+		return Ok(read(&event.details.description)?.unwrap_or(TaskData {
+			id: data.id,
+			metadata: Default::default(),
+		}));
 	}
 	if let Some(data) = read(&event.details.description)? {
 		database.cache_remote(event, &data)?;

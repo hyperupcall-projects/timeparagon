@@ -157,7 +157,7 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
 				&& !state
 					.calendar
 					.events_on(day)
-					.iter()
+					.into_iter()
 					.any(|event| state.habits.matches_calendar_habit(event))
 			{
 				events = events.push(

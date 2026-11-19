@@ -236,7 +236,7 @@ fn switching_to_a_cached_day_without_sleep_does_not_request_detection() {
 		.unwrap();
 	event.end = event.start + Duration::hours(1);
 	state.calendar.events.push(event);
-	assert!(state.calendar.has_calendar_events_on(state.calendar.day));
+	assert!(state.calendar.is_covered(state.calendar.day));
 	state.calendar.connection = calendar::Connection::SignedIn;
 	state.calendar.last_sync = Some(Local::now());
 	let day = state.calendar.day;

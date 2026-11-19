@@ -12,7 +12,7 @@ pub(super) mod store;
 
 pub const SOURCE_ID: &str = "timeparagon:sleep";
 pub const NEW_ID: &str = "new-sleep";
-pub const COLOR: Color = Color::from_rgb(0.48, 0.50, 0.53);
+pub const COLOR: Color = Color::from_rgb8(0x7A, 0x80, 0x87);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Record {
@@ -441,37 +441,6 @@ fn fetch_nights(
 	}
 }
 
-/// The nights stored for `first..=last` (as Google last had them, from this
-/// device or another one through database sync), with this device's unsent
-/// edits on top. For showing nights again when
-/// [`Counters::sleep`](crate::local_changes::Counters) moves.
-pub fn stored_nights(
-	path: &std::path::Path,
-	first: NaiveDate,
-	last: NaiveDate,
-) -> Result<Vec<Event>, String> {
-	let around = |day: NaiveDate| super::at_clock(day, 0, 0).to_utc();
-	let mut nights = {
-		let mut database = crate::task_db::Database::open(path)?;
-		store::overlapping(
-			database.connection(),
-			around(first - Duration::days(1)),
-			around(last + Duration::days(2)),
-		)
-	};
-	super::operations::overlay(path, &mut nights, None)?;
-	// The overlay can add pending events of any kind; only nights are wanted.
-	nights.retain(|night| night.details.sleep.is_some());
-	Ok(nights)
-}
-
-/// Puts stored nights into `day`'s events, each replacing any older copy of
-/// the same night, keeping only what falls on the day.
-pub fn merge_stored(events: &mut Vec<Event>, nights: &[Event], day: NaiveDate, day_end_hour: u32) {
-	store::merge(nights.iter().cloned(), events);
-	events.retain(|event| super::event_on_day(event, day, day_end_hour));
-}
-
 /// Records a night as Google now has it in the local store.
 fn remember(event: &Event) {
 	if let Some(path) = crate::task_db::path()
@@ -608,11 +577,11 @@ pub fn sync(
 			});
 		}
 	}
-	snapshot.events.retain(|event| {
-		dates
-			.iter()
-			.any(|&day| super::event_on_day(event, day, settings.day_start_hour()))
-	});
+	let path = crate::task_db::path().ok_or("Cannot locate database")?;
+	let notice = snapshot.notice;
+	let mut snapshot = super::repository::read(&path, dates, settings.day_start_hour())?.snapshot;
+	snapshot.day = anchor;
+	snapshot.notice = notice;
 	Ok(snapshot)
 }
 

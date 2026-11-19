@@ -244,35 +244,58 @@ fn finish(
 		Err(error) => (Vec::new(), Vec::new(), Some(tasks_notice(&error))),
 	};
 	events.extend(task_events);
-	if let Some(path) = crate::task_db::path() {
-		reconcile_task_metadata_and_overlay(&path, &mut events, fetch_started, |event, data| {
-			super::task_metadata::save(access_token, event, data)
-		})?;
-		super::operations::observe_range(&path, &events, first, last, fetch_started, day_end_hour)?;
-	}
-	super::operations::cache_tasks(&events, tasks_loaded)?;
-	// Changes made elsewhere (Google's site, another device) may have left
-	// time blocks out of step.
-	super::operations::request_reconcile();
+	let path = crate::task_db::path().ok_or("Cannot locate database")?;
+	reconcile_task_metadata(&path, &mut events, |event, data| {
+		super::task_metadata::save(access_token, event, data)
+	})?;
+	super::operations::observe_range(
+		&path,
+		&events,
+		first,
+		last,
+		fetch_started,
+		day_end_hour,
+		tasks_loaded,
+	)?;
+	super::repository::save_tasks(&path, &events, tasks_loaded)?;
 	calendars.extend(task_calendars);
-	events.sort_by(|left, right| left.start.cmp(&right.start).then(right.end.cmp(&left.end)));
-
-	Ok(Snapshot {
-		calendars,
-		events,
-		day,
-		fetched_at: fetch_started,
-		notice,
-	})
+	let mut database = crate::task_db::Database::open(&path)?;
+	let tx = database
+		.connection()
+		.transaction()
+		.map_err(|e| e.to_string())?;
+	if !tasks_loaded {
+		if let Some(previous) = super::repository::state(&tx)? {
+			calendars.extend(
+				previous
+					.calendars
+					.into_iter()
+					.filter(Calendar::is_task_list),
+			);
+		}
+	}
+	super::repository::save_state(
+		&tx,
+		&super::repository::SyncState {
+			calendars,
+			fetched_at: fetch_started,
+			notice,
+		},
+	)?;
+	tx.commit().map_err(|e| e.to_string())?;
+	super::operations::request_reconcile();
+	let dates: Vec<_> = first.iter_days().take_while(|date| *date <= last).collect();
+	let mut snapshot = super::repository::read(&path, &dates, day_end_hour)?.snapshot;
+	snapshot.day = day;
+	Ok(snapshot)
 }
 
 /// Publish changes from the remote merge while events still carry Google IDs.
 /// The overlay substitutes stable local UI IDs and pending edits; neither may
 /// be sent directly to Google by this reconciliation pass.
-fn reconcile_task_metadata_and_overlay(
+fn reconcile_task_metadata(
 	path: &std::path::Path,
 	events: &mut Vec<Event>,
-	fetched_at: DateTime<Local>,
 	mut publish: impl FnMut(&Event, &crate::task_db::TaskData) -> Result<(), String>,
 ) -> Result<(), String> {
 	let mut database = crate::task_db::Database::open(path)?;
@@ -291,7 +314,7 @@ fn reconcile_task_metadata_and_overlay(
 			database.save(event, data)?;
 		}
 	}
-	super::operations::overlay(path, events, Some(fetched_at))
+	Ok(())
 }
 
 /// The id of the app's TimeParagon calendar: the remembered id while it still
@@ -2652,13 +2675,11 @@ mod tests {
 	fn unchanged_remote_task_is_not_saved_under_its_local_ui_id() {
 		let (_dir, path, task) = mapped_task();
 		let mut events = vec![task];
-		super::reconcile_task_metadata_and_overlay(
-			&path,
-			&mut events,
-			crate::clock::now(),
-			|_, _| panic!("unchanged remote metadata must not be published"),
-		)
+		super::reconcile_task_metadata(&path, &mut events, |_, _| {
+			panic!("unchanged remote metadata must not be published")
+		})
 		.unwrap();
+		super::super::operations::overlay(&path, &mut events, None).unwrap();
 		assert_eq!(events[0].id, "task:local-id");
 		// The UI identity has no database alias; checking it after overlay was
 		// what triggered a spurious save to an invalid Google task ID.
@@ -2690,25 +2711,21 @@ mod tests {
 			.unwrap();
 		let mut events = vec![task.clone()];
 		let mut sent = Vec::new();
-		super::reconcile_task_metadata_and_overlay(
-			&path,
-			&mut events,
-			crate::clock::now(),
-			|event, data| {
-				sent.push((
-					event.id.clone(),
-					event.calendar_id.clone(),
-					data.metadata.minutes,
-				));
-				Ok(())
-			},
-		)
+		super::reconcile_task_metadata(&path, &mut events, |event, data| {
+			sent.push((
+				event.id.clone(),
+				event.calendar_id.clone(),
+				data.metadata.minutes,
+			));
+			Ok(())
+		})
 		.unwrap();
 		assert_eq!(
 			sent,
 			[("task:google-id".into(), "tasks:google-list".into(), 45)]
 		);
 		assert_eq!(db.lookup(&task).unwrap(), task.details.task_data);
+		super::super::operations::overlay(&path, &mut events, None).unwrap();
 		assert_eq!(events[0], pending);
 	}
 
@@ -2739,13 +2756,12 @@ mod tests {
 			.unwrap();
 		remote.details.task_data.as_mut().unwrap().metadata.minutes = 45;
 		let mut events = vec![remote];
-		super::reconcile_task_metadata_and_overlay(
-			&path,
-			&mut events,
-			crate::clock::now(),
-			|_, _| panic!("pending edits must not be overwritten by reconciliation"),
-		)
+		super::reconcile_task_metadata(&path, &mut events, |_, _| {
+			panic!("pending edits must not be overwritten by reconciliation")
+		})
 		.unwrap();
+		assert!(crate::timeblocking::metadata(&events[0]).block.is_none());
+		super::super::operations::overlay(&path, &mut events, None).unwrap();
 		assert_eq!(
 			crate::timeblocking::metadata(&events[0]).block.as_deref(),
 			Some("app/new-block")
@@ -2760,15 +2776,10 @@ mod tests {
 		task.details.task_data.as_mut().unwrap().metadata.minutes = 45;
 		let mut events = vec![task];
 		assert_eq!(
-			super::reconcile_task_metadata_and_overlay(
-				&path,
-				&mut events,
-				crate::clock::now(),
-				|event, _| {
-					assert_eq!(event.id, "task:google-id");
-					Err("offline".into())
-				}
-			),
+			super::reconcile_task_metadata(&path, &mut events, |event, _| {
+				assert_eq!(event.id, "task:google-id");
+				Err("offline".into())
+			}),
 			Err("offline".into())
 		);
 		assert_eq!(events[0].id, "task:google-id");

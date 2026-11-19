@@ -135,9 +135,6 @@ struct Write {
 	/// What it does, for the log: "Edit task Title “Buy milk”".
 	label: String,
 	job: Job,
-	/// The cached task record it replaced, restored if Google refuses it:
-	/// the record's ID and its JSON before (`None` when there was none).
-	previous_task: Option<(String, Option<String>)>,
 	/// Told Google's answer, for a caller waiting on it (see [`submit_and_wait`]).
 	done: Option<mpsc::Sender<Result<(), String>>>,
 }
@@ -787,18 +784,8 @@ fn record_in(
 			.cloned()
 			.unwrap_or_else(|| deleted_block(calendar, id));
 		let hour = crate::config::Config::load().calendar.day_start_hour();
-		let children = {
-			let mut q = tx
-				.prepare("SELECT event FROM google_task_records")
-				.map_err(|e| e.to_string())?;
-			q.query_map([], |row| row.get::<_, String>(0))
-				.map_err(|e| e.to_string())?
-				.map(|row| {
-					serde_json::from_str::<Event>(&row.map_err(|e| e.to_string())?)
-						.map_err(|e| e.to_string())
-				})
-				.collect::<Result<Vec<_>, _>>()?
-		};
+		let children = super::repository::events(&tx)?;
+
 		if with_tasks.is_some() {
 			// The one-offs in every occurrence deleted go with them. Tasks
 			// repeating with the block are their own series, which sending
@@ -986,30 +973,13 @@ fn record_tx(
 				.map_err(|e| e.to_string())?;
 		}
 	}
-	let record_id = event.filter(|e| e.is_task()).map_or(id, |e| e.id.as_str());
-	let previous_task = tx
-		.query_row(
-			"SELECT event FROM google_task_records WHERE id=?1",
-			[record_id],
-			|r| r.get::<_, String>(0),
-		)
-		.optional()
-		.map_err(|e| e.to_string())?;
-	let touches_task = previous_task.is_some() || event.is_some_and(Event::is_task);
+
 	(|| -> rusqlite::Result<()> {
         tx.execute(
             "INSERT INTO google_entities(id,event,acknowledged_at,observed_at,sending_since) VALUES(?1,?2,NULL,NULL,?3) ON CONFLICT(id) DO UPDATE SET event=excluded.event,acknowledged_at=NULL,observed_at=NULL,sending_since=excluded.sending_since",
             params![entity, saved, crate::clock::utc_now().to_rfc3339()],
         )?;
-        // A deleted task stays in the cache, so it shows as being deleted
-        // until Google confirms it (see `finish`).
         if let Some(event) = event {
-            if event.is_task() {
-                tx.execute(
-                    "INSERT INTO google_task_records(id,event) VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET event=excluded.event",
-                    params![event.id, serde_json::to_string(event).unwrap()],
-                )?;
-            }
             if let Some(data) = &event.details.task_data {
                 tx.execute(
                     "INSERT INTO tasks(id,metadata) VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET metadata=excluded.metadata",
@@ -1034,14 +1004,13 @@ fn record_tx(
 		entity,
 		label,
 		job,
-		previous_task: touches_task.then(|| (record_id.to_owned(), previous_task)),
 		done: None,
 	})
 }
-/// What [`overlay`] applies, read from the database in one go so the reading
-/// can happen on a worker thread and the applying on the UI thread.
+/// Desired operations and stable IDs, read by the repository in its source
+/// transaction and applied exactly once while assembling a view.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct Overlay {
+pub(super) struct Overlay {
 	/// Remote ID to the local ID it was created under, so an item keeps the
 	/// ID the interface already knows it by.
 	aliases: HashMap<(String, String), String>,
@@ -1069,13 +1038,14 @@ struct OverlayEntity {
 }
 
 /// Reads the local snapshots of edited items and the ID map.
-pub fn load_overlay(database: &std::path::Path) -> Result<Overlay, String> {
+#[cfg(test)]
+fn load_overlay(database: &std::path::Path) -> Result<Overlay, String> {
 	let mut db = task_db::Database::open(database)?;
 	let tx = db.connection().transaction().map_err(|e| e.to_string())?;
 	read_overlay(&tx)
 }
 
-fn read_overlay(tx: &rusqlite::Connection) -> Result<Overlay, String> {
+pub(super) fn read_overlay(tx: &rusqlite::Connection) -> Result<Overlay, String> {
 	let mut aliases = HashMap::new();
 	{
 		let mut q = tx
@@ -1193,15 +1163,12 @@ impl Overlay {
 
 	/// Puts the database's desired state over `events`.
 	///
-	/// With `fetched_at`, the events came from a Google fetch started then,
-	/// and an edit Google had confirmed before that is not applied over them:
-	/// the fetch already shows it, or something newer. A confirmed edit is
-	/// still applied over a fetch that started before it was confirmed.
-	/// Without `fetched_at`, every row applies.
+	/// Synchronization observes acknowledged writes before any view is assembled.
+	/// The repository always projects the remaining desired state over source rows.
 	///
 	/// Items are matched with [`same_item`](crate::timeblocking::membership::same_item),
 	/// so an occurrence Google renamed is replaced rather than shown twice.
-	pub fn apply(&self, events: &mut Vec<Event>, fetched_at: Option<DateTime<Local>>) {
+	pub(super) fn apply(&self, events: &mut Vec<Event>) {
 		let mut remapped = std::collections::HashSet::new();
 		if !self.aliases.is_empty() {
 			for event in events.iter_mut() {
@@ -1233,15 +1200,12 @@ impl Overlay {
 				}
 			}
 		}
-		let applies = |entity: &&OverlayEntity| match (fetched_at, entity.acknowledged_at) {
-			(Some(fetched), Some(ack)) => fetched <= ack,
-			_ => true,
-		};
+
 		// There is one row per item (see `record_tx`), but rows written
 		// before that held may still overlap. The most current goes last so
 		// it is the one left standing: an edit on its way, then one Google
 		// confirmed, then what a fetch showed.
-		let mut entities: Vec<&OverlayEntity> = self.entities.iter().filter(applies).collect();
+		let mut entities: Vec<&OverlayEntity> = self.entities.iter().collect();
 		entities.sort_by_key(|entity| (!entity.observed, entity.sending));
 		let hour = self.day_start_hour;
 		let by_id = |entity: &OverlayEntity, e: &Event| {
@@ -1294,6 +1258,13 @@ impl Overlay {
 			events.retain(|e| {
 				let same = entity.event.as_ref().is_some_and(|saved| {
 					crate::timeblocking::membership::same_item(saved, e, hour)
+						|| (saved.calendar_id == e.calendar_id
+							&& saved
+								.details
+								.sleep
+								.as_ref()
+								.zip(e.details.sleep.as_ref())
+								.is_some_and(|(a, b)| a.wake_date == b.wake_date))
 				});
 				!by_id(entity, e) && !same
 			});
@@ -1331,52 +1302,35 @@ impl Overlay {
 
 /// Apply the database's desired state after every cache read and Google fetch.
 /// Confirmed writes remain protected against fetches that began before the ack.
-pub fn overlay(
+#[cfg(test)]
+pub(super) fn overlay(
 	database: &std::path::Path,
 	events: &mut Vec<Event>,
 	fetched_at: Option<DateTime<Local>>,
 ) -> Result<(), String> {
-	load_overlay(database)?.apply(events, fetched_at);
+	// Exercise the same observe-then-project lifecycle as a real refresh.
+	if let Some(fetched) = fetched_at {
+		let first = events
+			.iter()
+			.map(|event| event.start.date_naive())
+			.min()
+			.unwrap_or_else(|| crate::clock::now().date_naive());
+		let last = events
+			.iter()
+			.map(|event| event.end.date_naive())
+			.max()
+			.unwrap_or(first);
+		observe_range(database, events, first, last, fetched, 0, true)?;
+	}
+	load_overlay(database)?.apply(events);
 	Ok(())
 }
 
 pub fn cached_event(calendar: &str, id: &str) -> Result<Option<Event>, String> {
-	let mut db = task_db::open()?;
-	let json: Option<String> = db
-        .connection()
-        .query_row(
-            "SELECT event FROM google_entities WHERE json_extract(event,'$.id')=?1 AND (id=?2 OR json_extract(event,'$.calendar_id')=?3) AND (acknowledged_at IS NULL OR acknowledged_at > COALESCE((SELECT json_extract(value,'$.fetched_at') FROM documents WHERE key='calendar_sync_state'),''))",
-            params![id, key(calendar, id), calendar],
-            |r| r.get(0),
-        )
-        .optional()
-        .map_err(|e| e.to_string())?
-        .flatten();
-	if let Some(json) = json {
-		return serde_json::from_str(&json)
-			.map(Some)
-			.map_err(|e| e.to_string());
-	}
-	let mut q = db
-		.connection()
-		.prepare("SELECT events FROM calendar_months")
-		.map_err(|e| e.to_string())?;
-	let rows = q
-		.query_map([], |r| r.get::<_, String>(0))
-		.map_err(|e| e.to_string())?;
-	for row in rows {
-		let json = row.map_err(|e| e.to_string())?;
-		let month: serde_json::Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-		for value in month["events"].as_array().into_iter().flatten() {
-			if value["id"] == id && value["calendar_id"] == calendar {
-				let saved: super::day_cache::SavedEvent =
-					serde_json::from_value(value.clone()).map_err(|e| e.to_string())?;
-				return Ok(Some(saved.into()));
-			}
-		}
-	}
-	Ok(None)
+	let path = task_db::path().ok_or("Cannot locate database")?;
+	super::repository::event(&path, calendar, id)
 }
+
 /// A successful write that gave something a new ID: the local ID, Google's,
 /// and the calendar or task list it is on.
 type Mapping = Option<(String, String, String)>;
@@ -1393,7 +1347,6 @@ fn send_in(
 		entity,
 		label,
 		job,
-		previous_task,
 		done,
 	} = write;
 	let deletes = matches!(job, Job::Delete { .. } | Job::DeleteTask { .. });
@@ -1413,7 +1366,7 @@ fn send_in(
 			result
 		});
 	let last = end(path, &entity);
-	let recorded = finish(path, &entity, &outcome, last, deletes, previous_task);
+	let recorded = finish(path, &entity, &outcome, last, deletes);
 	match &outcome {
 		Ok(_) => log_write(format!("Saved to Google: {label}"), false),
 		Err(error) => log_write(format!("Could not save to Google: {label}: {error}"), true),
@@ -1436,7 +1389,6 @@ fn finish(
 	outcome: &Result<Mapping, google::GoogleError>,
 	last: bool,
 	deletes: bool,
-	previous_task: Option<(String, Option<String>)>,
 ) -> Result<(), String> {
 	let mut db = task_db::Database::open(path)?;
 	let tx = db
@@ -1448,11 +1400,18 @@ fn finish(
 			if let Some((local, remote, calendar)) = mapping {
 				tx.execute("INSERT INTO google_id_map(local,remote,calendar) VALUES(?1,?2,?3) ON CONFLICT(local) DO UPDATE SET remote=excluded.remote,calendar=excluded.calendar",params![local,remote,calendar]).map_err(|e|e.to_string())?;
 			}
-			// A deleted task leaves the cache once Google has deleted it.
-			if deletes && let Some((id, _)) = &previous_task {
-				tx.execute("DELETE FROM google_task_records WHERE id=?1", [id])
+			if deletes {
+				if let Some((calendar, id)) = entity.split_once('\n') {
+					tx.execute("DELETE FROM google_task_records WHERE id=?1", [id])
+						.map_err(|e| e.to_string())?;
+					tx.execute(
+						"DELETE FROM google_sync_events WHERE calendar_id=?1 AND id=?2",
+						params![calendar, id],
+					)
 					.map_err(|e| e.to_string())?;
+				}
 			}
+
 			// A later write for the same item is still on its way, and its
 			// wanted state is the one to keep showing, locked.
 			if last {
@@ -1466,17 +1425,6 @@ fn finish(
 		Err(_) if last => {
 			tx.execute("DELETE FROM google_entities WHERE id=?1", [entity])
 				.map_err(|e| e.to_string())?;
-			match previous_task {
-                Some((id, Some(json))) => tx.execute(
-                    "INSERT INTO google_task_records(id,event) VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET event=excluded.event",
-                    params![id, json],
-                ),
-                Some((id, None)) => {
-                    tx.execute("DELETE FROM google_task_records WHERE id=?1", [id])
-                }
-                None => Ok(0),
-            }
-            .map_err(|e| e.to_string())?;
 		}
 		Err(_) => {}
 	}
@@ -1928,36 +1876,6 @@ pub fn create_task_at(
 	Ok(task)
 }
 
-pub(super) fn cache_tasks(events: &[Event], replace: bool) -> Result<(), String> {
-	cache_tasks_in(
-		&task_db::path().ok_or("Cannot locate database")?,
-		events,
-		replace,
-	)
-}
-
-fn cache_tasks_in(path: &std::path::Path, events: &[Event], replace: bool) -> Result<(), String> {
-	let mut db = task_db::Database::open(path)?;
-	let tx = db
-		.connection()
-		.transaction_with_behavior(TransactionBehavior::Immediate)
-		.map_err(|e| e.to_string())?;
-	// Re-read the durable overlay under the write transaction. A UI edit or
-	// deletion may have committed since this fetch applied its first overlay.
-	let mut events = events.to_vec();
-	read_overlay(&tx)?.apply(&mut events, None);
-	if replace {
-		tx.execute("INSERT INTO documents(key,value) VALUES('calendar_task_snapshot','true') ON CONFLICT(key) DO UPDATE SET value=excluded.value", [])
-            .map_err(|e| e.to_string())?;
-		tx.execute("DELETE FROM google_task_records", [])
-			.map_err(|e| e.to_string())?;
-	}
-	for event in events.iter().filter(|e| e.is_task()) {
-		tx.execute("INSERT INTO google_task_records(id,event) VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET event=excluded.event",params![event.id,serde_json::to_string(event).map_err(|e|e.to_string())?]).map_err(|e|e.to_string())?;
-	}
-	tx.commit().map_err(|e| e.to_string())
-}
-
 /// What Google now holds for the item a `google_entities` row is about:
 /// the event with the row's ID or, when Google has renamed it, the same item
 /// under its new ID (see [`same_item`](crate::timeblocking::membership::same_item)).
@@ -2012,12 +1930,21 @@ pub(super) fn observe_range(
 	last: NaiveDate,
 	fetched: DateTime<Local>,
 	day_start_hour: u32,
+	tasks_loaded: bool,
 ) -> Result<(), String> {
 	let mut db = task_db::Database::open(path)?;
 	let tx = db
 		.connection()
 		.transaction_with_behavior(TransactionBehavior::Immediate)
 		.map_err(|e| e.to_string())?;
+	let aliases = read_overlay(&tx)?;
+	let mut observations = events.to_vec();
+	for event in &mut observations {
+		if let Some(local) = aliases.local_id(&event.calendar_id, &event.id) {
+			event.id = local;
+		}
+	}
+	let events = observations.as_slice();
 	let records = {
 		let mut q = tx
 			.prepare(
@@ -2047,10 +1974,30 @@ pub(super) fn observe_range(
 			.map(|j| serde_json::from_str::<Event>(j))
 			.transpose()
 			.map_err(|e| e.to_string())?;
+		if !tasks_loaded
+			&& old
+				.as_ref()
+				.is_some_and(|e| e.is_task() && !e.is_calendar_task())
+		{
+			continue;
+		}
 		let current = observed(calendar, id, old.as_ref(), events, day_start_hour);
 		let covered = current.is_some()
 			|| old.as_ref().is_some_and(|e| {
-				e.is_task() || (e.start.date_naive() <= last && e.end.date_naive() >= first)
+				e.is_task()
+					|| (e.start.date_naive() <= last && e.end.date_naive() >= first)
+					|| super::api::incremental::covers(
+						&tx,
+						super::at_clock(super::day_at(e.start, day_start_hour), day_start_hour, 0)
+							.to_utc(),
+						super::at_clock(
+							super::day_at(e.start, day_start_hour).succ_opt().unwrap(),
+							day_start_hour,
+							0,
+						)
+						.to_utc(),
+					)
+					.unwrap_or(false)
 			});
 		if covered {
 			if let Some(data) = current.and_then(|e| e.details.task_data.as_ref()) {
@@ -2240,7 +2187,7 @@ mod tests {
 		let mut task = super::super::sample_snapshot().events.remove(0);
 		task.id = "task:cached".into();
 		task.calendar_id = "tasks:list".into();
-		cache_tasks_in(&path, std::slice::from_ref(&task), true).unwrap();
+		super::super::repository::save_tasks(&path, std::slice::from_ref(&task), true).unwrap();
 		let mut edited = task.clone();
 		edited.title = "never reached Google".into();
 		let mut writes = record_in(
@@ -2255,7 +2202,10 @@ mod tests {
 		)
 		.unwrap();
 		send_in(&path, writes.remove(0), |_| Err("offline".into())).unwrap();
-		let restored = super::super::day_cache::load(&path, task.start.date_naive(), 0).unwrap();
+		let restored = super::super::repository::read(&path, &[task.start.date_naive()], 0)
+			.unwrap()
+			.snapshot
+			.events;
 		let restored = restored.iter().find(|e| e.id == task.id).unwrap();
 		assert_eq!(restored.title, task.title);
 		assert!(!restored.details.sending);
@@ -2312,7 +2262,7 @@ mod tests {
 		overlay(&path, &mut fetched, None).unwrap();
 		assert!(fetched.is_empty());
 		let day = event.start.date_naive();
-		observe_range(&path, &[], day, day, crate::clock::now(), 0).unwrap();
+		observe_range(&path, &[], day, day, crate::clock::now(), 0, true).unwrap();
 		assert_eq!(entities(&path), 0);
 	}
 	#[test]
@@ -2525,6 +2475,8 @@ mod tests {
 		)
 		.unwrap();
 
+		settle_series(&path, &entity).unwrap();
+		// The confirmed series worker has installed and settled the occurrences.
 		// The interface still holds the moved occurrence under its old ID.
 		let mut shown = vec![moved.clone()];
 		overlay(&path, &mut shown, None).unwrap();
@@ -2556,6 +2508,7 @@ mod tests {
 			day,
 			refreshed + chrono::Duration::seconds(2),
 			0,
+			true,
 		)
 		.unwrap();
 		let mut shown = vec![before.clone()];
@@ -2700,6 +2653,7 @@ mod tests {
 			day,
 			crate::clock::now() + chrono::Duration::seconds(1),
 			0,
+			true,
 		)
 		.unwrap();
 		// Another occurrence moves the whole series half an hour later.
@@ -2801,6 +2755,7 @@ mod tests {
 			day + chrono::Duration::days(1),
 			fetched,
 			0,
+			true,
 		)
 		.unwrap();
 		// What was shown before, the one-off, gives way to the occurrence.
@@ -2817,7 +2772,16 @@ mod tests {
 		assert_eq!(entities(&path), 1);
 		let day = event.start.date_naive();
 		let fetched = crate::clock::now() + chrono::Duration::seconds(1);
-		observe_range(&path, std::slice::from_ref(&event), day, day, fetched, 0).unwrap();
+		observe_range(
+			&path,
+			std::slice::from_ref(&event),
+			day,
+			day,
+			fetched,
+			0,
+			true,
+		)
+		.unwrap();
 		assert_eq!(
 			entities(&path),
 			1,
@@ -2831,6 +2795,7 @@ mod tests {
 			day,
 			fetched + chrono::Duration::minutes(30),
 			0,
+			true,
 		)
 		.unwrap();
 		assert_eq!(entities(&path), 1);
@@ -2841,6 +2806,7 @@ mod tests {
 			day,
 			fetched + chrono::Duration::hours(2),
 			0,
+			true,
 		)
 		.unwrap();
 		assert_eq!(entities(&path), 0);
@@ -2891,7 +2857,7 @@ mod tests {
 		let mut data = database.import(&child).unwrap();
 		data.metadata.block = Some(crate::timeblocking::block_key(&block));
 		child.details.task_data = Some(data);
-		cache_tasks_in(&path, &[child.clone()], true).unwrap();
+		super::super::repository::save_tasks(&path, &[child.clone()], true).unwrap();
 		let delete = Job::Delete {
 			calendar: block.calendar_id.clone(),
 			id: block.id.clone(),
@@ -2954,7 +2920,7 @@ mod tests {
 					child
 				})
 				.collect();
-			cache_tasks_in(&path, &children, true).unwrap();
+			super::super::repository::save_tasks(&path, &children, true).unwrap();
 			let delete = Job::Delete {
 				calendar: "app".into(),
 				id: block.id.clone(),
@@ -3080,7 +3046,7 @@ mod tests {
 		// Placed when the series ran at 9; it runs at 10 now.
 		data.metadata.block = Some(format!("app/blockseries_{}", stamp(9)));
 		child.details.task_data = Some(data);
-		cache_tasks_in(&path, &[child.clone()], true).unwrap();
+		super::super::repository::save_tasks(&path, &[child.clone()], true).unwrap();
 		let retimed = format!("blockseries_{}", stamp(10));
 		let delete = Job::Delete {
 			calendar: "app".into(),
@@ -3100,7 +3066,7 @@ mod tests {
 		task.id = "task:cached".into();
 		task.calendar_id = "tasks:list".into();
 		task.all_day = false;
-		cache_tasks_in(&path, &[task.clone()], true).unwrap();
+		super::super::repository::save_tasks(&path, &[task.clone()], true).unwrap();
 		// A stale fetch finishes after an edit has already committed.
 		let mut edited = task.clone();
 		edited.title = "new local title".into();
@@ -3115,8 +3081,11 @@ mod tests {
 			&task.id,
 		)
 		.unwrap();
-		cache_tasks_in(&path, &[task.clone()], true).unwrap();
-		let restored = super::super::day_cache::load(&path, task.start.date_naive(), 0).unwrap();
+		super::super::repository::save_tasks(&path, &[task.clone()], true).unwrap();
+		let restored = super::super::repository::read(&path, &[task.start.date_naive()], 0)
+			.unwrap()
+			.snapshot
+			.events;
 		let restored = restored.iter().find(|e| e.id == task.id).unwrap();
 		assert_eq!(restored.title, edited.title);
 		assert!(!restored.all_day);
@@ -3132,8 +3101,11 @@ mod tests {
 		)
 		.unwrap();
 		// Until Google confirms the delete, the task shows, locked.
-		cache_tasks_in(&path, &[task.clone()], true).unwrap();
-		let restored = super::super::day_cache::load(&path, task.start.date_naive(), 0).unwrap();
+		super::super::repository::save_tasks(&path, &[task.clone()], true).unwrap();
+		let restored = super::super::repository::read(&path, &[task.start.date_naive()], 0)
+			.unwrap()
+			.snapshot
+			.events;
 		assert!(
 			restored
 				.iter()
@@ -3142,10 +3114,16 @@ mod tests {
 		for write in status.into_iter().chain(writes) {
 			send_in(&path, write, |_| Ok(None)).unwrap();
 		}
-		let restored = super::super::day_cache::load(&path, task.start.date_naive(), 0).unwrap();
+		let restored = super::super::repository::read(&path, &[task.start.date_naive()], 0)
+			.unwrap()
+			.snapshot
+			.events;
 		assert!(!restored.iter().any(|e| e.id == task.id));
-		cache_tasks_in(&path, &[task.clone()], true).unwrap();
-		let restored = super::super::day_cache::load(&path, task.start.date_naive(), 0).unwrap();
+		super::super::repository::save_tasks(&path, &[task.clone()], true).unwrap();
+		let restored = super::super::repository::read(&path, &[task.start.date_naive()], 0)
+			.unwrap()
+			.snapshot
+			.events;
 		assert!(!restored.iter().any(|e| e.id == task.id));
 	}
 
@@ -3156,11 +3134,15 @@ mod tests {
 		task.id = "task:deleted-remotely".into();
 		task.calendar_id = "tasks:list".into();
 		let day = task.start.date_naive();
-		super::super::day_cache::save(&path, day, &[task.clone()], 0).unwrap();
-		cache_tasks_in(&path, &[], true).unwrap();
+		let mut snapshot = super::super::sample_snapshot();
+		snapshot.events = vec![task.clone()];
+		super::super::repository::seed(&path, &snapshot, &[day], 0);
+		super::super::repository::save_tasks(&path, &[], true).unwrap();
 		assert!(
-			!super::super::day_cache::load(&path, day, 0)
+			!super::super::repository::read(&path, &[day], 0)
 				.unwrap()
+				.snapshot
+				.events
 				.iter()
 				.any(Event::is_task)
 		);
@@ -3454,7 +3436,7 @@ mod tests {
 		assert!(settled.is_empty());
 	}
 	#[test]
-	fn a_fetch_after_google_confirmed_a_series_edit_is_not_locked() {
+	fn a_series_unlocks_when_its_confirmed_occurrences_are_installed() {
 		let (_dir, path) = db();
 		let series = daily_occurrences("series");
 		let mut moved = series[0].clone();
@@ -3468,11 +3450,15 @@ mod tests {
 			&moved.id,
 		)
 		.unwrap();
+		let entity = writes[0].entity.clone();
 		send_in(&path, writes.remove(0), |_| Ok(None)).unwrap();
 		// A fetch begun since shows the series as Google has it now.
 		let mut fetched = series[1..].to_vec();
 		let after = crate::clock::now() + chrono::Duration::seconds(1);
 		overlay(&path, &mut fetched, Some(after)).unwrap();
+		assert!(fetched.iter().any(|event| event.details.sending));
+		settle_series(&path, &entity).unwrap();
+		overlay(&path, &mut fetched, None).unwrap();
 		assert!(fetched.iter().all(|e| !e.details.sending));
 	}
 	#[test]
@@ -3665,6 +3651,7 @@ mod tests {
 			remote.end.date_naive(),
 			fetched,
 			0,
+			true,
 		)
 		.unwrap();
 		let mut old = vec![remote.clone()];
@@ -3685,9 +3672,9 @@ mod tests {
 		let (_dir, path) = db();
 		let snapshot = super::super::sample_snapshot();
 		let mut store = Store::with_snapshot(snapshot);
-		store.cache_days_in(Some(path.clone()));
+		store.restore(Some(path.clone()));
 		let (latest, _) = edit(&path, "immediate edit");
-		store.apply_local_operations().unwrap();
+		store.select_range(&[store.day]);
 		let shown = store.event(&latest.id).unwrap();
 		assert_eq!(shown.title, "immediate edit");
 		assert!(shown.details.sending);

@@ -1,23 +1,12 @@
-//! Picking up what other processes changed in the local database.
-//!
-//! The Turso worker, writes to Google, the dock and the phone's synced edits
-//! all write to the database behind the panel's back, so the panel looks every
-//! couple of seconds. That look used to happen on the UI thread and reread
-//! everything each time: the local edits for every cached day, and the whole
-//! habits and notes. Now a worker thread reads the change
-//! counters (see [`timeparagon_core::local_changes`]) and a fingerprint of the
-//! notes directory, rereads only what moved, and the UI thread only applies
-//! the result.
-//!
-//! Because the read happens off the UI thread, the user can change something
-//! while it is in flight. A read is therefore only applied when nothing it
-//! could overwrite has changed locally since it started; otherwise it is
-//! dropped and read again on the next tick.
+//! Pick up database changes made by Google sync, write workers and other devices.
+//! A worker checks revision counters and rereads the selected calendar range
+//! through the shared repository. The UI installs that snapshot directly.
+//! Reads overtaken by navigation or another local write are retried.
 
 use std::path::PathBuf;
 
 use iced::Task;
-use timeparagon_core::calendar::operations::{self, Overlay};
+use timeparagon_core::calendar::repository;
 use timeparagon_core::local_changes::Counters;
 
 use crate::app::{Message, State, SystemMessage};
@@ -29,15 +18,14 @@ pub struct Poll {
 	in_flight: bool,
 	/// The counters each part was last read at. `None` until the first read,
 	/// so everything is read once at start.
-	overlay: Option<i64>,
+	calendar: Option<i64>,
 	habits: Option<i64>,
 	alarms: Option<i64>,
-	sleep: Option<i64>,
 	/// The notes directory's [`timeparagon_core::notes::fingerprint`].
 	notes: Option<u64>,
 	/// Read the local edits again even though their counter has not moved,
 	/// because this process just wrote some and wants them shown at once.
-	force_overlay: bool,
+	force_calendar: bool,
 }
 
 /// One poll's reads. Each part is `None` when it was not reread.
@@ -46,9 +34,8 @@ pub struct Polled {
 	counters: Counters,
 	alarms: Option<Result<timeparagon_core::alarms::Snapshot, String>>,
 	alarms_before: Vec<crate::alarms::Alarm>,
-	overlay: Option<Result<Overlay, String>>,
-	/// The stored nights of the days in memory, unsent edits applied.
-	nights: Option<Result<Vec<timeparagon_core::calendar::Event>, String>>,
+	calendar: Option<Result<repository::Read, String>>,
+	calendar_dates: Vec<chrono::NaiveDate>,
 	habits: Option<Result<Option<timeparagon_core::habits::Library>, String>>,
 	/// The habits' and notes' local revisions when the read started.
 	habits_revision: u64,
@@ -67,22 +54,19 @@ pub fn start(state: &mut State) -> Task<Message> {
 	let Some(database) = timeparagon_core::task_db::path() else {
 		return Task::none();
 	};
-	let overlay_path: Option<PathBuf> = state.calendar.local_database().map(Into::into);
+	let calendar_path: Option<PathBuf> = state.calendar.local_database().map(Into::into);
 	let habits_path = state.habits.path().map(PathBuf::from);
 	let notes_path = state
 		.notes
 		.directory()
 		.filter(|_| state.notes.accepts_shared())
 		.map(PathBuf::from);
-	let previous = (state.poll.overlay, state.poll.habits, state.poll.notes);
+	let previous = (state.poll.calendar, state.poll.habits, state.poll.notes);
 	let previous_alarms = state.poll.alarms;
-	let previous_sleep = state.poll.sleep;
-	// Nights on every day in memory, should another device have changed one.
-	let nights_path = overlay_path.clone();
-	let loaded = state.calendar.loaded_days();
-	let nights_range = loaded.first().copied().zip(loaded.last().copied());
+	let calendar_dates = state.calendar.loaded_days();
+	let hour = state.calendar.day_end_hour();
 	let alarms_before = state.alarms.items().to_vec();
-	let force_overlay = std::mem::take(&mut state.poll.force_overlay);
+	let force_calendar = std::mem::take(&mut state.poll.force_calendar);
 	let habits_revision = state.habits.revision();
 	let notes_revision = state.notes.revision();
 	state.poll.in_flight = true;
@@ -95,7 +79,7 @@ pub fn start(state: &mut State) -> Task<Message> {
 				return None;
 			}
 		};
-		let (overlay, habits, notes) = previous;
+		let (calendar, habits, notes) = previous;
 		let moved = |seen: Option<i64>, now: i64| seen != Some(now);
 		let notes_fingerprint = notes_path
 			.as_deref()
@@ -105,15 +89,10 @@ pub fn start(state: &mut State) -> Task<Message> {
 			alarms: moved(previous_alarms, counters.alarms)
 				.then(|| timeparagon_core::alarms::poll(&database).map_err(|e| e.to_string())),
 			alarms_before,
-			overlay: overlay_path
-				.filter(|_| force_overlay || moved(overlay, counters.overlay))
-				.map(|path| operations::load_overlay(&path)),
-			nights: nights_path
-				.zip(nights_range)
-				.filter(|_| moved(previous_sleep, counters.sleep))
-				.map(|(path, (first, last))| {
-					timeparagon_core::calendar::sleep::stored_nights(&path, first, last)
-				}),
+			calendar: calendar_path
+				.filter(|_| force_calendar || moved(calendar, counters.calendar))
+				.map(|path| repository::read(&path, &calendar_dates, hour)),
+			calendar_dates,
 			habits: habits_path
 				.filter(|_| moved(habits, counters.habits))
 				.map(|path| {
@@ -147,8 +126,8 @@ pub fn apply(state: &mut State, polled: Option<Box<Polled>>) -> Task<Message> {
 		counters,
 		alarms,
 		alarms_before,
-		overlay,
-		nights,
+		calendar,
+		calendar_dates,
 		habits,
 		habits_revision,
 		notes_revision,
@@ -168,42 +147,16 @@ pub fn apply(state: &mut State, polled: Option<Box<Polled>>) -> Task<Message> {
 		Task::none()
 	};
 
-	match overlay {
-		Some(Ok(overlay)) => {
-			state.calendar.apply_overlay(&overlay);
-			state.poll.overlay = Some(counters.overlay);
+	match calendar {
+		Some(Ok(read))
+			if !state.poll.force_calendar && state.calendar.loaded_days() == calendar_dates =>
+		{
+			state.calendar.install(read, &calendar_dates);
+			state.poll.calendar = Some(counters.calendar);
 		}
-		Some(Err(error)) => log::warn!("Could not load committed edits: {error}"),
-		None => {}
+		Some(Err(error)) => log::warn!("Could not read calendar: {error}"),
+		_ => {}
 	}
-
-	// A night changed in the database, perhaps by another device through
-	// database sync: show it now rather than at the next Google sync. The
-	// read carried the unsent edits of its moment; reading them again next
-	// tick puts back any made since.
-	match nights {
-		Some(Ok(nights)) => {
-			state.calendar.apply_stored_nights(&nights);
-			state.poll.sleep = Some(counters.sleep);
-			state.poll.force_overlay = true;
-		}
-		Some(Err(error)) => log::warn!("Could not load stored sleep: {error}"),
-		None => {}
-	}
-
-	// A whole series was saved or deleted and Google has confirmed it. Its
-	// occurrences on other cached days are swapped in, and the days in view
-	// are fetched again: the sync asked for when saving may have reached
-	// Google before the write did.
-	let series = timeparagon_core::calendar::series::take_refreshed();
-	let refused = if series.is_empty() {
-		refused
-	} else {
-		for refresh in &series {
-			state.calendar.apply_series_refresh(refresh);
-		}
-		Task::batch([refused, crate::app::refresh_week_after_write(state)])
-	};
 
 	if state.alarms.accepts_shared() && state.alarms.items() == alarms_before {
 		match alarms {
@@ -243,7 +196,7 @@ pub fn apply(state: &mut State, polled: Option<Box<Polled>>) -> Task<Message> {
 		None => {}
 	}
 	// A write asked for its edits while this read was already under way.
-	if state.poll.force_overlay {
+	if state.poll.force_calendar {
 		return Task::batch([refused, start(state)]);
 	}
 	refused
@@ -251,8 +204,8 @@ pub fn apply(state: &mut State, polled: Option<Box<Polled>>) -> Task<Message> {
 
 /// Shows this process's own local edits straight away, rather than at the
 /// next tick.
-pub fn refresh_overlay(state: &mut State) -> Task<Message> {
-	state.poll.force_overlay = true;
+pub fn refresh_calendar(state: &mut State) -> Task<Message> {
+	state.poll.force_calendar = true;
 	start(state)
 }
 
@@ -272,8 +225,8 @@ mod tests {
 			},
 			alarms: None,
 			alarms_before: state.alarms.items().to_vec(),
-			overlay: None,
-			nights: None,
+			calendar: None,
+			calendar_dates: state.calendar.loaded_days(),
 			habits: Some(Ok(Some(habits))),
 			habits_revision: revision,
 			notes_revision: state.notes.revision(),

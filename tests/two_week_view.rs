@@ -51,7 +51,7 @@ fn state(events_per_day: u32) -> State {
 	state.view = timeparagon::app::CalendarView::TwoWeek;
 	state.week_anchor = snapshot.day;
 	let dates = state.calendar_dates();
-	state.calendar.apply_week_snapshot(snapshot, &dates);
+	state.calendar.accept_snapshot(snapshot, &dates);
 	state
 }
 

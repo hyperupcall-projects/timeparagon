@@ -4,10 +4,9 @@
 
 use std::sync::Mutex;
 
-use chrono::NaiveDate;
 use dioxus::prelude::*;
 use timeparagon_core::calendar::time_format::{self, TimeFormat};
-use timeparagon_core::calendar::{self, Event, Snapshot, sleep};
+use timeparagon_core::calendar::{self, Event, sleep};
 use timeparagon_core::config::{CalendarSettings, Config};
 
 /// The night whose timer is running among `events`, the latest if several.
@@ -24,39 +23,9 @@ pub fn active<'a>(events: impl IntoIterator<Item = &'a Event>) -> Option<&'a Eve
 		.max_by_key(|event| event.start)
 }
 
-/// The night being timed, looked for around today whichever day is in view:
-/// a night started on another day must still be finishable. `snapshot` is the
-/// day in view with local edits already applied, and wins over cached copies.
-pub fn running(
-	snapshot: Option<&Snapshot>,
-	store: &calendar::Store,
-	today: NaiveDate,
-	overlay: Option<&calendar::operations::Overlay>,
-) -> Option<Event> {
-	let shown = snapshot.map_or(&[][..], |snapshot| snapshot.events.as_slice());
-	let mut cached: Vec<Event> = Vec::new();
-	for day in [today.pred_opt(), Some(today), today.succ_opt()]
-		.into_iter()
-		.flatten()
-	{
-		for event in store.events_on(day) {
-			let same =
-				|other: &Event| other.id == event.id && other.calendar_id == event.calendar_id;
-			if event.details.sleep.is_some() && !shown.iter().any(same) && !cached.iter().any(same)
-			{
-				cached.push(event.clone());
-			}
-		}
-	}
-	if !cached.is_empty()
-		&& let Some(overlay) = overlay
-	{
-		overlay.apply(
-			&mut cached,
-			store.cached_snapshot().map(|snapshot| snapshot.fetched_at),
-		);
-	}
-	active(shown.iter().chain(&cached)).cloned()
+/// The running night from the repository read around today.
+pub fn running(events: &[Event]) -> Option<Event> {
+	active(events.iter()).cloned()
 }
 
 /// Whether the night's timer button can be pressed: a write for it must not
@@ -341,6 +310,7 @@ fn weekday_name(weekday: chrono::Weekday) -> &'static str {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use chrono::NaiveDate;
 	use chrono::{DateTime, Duration, Local};
 
 	fn at(hour: u32) -> DateTime<Local> {

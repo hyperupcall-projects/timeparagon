@@ -367,6 +367,7 @@ mod tests {
 			..CalendarSettings::default()
 		};
 		let snapshot = Snapshot {
+			revision: 0,
 			calendars: vec![calendar("blocks"), calendar("work"), calendar("tasks:work")],
 			events,
 			day: date(),

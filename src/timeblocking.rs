@@ -1259,7 +1259,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			}
 			// Shows at once what is still on its way, such as occurrences
 			// being deleted.
-			tasks.push(crate::local_poll::refresh_overlay(state));
+			tasks.push(crate::local_poll::refresh_calendar(state));
 			// Also reconciles a partially successful cross-service write.
 			tasks.push(Task::done(Message::Calendar(
 				CalendarMessage::CalendarSyncRequested,
@@ -1310,11 +1310,10 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 						.calendar
 						.events
 						.retain(|e| e.id != id && (!e.is_task() || task_key(e) != key));
-					state.calendar.replace_cached_task(id, &event);
+					state.calendar.replace_task(id, &event);
 					if state.range_view_active() {
 						refresh_week = true;
 					}
-					state.calendar.add_event(event);
 					if let Some(placement) = state
 						.timeblocking
 						.pending_week_drop
@@ -2485,7 +2484,7 @@ fn forget_occurrences(state: &mut State, calendar_id: &str, id: &str, scope: cal
 		.collect();
 	for id in gone {
 		if state.range_view_active() {
-			state.calendar.forget_event_everywhere(&id);
+			state.calendar.forget_event(&id);
 		} else {
 			state.calendar.events.retain(|event| event.id != id);
 		}

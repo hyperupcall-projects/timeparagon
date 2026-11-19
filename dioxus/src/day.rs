@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet};
 use timeparagon_core::calendar::ids;
 
-use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Timelike};
+use chrono::{DateTime, Duration, Local, NaiveDate, Timelike};
 use timeparagon_core::calendar::first_day::FirstDayOfWeek;
 use timeparagon_core::calendar::layout::{self, Span};
 use timeparagon_core::calendar::search::Search;
@@ -132,10 +132,7 @@ pub fn event_day(event: &Event, settings: &CalendarSettings) -> NaiveDate {
 /// file as the iced app, so signing in there is enough for the Dioxus view.
 #[cfg(target_os = "android")]
 pub fn load_day(day: NaiveDate, settings: &CalendarSettings) -> Result<Snapshot, String> {
-	let snapshot = calendar::sleep::sync(settings, day, &[day])?;
-	let path = timeparagon_core::task_db::path().ok_or("Cannot locate the local database")?;
-	calendar::view_cache::save(&path, &snapshot, &[day], settings.day_start_hour())?;
-	Ok(snapshot)
+	calendar::sleep::sync(settings, day, &[day])
 }
 
 /// A day's snapshot narrowed to what a search shows. Only what is drawn goes
@@ -1568,6 +1565,7 @@ pub fn save_found_place(found: &Found) -> Result<Place, String> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use chrono::TimeZone;
 	use timeparagon_core::calendar::{Calendar, Details};
 	use timeparagon_core::task_db::TaskData;
 	use timeparagon_core::timeblocking::Metadata;
@@ -1656,6 +1654,7 @@ mod tests {
 
 	fn snapshot(events: Vec<Event>) -> Snapshot {
 		Snapshot {
+			revision: 0,
 			calendars: vec![calendar("blocks", "Focus"), calendar("tasks:work", "Work")],
 			events,
 			day: day(),
@@ -2018,6 +2017,7 @@ mod tests {
 		all_day.all_day = true;
 		let task = task("a", "Write", None, 1, 45, false);
 		let snapshot = Snapshot {
+			revision: 0,
 			calendars: vec![
 				calendar("work", "Work"),
 				calendar("tasks:work", "Work tasks"),
@@ -2339,6 +2339,7 @@ mod tests {
 	fn a_plain_event_on_the_app_calendar_is_drawn_as_a_time_block() {
 		let block = event("b1", "scheduled", "Write", at(9, 0), at(9, 45));
 		let snapshot = Snapshot {
+			revision: 0,
 			calendars: vec![
 				calendar("scheduled", "TimeParagon"),
 				calendar("tasks:work", "Work"),
@@ -2373,6 +2374,7 @@ mod tests {
 		let a = event("a", "work", "A", at(9, 0), at(10, 0));
 		let b = event("b", "work", "B", at(9, 30), at(10, 30));
 		let snapshot = Snapshot {
+			revision: 0,
 			calendars: vec![calendar("work", "Work")],
 			events: vec![a, b],
 			day: day(),

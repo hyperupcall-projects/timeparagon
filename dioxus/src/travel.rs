@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use chrono::NaiveDate;
 use dioxus::prelude::*;
-use timeparagon_core::calendar::{self, Snapshot, Store};
+use timeparagon_core::calendar::{self, Snapshot};
 use timeparagon_core::config::{self as saved_config, Config};
 use timeparagon_core::places::{self, Leg, Place, PlaceSettings, Route, SavedRoute, TravelMode};
 
@@ -26,38 +26,21 @@ pub struct Connections {
 	pub all: Vec<Leg>,
 }
 
-/// Finds the trips of the day in view and of the other days in memory. The day
-/// in view comes from `snapshot` when it is there, as that also holds the
-/// edits not yet sent to Google and what was read from the disk at startup.
-pub fn connections(
-	view: NaiveDate,
-	snapshot: Option<&Snapshot>,
-	store: &Store,
-	config: &Config,
-) -> Connections {
-	let travel = &config.travel;
-	let settings = &config.calendar;
-	let in_view = match snapshot.filter(|snapshot| snapshot.day == view) {
-		Some(snapshot) => day::day_hops(&day::build_model(snapshot, settings), travel),
-		None => travel.day_hops(store.timed_events_on(view, settings)),
-	};
-
-	let mut days = store.loaded_days();
-	if !days.contains(&view) {
-		days.push(view);
-		days.sort();
-	}
-	let all = days.into_iter().flat_map(|day| {
-		if day == view {
-			in_view.clone()
-		} else {
-			travel.day_hops(store.timed_events_on(day, settings))
-		}
-	});
-
+/// Trips in the currently loaded day snapshot.
+pub fn connections(view: NaiveDate, snapshot: Option<&Snapshot>, config: &Config) -> Connections {
+	let hops = snapshot
+		.filter(|snapshot| snapshot.day == view)
+		.map(|snapshot| {
+			day::day_hops(
+				&day::build_model(snapshot, &config.calendar),
+				&config.travel,
+			)
+		})
+		.unwrap_or_default();
+	let day = places::unique_legs(hops);
 	Connections {
-		all: places::unique_legs(all),
-		day: places::unique_legs(in_view.clone()),
+		all: day.clone(),
+		day,
 	}
 }
 
@@ -261,6 +244,45 @@ pub fn TravelSheet(
 	connections: Connections,
 	on_close: EventHandler<()>,
 ) -> Element {
+	// The complete trips list reads persisted events, rather than depending on
+	// which days the user happened to leave in a UI cache.
+	let saved_trips = use_resource(move || {
+		let config = config();
+		async move {
+			worker(move || {
+				let path = timeparagon_core::task_db::path().ok_or("Cannot locate database")?;
+				let events = timeparagon_core::calendar::repository::all_events(&path)?;
+				let days: std::collections::BTreeSet<_> = events
+					.iter()
+					.filter(|event| !event.all_day)
+					.map(|event| {
+						timeparagon_core::calendar::day_at(
+							event.start,
+							config.calendar.day_start_hour(),
+						)
+					})
+					.collect();
+				let mut snapshot = Snapshot {
+					revision: 0,
+					calendars: Vec::new(),
+					events,
+					day,
+					fetched_at: timeparagon_core::clock::now(),
+					notice: None,
+				};
+				let mut legs = Vec::new();
+				for day in days {
+					snapshot.day = day;
+					legs.extend(day::day_hops(
+						&day::build_model(&snapshot, &config.calendar),
+						&config.travel,
+					));
+				}
+				Ok(places::unique_legs(legs))
+			})
+			.await
+		}
+	});
 	let sheet = Sheet {
 		config,
 		asked: use_signal(HashMap::new),
@@ -291,7 +313,21 @@ pub fn TravelSheet(
 			.collect()
 	};
 	let day_rows = trip_rows(&connections.day);
-	let all_rows = trip_rows(&connections.all);
+	let saved_trips = saved_trips.read();
+	let all_legs = saved_trips
+		.as_ref()
+		.and_then(|result| result.as_ref().ok())
+		.map(|legs| {
+			let mut all = connections.all.clone();
+			for leg in legs {
+				if !all.contains(leg) {
+					all.push(*leg);
+				}
+			}
+			all
+		})
+		.unwrap_or_else(|| connections.all.clone());
+	let all_rows = trip_rows(&all_legs);
 
 	rsx! {
 		div { class: "modal-backdrop", onclick: move |_| on_close.call(()),
@@ -344,7 +380,7 @@ pub fn TravelSheet(
 					section { class: "travel-section",
 						h3 { class: "travel-heading", "All connections" }
 						{all_rows.into_iter()}
-						if connections.all.is_empty() {
+						if all_legs.is_empty() {
 							p { class: "empty-note", "No trips yet." }
 						}
 					}
@@ -641,6 +677,7 @@ mod tests {
 
 	fn snapshot(day: NaiveDate, events: Vec<Event>) -> Snapshot {
 		Snapshot {
+			revision: 0,
 			day,
 			calendars: calendar::sample_snapshot().calendars,
 			events,
@@ -658,12 +695,7 @@ mod tests {
 			event("c", view(), 13, "Office"),
 			event("d", view(), 15, "Cafe"),
 		];
-		let found = connections(
-			view(),
-			Some(&snapshot(view(), events)),
-			&Store::new(config.calendar.day_start_hour()),
-			&config,
-		);
+		let found = connections(view(), Some(&snapshot(view(), events)), &config);
 
 		let trip = |from, to| Leg { from, to };
 		let expected = [trip(HOME, OFFICE), trip(OFFICE, CAFE), trip(CAFE, OFFICE)];
@@ -678,7 +710,6 @@ mod tests {
 		let found = connections(
 			view(),
 			Some(&snapshot(other, vec![event("a", other, 9, "Office")])),
-			&Store::new(config.calendar.day_start_hour()),
 			&config,
 		);
 		assert_eq!(found, Connections::default());

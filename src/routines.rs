@@ -1563,9 +1563,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 				Ok(event) => {
 					state.routines.quick_add.clear();
 					state.timeblocking.revision += 1;
-					state.calendar.events.retain(|other| other.id != event.id);
-					state.calendar.replace_cached_task(&event.id, &event);
-					state.calendar.add_event(event);
+					state.calendar.replace_task(&event.id, &event);
 					Task::done(Message::Calendar(CalendarMessage::CalendarSyncRequested))
 				}
 				Err(error) => {
@@ -1709,7 +1707,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 				// A task saved since the request began may be stale in it, so
 				// such an answer is dropped rather than shown.
 				Ok(snapshot) if revision == state.timeblocking.revision => {
-					state.calendar.cache_fetched_snapshot(snapshot, &dates);
+					state.calendar.accept_snapshot(snapshot, &dates);
 					state.calendar.apply_task_colors(&state.config.calendar);
 					state.routines.fetched = Some((period, std::time::Instant::now()));
 				}

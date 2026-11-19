@@ -67,7 +67,7 @@ pub fn AgendaDays(
 	let crate::habits::EventNames(names) = use_context();
 	let dates = dates(range, anchor, &settings);
 	let (loaded, disk_view) =
-		crate::cache::use_calendar(dates.clone(), settings.clone(), revision, true);
+		crate::calendar_data::use_calendar(dates.clone(), settings.clone(), revision, true);
 	let snapshot = loaded
 		.read()
 		.as_ref()

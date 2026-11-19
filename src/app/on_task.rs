@@ -188,7 +188,7 @@ pub(super) fn update(state: &mut State, message: TaskMessage) -> Task<Message> {
 			}
 			state.timeblocking.busy.remove_task(&id);
 			state.timeblocking.revision += 1;
-			state.calendar.replace_cached_task(&id, &task);
+			state.calendar.replace_task(&id, &task);
 			let record = if (previous == timeblocking::TaskStatus::Completed)
 				!= (timeblocking::task_status(&task) == timeblocking::TaskStatus::Completed)
 			{

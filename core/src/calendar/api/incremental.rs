@@ -36,7 +36,6 @@ use super::{
 	task_events,
 };
 use crate::calendar::colors;
-use crate::calendar::day_cache::SavedEvent;
 use crate::calendar::google::GoogleError;
 use crate::calendar::{Calendar, Event, Snapshot};
 use crate::task_db::Database;
@@ -44,6 +43,10 @@ use crate::task_db::Database;
 /// One sync at a time: two at once would read the same tokens and apply the
 /// same changes twice, and the later one could store the older token.
 static SYNCING: Mutex<()> = Mutex::new(());
+
+pub(in crate::calendar) fn sync_guard() -> Result<std::sync::MutexGuard<'static, ()>, String> {
+	SYNCING.lock().map_err(|_| "Sync is unavailable".to_owned())
+}
 
 /// Installed transactionally by the versioned database setup (schema 8).
 const CREATE: &str = "
@@ -93,7 +96,7 @@ const KEPT_FUTURE: Duration = Duration::days(365);
 /// sync is a full one. What the Full sync button does.
 pub fn reset() -> Result<(), String> {
 	let path = crate::task_db::path().ok_or("Cannot locate the local database")?;
-	let _syncing = SYNCING.lock().map_err(|_| "Sync is unavailable")?;
+	let _syncing = sync_guard()?;
 	let mut database = Database::open(&path)?;
 	clear(database.connection()).map_err(|e| e.to_string())
 }
@@ -476,8 +479,22 @@ fn sync_calendar(
 	})
 }
 
-fn store(connection: &Connection, event: &Event, pinned: bool) -> Result<(), String> {
-	let json = serde_json::to_string(&SavedEvent::from(event)).map_err(|e| e.to_string())?;
+pub(in crate::calendar) fn store(
+	connection: &Connection,
+	event: &Event,
+	pinned: bool,
+) -> Result<(), String> {
+	if event.details.sleep.is_some() {
+		crate::calendar::sleep::store::upsert(connection, event)?;
+	} else {
+		connection
+			.execute(
+				"DELETE FROM sleep_nights WHERE calendar_id=?1 AND id=?2",
+				params![event.calendar_id, event.id],
+			)
+			.map_err(|e| e.to_string())?;
+	}
+	let json = serde_json::to_string(event).map_err(|e| e.to_string())?;
 	connection
 		.execute(
 			"INSERT INTO google_sync_events (calendar_id,id,series,start_at,end_at,pinned,event)
@@ -511,6 +528,9 @@ fn keep(
 	if pinned || in_windows(event, windows) {
 		store(connection, event, pinned)
 	} else {
+		if event.details.sleep.is_some() {
+			crate::calendar::sleep::store::upsert(connection, event)?;
+		}
 		connection
 			.execute(
 				"DELETE FROM google_sync_events WHERE calendar_id=?1 AND id=?2",
@@ -539,6 +559,11 @@ fn apply(
 			for event in &events {
 				keep(connection, event, windows, app_calendar)?;
 			}
+			for window in windows {
+				connection.execute("DELETE FROM sleep_nights WHERE calendar_id=?1 AND start_at < ?3 AND end_at > ?2
+					AND NOT EXISTS(SELECT 1 FROM google_sync_events e WHERE e.calendar_id=sleep_nights.calendar_id AND e.id=sleep_nights.id AND json_extract(e.event,'$.details.sleep') IS NOT NULL)",
+					params![calendar.id,stamp(window.start),stamp(window.end)]).map_err(|e|e.to_string())?;
+			}
 			token
 		}
 		CalendarSync::Changes {
@@ -550,6 +575,12 @@ fn apply(
 				match change {
 					Change::Upsert(event) => keep(connection, &event, windows, app_calendar)?,
 					Change::Remove(id) => {
+						connection
+							.execute(
+								"DELETE FROM sleep_nights WHERE calendar_id=?1 AND id=?2",
+								params![calendar.id, id],
+							)
+							.map_err(|e| e.to_string())?;
 						connection
 							.execute(
 								"DELETE FROM google_sync_events WHERE calendar_id=?1 AND (id=?2 OR series=?2)",
@@ -859,6 +890,7 @@ fn check_account(connection: &Connection, calendars: &[Calendar]) -> Result<(), 
 /// The stored events of `calendar` in `wanted`, plus its pinned ones,
 /// colored as the calendar is now. An all-day event counts by its dates, as
 /// in a full fetch.
+#[cfg(test)]
 fn stored_events(
 	connection: &Connection,
 	calendar: &Calendar,
@@ -883,7 +915,7 @@ fn stored_events(
 	Ok(rows
 		.into_iter()
 		.filter_map(|(json, pinned)| {
-			let event = Event::from(serde_json::from_str::<SavedEvent>(&json).ok()?);
+			let event = serde_json::from_str::<Event>(&json).ok()?;
 			let in_range = !event.all_day
 				|| (event.start.date_naive() <= last && event.end.date_naive() > first);
 			(pinned || in_range).then_some(event)
@@ -900,28 +932,33 @@ fn stored_events(
 		.collect())
 }
 
-/// Read a completely covered view without contacting Google.
-pub(crate) fn cached_events(
+/// Explicit coverage is independent of how many events a range contains.
+pub(in crate::calendar) fn covers(
 	connection: &Connection,
-	calendars: &[Calendar],
-	first: NaiveDate,
-	last: NaiveDate,
-	day_end_hour: u32,
-) -> Result<Option<Vec<Event>>, String> {
-	let (start, _) = day_bounds(first, day_end_hour);
-	let (_, end) = day_bounds(last, day_end_hour);
-	let wanted = Window {
-		start: parse_stamp(&start).ok_or("Invalid calendar range")?,
-		end: parse_stamp(&end).ok_or("Invalid calendar range")?,
-	};
-	if !gaps(wanted, &load_windows(connection)?).is_empty() {
-		return Ok(None);
-	}
-	let mut events = Vec::new();
-	for calendar in calendars.iter().filter(|c| !c.is_task_list()) {
-		events.extend(stored_events(connection, calendar, wanted, first, last)?);
-	}
-	Ok(Some(events))
+	start: DateTime<Utc>,
+	end: DateTime<Utc>,
+) -> Result<bool, String> {
+	Ok(gaps(Window { start, end }, &load_windows(connection)?).is_empty())
+}
+
+pub(in crate::calendar) fn covered_dates(
+	connection: &Connection,
+) -> Result<Option<(NaiveDate, NaiveDate)>, String> {
+	let windows = load_windows(connection)?;
+	Ok(windows
+		.iter()
+		.map(|w| w.start.with_timezone(&chrono::Local).date_naive())
+		.min()
+		.zip(
+			windows
+				.iter()
+				.map(|w| {
+					(w.end - Duration::seconds(1))
+						.with_timezone(&chrono::Local)
+						.date_naive()
+				})
+				.max(),
+		))
 }
 
 /// The task lists by name and ID, and each one's sync.
@@ -977,7 +1014,7 @@ pub fn fetch_range(
 	app_calendar: Option<&str>,
 ) -> Result<Snapshot, String> {
 	let path = crate::task_db::path().ok_or("Cannot locate the local database")?;
-	let _syncing = SYNCING.lock().map_err(|_| "Sync is unavailable")?;
+	let _syncing = sync_guard()?;
 	let fetch_started = crate::clock::now();
 	let synced = sync(
 		&path,
@@ -992,10 +1029,24 @@ pub fn fetch_range(
 		Ok(lists) => task_snapshot(access_token, &path, &lists, synced.app_calendar.as_deref()),
 		Err(error) => Err(error),
 	};
+	// Incremental sync updates every covered window. Observe acknowledged
+	// edits against that whole confirmed copy, including offscreen deletions.
+	let mut database = Database::open(&path)?;
+	let observations = database
+		.connection()
+		.prepare("SELECT event FROM google_sync_events")
+		.map_err(|e| e.to_string())?
+		.query_map([], |r| r.get::<_, String>(0))
+		.map_err(|e| e.to_string())?
+		.map(|row| {
+			serde_json::from_str::<Event>(&row.map_err(|e| e.to_string())?)
+				.map_err(|e| e.to_string())
+		})
+		.collect::<Result<Vec<_>, String>>()?;
 	finish(
 		access_token,
 		synced.calendars,
-		synced.events,
+		observations,
 		task_result,
 		Range {
 			day,
@@ -1011,6 +1062,7 @@ pub fn fetch_range(
 /// range, and the task lists (whose tasks are stored), or why Tasks failed.
 struct Synced {
 	calendars: Vec<Calendar>,
+	#[cfg(test)]
 	events: Vec<Event>,
 	app_calendar: Option<String>,
 	task_lists: Result<Vec<(String, String)>, GoogleError>,
@@ -1092,6 +1144,9 @@ fn sync(
         .collect();
 		for gone in stored.iter().filter(|id| !live.contains(id.as_str())) {
 			transaction
+				.execute("DELETE FROM sleep_nights WHERE calendar_id=?1", [gone])
+				.map_err(|e| e.to_string())?;
+			transaction
 				.execute(
 					"DELETE FROM google_sync_events WHERE calendar_id=?1",
 					[gone],
@@ -1108,21 +1163,43 @@ fn sync(
 		if let Ok((lists, synced)) = &mut task_result {
 			apply_lists(&transaction, lists, std::mem::take(synced))?;
 		}
+		let mut catalog = calendars.clone();
+		if let Some(previous) = crate::calendar::repository::state(&transaction)? {
+			catalog.extend(
+				previous
+					.calendars
+					.into_iter()
+					.filter(Calendar::is_task_list),
+			);
+		}
+		crate::calendar::repository::save_state(
+			&transaction,
+			&crate::calendar::repository::SyncState {
+				fetched_at: now.with_timezone(&chrono::Local),
+				calendars: catalog,
+				notice: None,
+			},
+		)?;
 		transaction.commit().map_err(|e| e.to_string())?;
 	}
 
-	let mut events = Vec::new();
-	for calendar in &calendars {
-		events.extend(stored_events(
-			database.connection(),
-			calendar,
-			wanted,
-			first,
-			last,
-		)?);
-	}
+	#[cfg(test)]
+	let events = {
+		let mut events = Vec::new();
+		for calendar in &calendars {
+			events.extend(stored_events(
+				database.connection(),
+				calendar,
+				wanted,
+				first,
+				last,
+			)?);
+		}
+		events
+	};
 	Ok(Synced {
 		calendars,
+		#[cfg(test)]
 		events,
 		app_calendar: resolved.clone(),
 		task_lists: task_result.map(|(lists, _)| lists),

@@ -376,7 +376,7 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
 			state.config.calendar.first_day_of_week = first_day;
 			// The month and two-week views now span different days.
 			state.two_week_more = None;
-			Task::batch([queue_save(state), show_cached_calendar(state)])
+			Task::batch([queue_save(state), show_calendar(state)])
 		}
 		SettingsMessage::AlwaysOnTopToggled(on_top) => {
 			state.config.window.always_on_top = on_top;
@@ -469,10 +469,9 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
 		SettingsMessage::GoogleDisconnectRequested => {
 			calendar::disconnect();
 			state.calendar = calendar::Store::new(state.config.calendar.day_start_hour());
-			// The reset takes the store with it, so the directory is put
-			// straight back: days keep being written across a disconnect.
+			// Reattach the repository for offline reads.
 			state.calendar.apply_task_colors(&state.config.calendar);
-			state.calendar.cache_days_in(crate::task_db::path());
+			state.calendar.restore(crate::task_db::path());
 			state.calendar.connection = Connection::SignedOut;
 			crate::people::forget_primary(state)
 		}
@@ -489,7 +488,7 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
 				times.wakeup = time;
 			}
 			calendar::sleep::set_weekday_times(&mut state.config.calendar, from, times);
-			state.calendar.invalidate_other_days();
+
 			Task::batch([queue_save(state), refresh_week_after_write(state)])
 		}
 		SettingsMessage::SleepActualStartChanged(text) => {
@@ -548,7 +547,7 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
 					return Task::none();
 				}
 			};
-			state.calendar.forget_event_everywhere(&id);
+			state.calendar.forget_event(&id);
 			if state
 				.calendar
 				.detail_event
@@ -625,7 +624,7 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
 		}
 		SettingsMessage::SleepSaved(Ok(event)) => {
 			let id = event.id.clone();
-			state.calendar.forget_event_everywhere(&id);
+			state.calendar.forget_event(&id);
 			state.calendar.detail_event = None;
 			state.calendar.edit_draft = Some(calendar::EditDraft::from_event(&event));
 			state.calendar.add_event(event);
@@ -646,17 +645,18 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
 			// belong to it may have changed too. This also puts the view back
 			// on today if the user had navigated away.
 			let day = calendar::day_at(crate::clock::now(), state.config.calendar.day_start_hour());
+			state
+				.calendar
+				.set_day_end_hour(state.config.calendar.day_start_hour());
 			state.calendar.set_day(day, day);
 			state.week_anchor = day;
-			// The day's window moved, so the cached days no longer describe
-			// the days they are filed under.
-			state.calendar.forget_cached_days();
+
 			let save = queue_save(state);
 			Task::batch([save, sync_calendar(state)])
 		}
 		SettingsMessage::CalendarWeekRangeChanged(range) => {
 			state.config.calendar.set_week_range(range);
-			Task::batch([queue_save(state), show_cached_calendar(state)])
+			Task::batch([queue_save(state), show_calendar(state)])
 		}
 		SettingsMessage::DefaultCalendarSelected(id) => {
 			state.config.calendar.default_calendar = if id.is_empty() { None } else { Some(id) };

@@ -162,11 +162,18 @@ The catalog of calendars and the time of the last successful refresh are cached
 in the `calendar_sync_state` document, so a restart can show source names and
 honor the sync interval.
 
-Mobile views read covered ranges from `google_sync_events` and the canonical
-task records, then apply stored sleep and local edits. `google_sync_windows`
-records coverage even for empty dates. View loading saves snapshots before
-delivering them to the UI; restoring a UI cache never overwrites those newer
-database records.
+Every calendar consumer (desktop, mobile, dock and reminders) reads through
+`calendar::repository`. A single database transaction assembles confirmed
+Calendar records, normalized Google Tasks and replicated sleep, then applies
+desired local operations once. `google_sync_windows` records coverage even for
+empty dates. Reads return coverage separately from events and a revision that
+prevents an older worker result from replacing newer displayed data.
+
+The UI holds one event set for its loaded range; day views select from that set.
+Sync and recurring-series refreshes update the source records before returning
+a view. Navigation does not save data, and there are no monthly JSON snapshots
+or per-day event copies to keep in step. Local edits remain separate from
+confirmed data until Google has superseded them.
 
 ### Event
 

@@ -147,7 +147,7 @@ pub(super) fn day_canvas<'a>(
 				tasks: if time_block {
 					crate::timeblocking::tasks_in(
 						event,
-						state.calendar.events_on(day),
+						&state.calendar.events,
 						crate::timeblocking::day_start_hour(state),
 					)
 					.into_iter()

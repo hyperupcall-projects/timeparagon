@@ -18,9 +18,7 @@ fn document(key: &str) -> String {
 	format!("doc:{key}")
 }
 
-/// Bumped by changes to what [`crate::calendar::operations::load_overlay`]
-/// reads: the local snapshots of edited Google items and the local-to-remote
-/// ID map.
+/// Bumped when local Google operations or stable ID mappings change.
 const OVERLAY: &str = "google.overlay";
 
 /// Bumped by changes to any settings table (see [`crate::settings`]).
@@ -33,6 +31,8 @@ const SLEEP: &str = "sleep";
 /// The counters a poll compares against what it last applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Counters {
+	/// Any input to the shared calendar reader changed.
+	pub calendar: i64,
 	pub habits: i64,
 	pub alarms: i64,
 	pub overlay: i64,
@@ -77,6 +77,17 @@ pub(crate) fn install_data(db: &Connection) -> rusqlite::Result<()> {
 	db.execute_batch(CREATE)?;
 	watch(db, crate::settings::schema::SLEEP_NIGHTS.name, SLEEP)?;
 	watch(db, crate::settings::schema::NOTES.name, "notes")
+}
+
+pub(crate) fn install_calendar(db: &Connection) -> rusqlite::Result<()> {
+	for table in [
+		"google_sync_events",
+		"google_sync_windows",
+		"google_task_records",
+	] {
+		watch(db, table, "calendar")?;
+	}
+	Ok(())
 }
 
 /// Creates the counter table and the triggers that maintain it. Idempotent.
@@ -127,6 +138,12 @@ pub(crate) fn read_from(db: &Connection) -> rusqlite::Result<Counters> {
 		config += value(&document(&format!("shared.{section}")))?;
 	}
 	Ok(Counters {
+		calendar: value("calendar")?
+			+ value(OVERLAY)?
+			+ value(SLEEP)?
+			+ value(&document(crate::task_db::keys::SYNC_STATE))?
+			+ value(&document(crate::calendar::operations::SERIES_EDITS))?
+			+ value(&document("google_deletes"))?,
 		alarms: value(&document(crate::task_db::keys::ALARMS))?,
 		habits: value(&document(crate::task_db::keys::HABITS))?,
 		// Settling a series edit unlocks the occurrences it locked, which

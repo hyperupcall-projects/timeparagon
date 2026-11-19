@@ -883,11 +883,11 @@ fn created(state: &mut State, result: Result<Event, String>) -> Task<Message> {
 				crate::app::open_zoom_setup(state, &link);
 			}
 			state.timeblocking.revision += 1;
-			state.calendar.events.retain(|other| other.id != event.id);
 			if event.is_task() {
-				state.calendar.replace_cached_task(&event.id, &event);
+				state.calendar.replace_task(&event.id, &event);
+			} else {
+				state.calendar.add_event(event);
 			}
-			state.calendar.add_event(event);
 			// Brings the Inbox list itself, if this made it, into the app.
 			Task::done(Message::Calendar(CalendarMessage::CalendarSyncRequested))
 		}

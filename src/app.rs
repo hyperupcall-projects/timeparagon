@@ -1337,7 +1337,7 @@ fn boot_state() -> State {
 	// test must not read or rewrite the user's cache.
 	state.calendar.apply_task_colors(&state.config.calendar);
 	let database = crate::task_db::path();
-	state.calendar.cache_days_in(database.clone());
+	state.calendar.restore(database.clone());
 	state.notes.go_live(timeparagon_core::notes::directory());
 	state.people.go_live(database.clone());
 	state.travel.cache_in(database.clone());
@@ -1420,7 +1420,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 		&& !state.calendar.is_busy()
 		&& state.timeblocking.busy.is_empty()
 	{
-		show_cached_calendar(state)
+		show_calendar(state)
 	} else {
 		Task::none()
 	};
@@ -2400,13 +2400,13 @@ fn refresh_day(state: &mut State) -> Task<Message> {
 		if state.range_view_active() {
 			state.week_anchor = day;
 		}
-		return show_cached_calendar(state);
+		return show_calendar(state);
 	}
 	Task::none()
 }
 
 pub(crate) fn refresh_week_after_write(state: &mut State) -> Task<Message> {
-	let overlay = crate::local_poll::refresh_overlay(state);
+	let overlay = crate::local_poll::refresh_calendar(state);
 	state.timeblocking.revision += 1;
 	Task::batch([
 		overlay,
@@ -2456,32 +2456,32 @@ fn remember_app_calendar(state: &mut State, snapshot: &calendar::Snapshot) -> bo
 	}
 }
 
-fn load_cached_calendar(state: &mut State) {
+fn read_calendar_range(state: &mut State) {
 	if state.range_view_active() {
 		let days = state.calendar_dates();
-		state.calendar.load_cached_days(&days);
+		state.calendar.select_range(&days);
 	} else {
-		state.calendar.load_cached_days(&[]);
+		state.calendar.select_range(&[]);
 	}
 }
 
-fn empty_calendar_days(state: &State) -> Vec<chrono::NaiveDate> {
+fn uncovered_calendar_days(state: &State) -> Vec<chrono::NaiveDate> {
 	let days = if state.range_view_active() {
 		state.calendar_dates()
 	} else {
 		vec![state.calendar.day]
 	};
 	days.into_iter()
-		.filter(|&day| !state.calendar.has_calendar_events_on(day))
+		.filter(|&day| !state.calendar.is_covered(day))
 		.collect()
 }
 
-fn show_cached_calendar(state: &mut State) -> Task<Message> {
-	load_cached_calendar(state);
+fn show_calendar(state: &mut State) -> Task<Message> {
+	read_calendar_range(state);
 	if !state.calendar.is_signed_in() {
 		return Task::none();
 	}
-	let missing = empty_calendar_days(state);
+	let missing = uncovered_calendar_days(state);
 	if missing.is_empty() {
 		state.calendar_fetch_pending.clear();
 		return Task::none();
@@ -2498,7 +2498,7 @@ fn fetch_pending_calendar_days(state: &mut State, fetched: &[chrono::NaiveDate])
 	// Only navigation to dates outside the completed request needs a follow-up.
 	// A successful, genuinely empty day must not start an endless fetch loop.
 	if pending.iter().any(|day| !fetched.contains(day)) {
-		show_cached_calendar(state)
+		show_calendar(state)
 	} else {
 		Task::none()
 	}
@@ -2511,12 +2511,12 @@ fn auto_sync_calendar(state: &mut State) -> Task<Message> {
 	{
 		sync_calendar(state)
 	} else {
-		show_cached_calendar(state)
+		show_calendar(state)
 	}
 }
 
 fn sync_calendar(state: &mut State) -> Task<Message> {
-	load_cached_calendar(state);
+	read_calendar_range(state);
 	if !state.calendar.is_signed_in()
 		|| state.calendar.is_busy()
 		|| state.calendar.pending_move.is_some()

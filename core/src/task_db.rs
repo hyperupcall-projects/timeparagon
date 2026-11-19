@@ -1,7 +1,7 @@
 //! The single local database: remote task metadata, durable ID/alias allocation,
 //! and everything else this device keeps between runs.
 //!
-//! Tasks, cached calendar months and settings (see [`crate::settings`]) have
+//! Tasks, confirmed calendar records and settings (see [`crate::settings`]) have
 //! tables of their own. The rest are JSON documents, one per kind of data,
 //! named in [`keys`].
 //!
@@ -35,10 +35,10 @@ pub struct TaskData {
 /// The schema this build sets up, kept in SQLite's `user_version`.
 ///
 /// Schema changes are applied transactionally by [`Database::set_up`].
-pub const SCHEMA_VERSION: i64 = 8;
+pub const SCHEMA_VERSION: i64 = 9;
 
 /// Older schemas [`Database::set_up`] can bring up to date.
-const UPGRADABLE: std::ops::RangeInclusive<i64> = 2..=7;
+const UPGRADABLE: std::ops::RangeInclusive<i64> = 2..=8;
 
 fn schema_version(db: &Connection) -> Result<i64, String> {
 	db.query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -110,7 +110,7 @@ impl Database {
             CREATE TABLE IF NOT EXISTS google_task_backend_state (task_id INTEGER PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS google_entities (id TEXT PRIMARY KEY, event TEXT, acknowledged_at TEXT, observed_at TEXT, sending_since TEXT);
             CREATE TABLE IF NOT EXISTS google_id_map (local TEXT PRIMARY KEY, remote TEXT NOT NULL, calendar TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS calendar_months (month TEXT PRIMARY KEY, events TEXT NOT NULL);")
+")
             .map_err(|e| e.to_string())?;
 		// Schema 5: the settings, which used to be config.toml.
 		tx.execute_batch(crate::settings::schema::CREATE)
@@ -121,6 +121,8 @@ impl Database {
 		// Schema 8: incremental Google sync used to create these on first use.
 		crate::calendar::api::incremental::install_schema(&tx).map_err(|e| e.to_string())?;
 		Self::remove_write_queue(&tx).map_err(|e| e.to_string())?;
+		Self::migrate_calendar(&tx)?;
+		crate::local_changes::install_calendar(&tx).map_err(|e| e.to_string())?;
 		tx.commit().map_err(|e| e.to_string())?;
 
 		if !memory {
@@ -228,6 +230,125 @@ impl Database {
                  DELETE FROM timeparagon_change_counters WHERE name='google.queue';",
             )?;
 		}
+		Ok(())
+	}
+
+	/// Schema 9: source rows replace rendered month snapshots. Keep local edits,
+	/// stable IDs and replicated sleep; convert their old source-row codec once.
+	fn migrate_calendar(tx: &Connection) -> Result<(), String> {
+		for table in ["google_sync_events", "sleep_nights"] {
+			let rows = tx
+				.prepare(&format!("SELECT rowid,event FROM {table}"))
+				.and_then(|mut q| {
+					q.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+						.collect::<rusqlite::Result<Vec<_>>>()
+				})
+				.map_err(|e| e.to_string())?;
+			for (id, json) in rows {
+				let mut value: serde_json::Value =
+					serde_json::from_str(&json).map_err(|e| e.to_string())?;
+				if let Some(channels) = value.get("color").and_then(|c| c.as_array()) {
+					let channel =
+						|i: usize| channels.get(i).and_then(|c| c.as_f64()).unwrap_or(1.0) as f32;
+					let color = crate::hex::HexColor(iced_core::Color::from_rgba(
+						channel(0),
+						channel(1),
+						channel(2),
+						channel(3),
+					));
+					value["color"] = serde_json::Value::String(color.to_string());
+					tx.execute(
+						&format!("UPDATE {table} SET event=?2 WHERE rowid=?1"),
+						params![id, value.to_string()],
+					)
+					.map_err(|e| e.to_string())?;
+				}
+			}
+		}
+		// Rebuild confirmed task rows from the raw feed, before retiring the old
+		// rendered cache. Desired values remain in google_entities throughout.
+		if tx
+			.query_row(
+				"SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='calendar_months')",
+				[],
+				|r| r.get::<_, bool>(0),
+			)
+			.map_err(|e| e.to_string())?
+		{
+			let tasks = tx
+				.prepare("SELECT list_id,entry FROM google_sync_tasks")
+				.and_then(|mut q| {
+					q.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+						.collect::<rusqlite::Result<Vec<_>>>()
+				})
+				.map_err(|e| e.to_string())?;
+			tx.execute("DELETE FROM google_task_records", [])
+				.map_err(|e| e.to_string())?;
+			for (list, json) in tasks {
+				let value: serde_json::Value =
+					serde_json::from_str(&json).map_err(|e| e.to_string())?;
+				if value["deleted"].as_bool() == Some(true) {
+					continue;
+				}
+				let text = |key: &str| value[key].as_str().unwrap_or_default();
+				let day = text("due")
+					.get(..10)
+					.and_then(|day| day.parse().ok())
+					.unwrap_or(crate::timeblocking::UNDATED);
+				let notes = text("notes");
+				let mut event = Event {
+					id: ids::event_id(text("id")),
+					calendar_id: ids::calendar_id(&list),
+					title: if text("title").is_empty() {
+						"(No title)".into()
+					} else {
+						text("title").to_owned()
+					},
+					start: crate::calendar::at_clock(day, 0, 0),
+					end: crate::calendar::at_clock(day.succ_opt().unwrap_or(day), 0, 0),
+					all_day: true,
+					color: crate::calendar::colors::TASK,
+					completed: text("status") == "completed",
+					details: crate::calendar::Details {
+						description: crate::calendar::task_metadata::prose(notes).to_owned(),
+						link: if text("webViewLink").is_empty() {
+							format!("https://tasks.google.com/task/{}", text("id"))
+						} else {
+							text("webViewLink").to_owned()
+						},
+						task_updated_at: text("updated")
+							.parse::<chrono::DateTime<chrono::Utc>>()
+							.ok(),
+						task_data: crate::calendar::task_metadata::read(notes)?,
+						..Default::default()
+					},
+				};
+				if event.details.task_data.is_none() {
+					let mut data = tx.query_row("SELECT t.id,t.metadata FROM tasks t JOIN task_aliases a ON a.task_id=t.id WHERE a.source=?1",
+						[crate::timeblocking::block_key(&event)],read_data).optional().map_err(|e|e.to_string())?;
+					if let Some(data) = &mut data {
+						let pending:bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM google_entities WHERE sending_since IS NOT NULL AND json_extract(event,'$.details.task_data.id')=?1)",[data.id],|r|r.get(0)).map_err(|e|e.to_string())?;
+						if pending {
+							data.metadata = Default::default();
+						}
+					}
+					event.details.task_data = data;
+				}
+				tx.execute(
+					"INSERT INTO google_task_records VALUES(?1,?2)",
+					params![
+						event.id,
+						serde_json::to_string(&event).map_err(|e| e.to_string())?
+					],
+				)
+				.map_err(|e| e.to_string())?;
+			}
+			tx.execute_batch(
+				"DELETE FROM documents WHERE key='calendar_task_snapshot'; DROP TABLE calendar_months;",
+			)
+			.map_err(|e| e.to_string())?;
+		}
+
 		Ok(())
 	}
 
@@ -780,5 +901,128 @@ confirmed','{}','2026-01-01T00:00:00+00:00');
 				.unwrap();
 		assert_eq!(aliases, 81, "all processes reuse the same shared task");
 		std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+	}
+}
+
+#[cfg(test)]
+mod calendar_migration_tests {
+	use super::*;
+
+	#[test]
+	fn schema_8_retires_rendered_caches_and_preserves_sources_and_pending_edits() {
+		let dir = tempfile::tempdir().unwrap();
+		let path = dir.path().join("calendar.sqlite3");
+		let mut db = Database::open(&path).unwrap();
+		let mut snapshot = crate::calendar::sample_snapshot();
+		snapshot.events.truncate(1);
+		let confirmed = &snapshot.events[0];
+		let mut old = serde_json::to_value(confirmed).unwrap();
+		old["color"] = serde_json::json!([
+			confirmed.color.r,
+			confirmed.color.g,
+			confirmed.color.b,
+			confirmed.color.a
+		]);
+		let mut desired = confirmed.clone();
+		desired.title = "Keep this pending edit".into();
+		db.connection().execute_batch("CREATE TABLE calendar_months(month TEXT PRIMARY KEY,events TEXT NOT NULL); INSERT INTO calendar_months VALUES('2026-10','{\"events\":[]}'); INSERT INTO documents VALUES('calendar_task_snapshot','true'); INSERT INTO google_sync_calendars VALUES('primary','keep-token'); PRAGMA user_version=8;").unwrap();
+		db.connection()
+			.execute(
+				"INSERT INTO google_sync_events VALUES(?1,?2,NULL,'a','b',0,?3)",
+				params![confirmed.calendar_id, confirmed.id, old.to_string()],
+			)
+			.unwrap();
+		db.connection()
+			.execute(
+				"INSERT INTO google_entities(id,event) VALUES(?1,?2)",
+				params![
+					format!("{}\n{}", desired.calendar_id, desired.id),
+					serde_json::to_string(&desired).unwrap()
+				],
+			)
+			.unwrap();
+		db.connection().execute("INSERT INTO google_sync_tasks VALUES('list','task',?1)",[serde_json::json!({"id":"task","title":"Confirmed task","status":"needsAction"}).to_string()]).unwrap();
+		db.connection()
+			.execute(
+				"INSERT INTO google_id_map VALUES('local','remote','primary')",
+				[],
+			)
+			.unwrap();
+		drop(db);
+		let mut upgraded = Database::open(&path).unwrap();
+		let tx = upgraded.connection();
+		assert_eq!(schema_version(tx).unwrap(), SCHEMA_VERSION);
+		assert!(
+			!tx.query_row(
+				"SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='calendar_months')",
+				[],
+				|r| r.get::<_, bool>(0)
+			)
+			.unwrap()
+		);
+		assert_eq!(
+			tx.query_row("SELECT sync_token FROM google_sync_calendars", [], |r| {
+				r.get::<_, String>(0)
+			})
+			.unwrap(),
+			"keep-token"
+		);
+		let json: String = tx
+			.query_row("SELECT event FROM google_sync_events", [], |r| r.get(0))
+			.unwrap();
+		assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), *confirmed);
+		let task: String = tx
+			.query_row("SELECT event FROM google_task_records", [], |r| r.get(0))
+			.unwrap();
+		assert_eq!(
+			serde_json::from_str::<Event>(&task).unwrap().title,
+			"Confirmed task"
+		);
+		assert_eq!(
+			tx.query_row("SELECT count(*) FROM google_id_map", [], |r| r
+				.get::<_, i64>(0))
+				.unwrap(),
+			1
+		);
+		assert_eq!(
+			crate::calendar::repository::event(&path, &desired.calendar_id, &desired.id)
+				.unwrap()
+				.unwrap()
+				.title,
+			desired.title
+		);
+	}
+
+	#[test]
+	fn a_failed_calendar_upgrade_rolls_back_the_schema_and_source_rows() {
+		let dir = tempfile::tempdir().unwrap();
+		let path = dir.path().join("calendar.sqlite3");
+		drop(Database::open(&path).unwrap());
+		let db = Connection::open(&path).unwrap();
+		db.execute_batch("CREATE TABLE calendar_months(month TEXT PRIMARY KEY,events TEXT NOT NULL);
+            INSERT INTO google_sync_events VALUES('c','e',NULL,'a','b',0,'{\"color\":[1,0,0,1]}');
+            CREATE TRIGGER fail_calendar_upgrade BEFORE UPDATE ON google_sync_events BEGIN SELECT RAISE(ABORT,'test failure'); END;
+            PRAGMA user_version=8;").unwrap();
+		drop(db);
+		assert!(Database::open(&path).is_err());
+		let db = Connection::open(&path).unwrap();
+		assert_eq!(schema_version(&db).unwrap(), 8);
+		assert!(
+			db.query_row(
+				"SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='calendar_months')",
+				[],
+				|r| r.get::<_, bool>(0)
+			)
+			.unwrap()
+		);
+		assert_eq!(
+			db.query_row(
+				"SELECT json_type(event,'$.color') FROM google_sync_events",
+				[],
+				|r| r.get::<_, String>(0)
+			)
+			.unwrap(),
+			"array"
+		);
 	}
 }

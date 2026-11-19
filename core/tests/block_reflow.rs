@@ -105,12 +105,14 @@ fn planned_task_survives_reload_moves_with_its_block_and_is_released_on_delete()
 	.unwrap();
 
 	let path = timeparagon_core::task_db::path().unwrap();
+	let day = block.start.date_naive();
 	let reload = || {
-		let mut restored = Vec::new();
-		calendar::operations::load_overlay(&path)
+		calendar::repository::read(&path, &[day], 1)
 			.unwrap()
-			.apply(&mut restored, None);
-		restored.into_iter().find(|event| event.id == id)
+			.snapshot
+			.events
+			.into_iter()
+			.find(|event| event.id == id)
 	};
 	let restored = reload().expect("task survives reopening the database");
 	assert_eq!(
@@ -194,10 +196,14 @@ fn planned_habit_keeps_its_link_through_duration_edits_reload_and_unassign() {
 		timeblocking::metadata(&task).habit_id.as_deref(),
 		Some("reading-library-habit")
 	);
-	let mut restored = Vec::new();
-	calendar::operations::load_overlay(&timeparagon_core::task_db::path().unwrap())
-		.unwrap()
-		.apply(&mut restored, None);
+	let restored = calendar::repository::read(
+		&timeparagon_core::task_db::path().unwrap(),
+		&[task.start.date_naive()],
+		1,
+	)
+	.unwrap()
+	.snapshot
+	.events;
 	let restored = restored.into_iter().find(|task| task.id == id).unwrap();
 	assert_eq!(
 		timeblocking::metadata(&restored),

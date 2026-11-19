@@ -43,7 +43,7 @@ fn state() -> State {
 	state.view = timeparagon::app::CalendarView::Month;
 	state.week_anchor = snapshot.day;
 	let dates = state.calendar_dates();
-	state.calendar.apply_week_snapshot(snapshot, &dates);
+	state.calendar.accept_snapshot(snapshot, &dates);
 	state
 }
 
@@ -62,7 +62,7 @@ fn whole_month_survives_cache_pruning_and_day_interactions() {
 			state
 				.calendar
 				.events_on(*day)
-				.iter()
+				.into_iter()
 				.any(|event| event.id == day.to_string()),
 			"missing {day}"
 		);
@@ -269,7 +269,7 @@ fn habit_month_filters_other_events_and_retains_completion_history() {
 	let mut snapshot = calendar::sample_snapshot();
 	snapshot.day = day;
 	snapshot.events = vec![completed.clone(), pending, other];
-	state.calendar.apply_week_snapshot(snapshot, &dates);
+	state.calendar.accept_snapshot(snapshot, &dates);
 	let format = state.config.appearance.time_format;
 	let label = format!(
 		"Completed at {}",
@@ -302,7 +302,7 @@ fn habit_month_filters_other_events_and_retains_completion_history() {
 		state
 			.calendar
 			.events_on(day)
-			.iter()
+			.into_iter()
 			.find(|e| e.id == completed.id)
 			.unwrap()
 			.details

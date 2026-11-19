@@ -600,7 +600,7 @@ mod tests {
 		start_drag(&mut state);
 		let days = state.calendar_dates();
 		let destination = days[3];
-		let mut snapshot = state.calendar.cached_snapshot().unwrap();
+		let mut snapshot = state.calendar.snapshot().unwrap();
 		let template = snapshot.events[0].clone();
 		for index in 0..20 {
 			let mut task = template.clone();
@@ -612,7 +612,7 @@ mod tests {
 			task.end = task.start + chrono::Duration::minutes(30);
 			snapshot.events.push(task);
 		}
-		state.calendar.apply_week_snapshot(snapshot, &days);
+		state.calendar.accept_snapshot(snapshot, &days);
 		let mut ui = Simulator::with_size(
 			Settings::default(),
 			state.editor_window_size,
@@ -803,7 +803,7 @@ mod tests {
 
 	/// Two timed meetings on `day`, 10–11 and 14–15, to drop between.
 	fn with_meetings(state: &mut State, day: chrono::NaiveDate) {
-		let mut snapshot = state.calendar.cached_snapshot().unwrap();
+		let mut snapshot = state.calendar.snapshot().unwrap();
 		let template = calendar::sample_snapshot().events[0].clone();
 		for (id, title, hour) in [
 			("morning", "Morning meeting", 10),
@@ -818,7 +818,7 @@ mod tests {
 			snapshot.events.push(event);
 		}
 		let days = state.calendar_dates();
-		state.calendar.apply_week_snapshot(snapshot, &days);
+		state.calendar.accept_snapshot(snapshot, &days);
 	}
 
 	fn row_bounds(state: &State, label: &str) -> Rectangle {

@@ -967,7 +967,7 @@ fn the_calendar_omits_task_counts_and_sync_status() -> Result<(), Error> {
 	let pending_count = state
 		.calendar
 		.events_on(day)
-		.iter()
+		.into_iter()
 		.filter(|event| event.is_task() && !event.completed)
 		.count();
 	assert!(pending_count > 0);

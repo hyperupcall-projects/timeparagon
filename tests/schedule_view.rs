@@ -30,7 +30,7 @@ fn state() -> State {
 	state.calendar = Store::with_snapshot(snapshot.clone());
 	state
 		.calendar
-		.apply_week_snapshot(snapshot, &state.calendar_dates());
+		.accept_snapshot(snapshot, &state.calendar_dates());
 	state
 }
 

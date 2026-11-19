@@ -309,6 +309,7 @@ mod placement_tests {
 		let open_block = use_signal(|| None::<String>);
 		let editing = use_signal(|| None::<calendar::Event>);
 		let snapshot = Snapshot {
+			revision: 0,
 			day,
 			calendars: vec![],
 			events: vec![],

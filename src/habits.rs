@@ -1070,7 +1070,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			state.habits.completing.remove(&id);
 			match result {
 				Ok(event) => {
-					state.calendar.replace_habit_occurrence(&event);
+					state.calendar.replace_event(&event);
 					return record_occurrence(state, &event);
 				}
 				Err(error) => state.habits.error = Some(error),
@@ -1080,7 +1080,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 		Action::OccurrenceSynced(id, result) => {
 			state.habits.completing.remove(&id);
 			match result {
-				Ok(event) => state.calendar.replace_habit_occurrence(&event),
+				Ok(event) => state.calendar.replace_event(&event),
 				Err(error) => state.habits.error = Some(error),
 			}
 			Task::none()
@@ -1177,7 +1177,7 @@ fn sync_occurrences(state: &mut State, id: &str, day: NaiveDate) -> Task<Message
 	let occurrences: Vec<calendar::Event> = state
 		.calendar
 		.events_on(day)
-		.iter()
+		.into_iter()
 		.filter(|event| {
 			event.details.habit
 				&& state.habits.habit_of(event) == Some(id)

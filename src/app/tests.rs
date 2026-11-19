@@ -1270,7 +1270,7 @@ fn switching_to_uncached_views_fetches_despite_a_recent_sync() {
 }
 
 #[test]
-fn empty_cached_days_are_fetched_again_on_navigation() {
+fn empty_covered_days_are_not_fetched_again_on_navigation() {
 	let mut state = State::blank();
 	let mut snapshot = calendar::sample_snapshot();
 	snapshot.events.clear();
@@ -1282,7 +1282,7 @@ fn empty_cached_days_are_fetched_again_on_navigation() {
 		&mut state,
 		Message::Calendar(CalendarMessage::CalendarDaySelected(day)),
 	);
-	assert_eq!(state.calendar.sync, SyncState::Syncing);
+	assert_eq!(state.calendar.sync, SyncState::Idle);
 }
 
 #[test]
@@ -1490,7 +1490,39 @@ fn stepping_the_day_moves_the_view_and_drops_the_old_events() {
 #[test]
 fn stepping_back_to_a_day_paints_its_cached_events_at_once() {
 	let mut state = State::blank();
-	state.calendar = calendar::Store::with_snapshot(calendar::sample_snapshot());
+	let snapshot = calendar::sample_snapshot();
+	let temporary = tempfile::tempdir().unwrap();
+	let path = temporary.path().join("calendar.sqlite3");
+	let _ = crate::task_db::Database::open(&path).unwrap();
+	let db = rusqlite::Connection::open(&path).unwrap();
+	for event in &snapshot.events {
+		db.execute(
+			"INSERT INTO google_sync_events VALUES(?1,?2,NULL,?3,?4,0,?5)",
+			rusqlite::params![
+				event.calendar_id,
+				event.id,
+				event.start.to_utc().to_rfc3339(),
+				event.end.to_utc().to_rfc3339(),
+				serde_json::to_string(event).unwrap()
+			],
+		)
+		.unwrap();
+	}
+	db.execute("INSERT INTO documents VALUES('calendar_sync_state',?1)",[serde_json::json!({"fetched_at":snapshot.fetched_at,"calendars":snapshot.calendars,"notice":null}).to_string()]).unwrap();
+	db.execute(
+		"INSERT INTO google_sync_windows VALUES(?1,?2)",
+		[
+			calendar::at_clock(snapshot.day, 0, 0)
+				.to_utc()
+				.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+			calendar::at_clock(snapshot.day.succ_opt().unwrap(), 0, 0)
+				.to_utc()
+				.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+		],
+	)
+	.unwrap();
+	state.calendar = calendar::Store::with_snapshot(snapshot);
+	state.calendar.restore(Some(path));
 	let start = state.calendar.day;
 	let cached = state.calendar.events.len();
 	assert!(cached > 0);

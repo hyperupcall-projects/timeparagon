@@ -524,25 +524,23 @@ pub fn plan_from_cache(
 		return Vec::new();
 	}
 	let day_end_hour = calendar_settings.day_start_hour();
-	let calendars = calendar::day_cache::load_sync_state(database)
-		.map(|(_, calendars)| calendars)
-		.unwrap_or_default();
 	let first = calendar::day_at(from, day_end_hour);
 	let last = calendar::day_at(until, day_end_hour);
-
-	let mut events = Vec::new();
-	let mut day = first;
-	while day <= last {
-		if let Some(loaded) = calendar::day_cache::load(database, day, day_end_hour) {
-			events.extend(
-				loaded
-					.into_iter()
-					.filter(|event| calendar::event_enabled(&calendars, event, calendar_settings)),
-			);
+	let dates: Vec<_> = first.iter_days().take_while(|day| *day <= last).collect();
+	let read = match calendar::repository::read(database, &dates, day_end_hour) {
+		Ok(read) => read,
+		Err(error) => {
+			log::warn!("could not read reminders' calendar: {error}");
+			return Vec::new();
 		}
-		let Some(next) = day.succ_opt() else { break };
-		day = next;
-	}
+	};
+	let calendars = read.snapshot.calendars;
+	let events: Vec<_> = read
+		.snapshot
+		.events
+		.into_iter()
+		.filter(|event| calendar::event_enabled(&calendars, event, calendar_settings))
+		.collect();
 
 	let app_calendar = calendar_settings
 		.app_calendar

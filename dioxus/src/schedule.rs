@@ -68,7 +68,7 @@ pub fn Planner(
 	let agenda_mode = period == PlanView::Schedule;
 	let dates = schedule_dates(period, selected, days_count, settings.first_day_of_week);
 	let (loaded, disk_view) =
-		crate::cache::use_calendar(dates.clone(), settings.clone(), revision, true);
+		crate::calendar_data::use_calendar(dates.clone(), settings.clone(), revision, true);
 	// Keep Add and event sheets anchored to the date selected in the strip.
 	use_effect(move || {
 		on_day.call(anchor());
@@ -386,11 +386,11 @@ mod tests {
 	}
 
 	fn preview<const MODE: u8>() -> Element {
-		use_context_provider(crate::cache::Loader::default);
+		use_context_provider(crate::calendar_data::Loader::default);
 		let names = use_signal(timeparagon_core::habits::Library::default);
 		use_context_provider(|| crate::habits::EventNames(names));
 		let changes = use_signal(|| 0);
-		use_context_provider(|| crate::cache::Changes(changes));
+		use_context_provider(|| crate::calendar_data::Changes(changes));
 		let day = date(2026, 11, 8);
 		let view = use_signal(|| {
 			if MODE == 0 {
@@ -434,6 +434,7 @@ mod tests {
 			if let Ok(directory) = std::env::var("TIMEPARAGON_PLANNER_PREVIEW_DIR") {
 				let day = date(2026, 11, 8);
 				let snapshot = Snapshot {
+					revision: 0,
 					calendars: vec![],
 					events: vec![],
 					day,
@@ -580,6 +581,7 @@ mod tests {
 		let second = first + Duration::days(1);
 		let third = second + Duration::days(1);
 		let snapshot = Snapshot {
+			revision: 0,
 			calendars: vec![calendar::Calendar {
 				id: "work".into(),
 				name: "Work".into(),
@@ -691,6 +693,7 @@ mod tests {
 				details: calendar::Details::default(),
 			};
 			let snapshot = Snapshot {
+				revision: 0,
 				calendars: vec![],
 				events: vec![
 					event("Evening work", at(first, 18), at(first, 19), false),

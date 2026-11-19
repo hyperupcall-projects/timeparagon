@@ -226,12 +226,17 @@ fn covers_time(event: &Event, time: NaiveTime) -> bool {
 
 impl Store {
 	fn loaded_events(&self) -> impl Iterator<Item = &Event> {
-		self.events.iter().chain(self.cache.values().flatten())
+		self.events.iter()
 	}
 
 	/// Whether a view should draw this event, given the search in effect.
-	pub fn search_shows(&self, event: &Event, day: NaiveDate, settings: &CalendarSettings) -> bool {
-		self.search.shows(event, self.events_on(day), settings)
+	pub fn search_shows(
+		&self,
+		event: &Event,
+		_day: NaiveDate,
+		settings: &CalendarSettings,
+	) -> bool {
+		self.search.shows(event, &self.events, settings)
 	}
 
 	/// Whether a task inside `block` should be listed there: all of them when

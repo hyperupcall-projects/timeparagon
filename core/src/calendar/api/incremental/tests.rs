@@ -518,12 +518,7 @@ fn offline_views_use_coverage_and_changes_to_offscreen_dates_after_reopening() {
 		.borrow_mut()
 		.put(PRIMARY, event("old", day(), 10));
 	let first = harness.sync(day(), next);
-	crate::calendar::day_cache::save_sync_state(
-		&harness.path,
-		crate::clock::now(),
-		&first.calendars,
-	)
-	.unwrap();
+
 	// An old acknowledged local edit must not resurrect the deleted event
 	// when a later incremental pass changes its offscreen day.
 	let mut database = Database::open(&harness.path).unwrap();
@@ -539,14 +534,13 @@ fn offline_views_use_coverage_and_changes_to_offscreen_dates_after_reopening() {
 		)
 		.unwrap();
 	// A fetched empty day is different from one outside the sync windows.
-	let cached = crate::calendar::view_cache::load(&harness.path, &[next], 0)
-		.unwrap()
-		.unwrap();
-	assert!(cached.events.is_empty());
+	let cached = crate::calendar::repository::read(&harness.path, &[next], 0).unwrap();
+	assert!(cached.snapshot.events.is_empty());
 	assert!(
-		crate::calendar::view_cache::load(&harness.path, &[next.succ_opt().unwrap()], 0)
+		crate::calendar::repository::read(&harness.path, &[next.succ_opt().unwrap()], 0)
 			.unwrap()
-			.is_none()
+			.covered
+			.is_empty()
 	);
 	{
 		let mut google = harness.google.borrow_mut();
@@ -555,12 +549,30 @@ fn offline_views_use_coverage_and_changes_to_offscreen_dates_after_reopening() {
 	}
 	// Refresh only tomorrow; today's database copy must still catch up.
 	harness.sync(next, next);
-	let requests = harness.google.borrow().requests.len();
-	let cached = crate::calendar::view_cache::load(&harness.path, &[day()], 0)
+	// As fetch_range does after applying incremental changes to every window.
+	let observations: Vec<Event> = database
+		.connection()
+		.prepare("SELECT event FROM google_sync_events")
 		.unwrap()
-		.unwrap();
+		.query_map([], |r| r.get::<_, String>(0))
+		.unwrap()
+		.map(|row| serde_json::from_str(&row.unwrap()).unwrap())
+		.collect();
+	crate::calendar::operations::observe_range(
+		&harness.path,
+		&observations,
+		next,
+		next,
+		crate::clock::now(),
+		0,
+		true,
+	)
+	.unwrap();
+	let requests = harness.google.borrow().requests.len();
+	let cached = crate::calendar::repository::read(&harness.path, &[day()], 0).unwrap();
 	assert_eq!(
 		cached
+			.snapshot
 			.events
 			.iter()
 			.map(|event| event.id.as_str())

@@ -139,6 +139,7 @@ opt-level = 3
 opt-level = 3
 
 [dev-dependencies]
+rusqlite = "0.41.0"
 iced_test = "0.14"
 
 # The iced application stays the root package. The Dioxus day view is a

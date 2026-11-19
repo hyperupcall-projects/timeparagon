@@ -426,10 +426,10 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
 						times,
 					);
 				}
-				state.calendar.invalidate_other_days();
+
 				tasks.push(queue_save(state));
 			}
-			state.calendar.forget_event_everywhere(&id);
+			state.calendar.forget_event(&id);
 			if state
 				.calendar
 				.edit_draft
@@ -563,7 +563,7 @@ fn set_own_response(
 	id: &str,
 	response: calendar::meeting::Response,
 ) -> Option<calendar::meeting::Response> {
-	let event = state.calendar.event_mut_anywhere(id)?;
+	let event = state.calendar.event_mut(id)?;
 	let previous = event.details.attendance.set_own_response(response);
 	let email = event.details.attendance.own_email.clone()?;
 	if let Some(draft) = state.calendar.edit_draft.as_mut().filter(|d| d.id == id) {

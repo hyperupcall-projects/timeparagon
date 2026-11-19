@@ -67,7 +67,7 @@ fn state() -> State {
 	state.week_anchor = date(15);
 	state
 		.calendar
-		.apply_week_snapshot(snapshot, &calendar::week_dates(date(15), 9));
+		.accept_snapshot(snapshot, &calendar::week_dates(date(15), 9));
 	state
 }
 
@@ -311,21 +311,21 @@ fn weekly_task_writes_keep_other_days_visible_and_update_cached_copies() {
 		state
 			.calendar
 			.events_on(date(14))
-			.iter()
+			.into_iter()
 			.any(|e| e.id == "standup")
 	);
 	assert!(
 		state
 			.calendar
 			.events_on(date(14))
-			.iter()
+			.into_iter()
 			.any(|e| e.title == "Renamed task")
 	);
 	assert!(
 		state
 			.calendar
 			.events_on(date(21))
-			.iter()
+			.into_iter()
 			.any(|e| e.id == "last-event")
 	);
 
@@ -342,7 +342,7 @@ fn weekly_task_writes_keep_other_days_visible_and_update_cached_copies() {
 		state
 			.calendar
 			.events_on(date(14))
-			.iter()
+			.into_iter()
 			.any(|e| e.id == "task:thursday" && e.completed)
 	);
 	let _ = app::update(
@@ -355,21 +355,21 @@ fn weekly_task_writes_keep_other_days_visible_and_update_cached_copies() {
 		state
 			.calendar
 			.events_on(date(14))
-			.iter()
+			.into_iter()
 			.any(|e| e.id == "task:thursday")
 	);
 	assert!(
 		state
 			.calendar
 			.events_on(date(14))
-			.iter()
+			.into_iter()
 			.any(|e| e.id == "standup")
 	);
 	assert!(
 		state
 			.calendar
 			.events_on(date(21))
-			.iter()
+			.into_iter()
 			.any(|e| e.id == "last-event")
 	);
 }
@@ -892,7 +892,7 @@ fn task_list_mixes_tasks_and_events_in_start_order_and_keeps_each_day_separate()
 		state
 			.calendar
 			.events_on(date(14))
-			.iter()
+			.into_iter()
 			.find(|e| e.id == "standup")
 			.unwrap(),
 	));
@@ -902,7 +902,7 @@ fn task_list_mixes_tasks_and_events_in_start_order_and_keeps_each_day_separate()
 	});
 	early.id = "scheduled-task".into();
 	early.calendar_id = "work".into();
-	state.calendar.replace_cached_task("task:early", &early);
+	state.calendar.replace_task("task:early", &early);
 	let entries = state
 		.calendar
 		.task_list_events_on(date(14), &state.config.calendar);
@@ -977,8 +977,7 @@ fn weekly_task_view_omits_all_day_tasks_without_hiding_scheduled_cards() -> Resu
 			task.details.task_data = Some(timeparagon::task_db::TaskData { id: 999, metadata });
 		}
 		let task_id = task.id.clone();
-		state.calendar.replace_cached_task(&task_id, &task);
-		state.calendar.events.push(task);
+		state.calendar.replace_task(&task_id, &task);
 	}
 	let mut ui = render(&state, Size::new(1500.0, 900.0));
 	assert!(ui.find("Wednesday").is_ok());
@@ -1053,8 +1052,7 @@ fn board_state() -> State {
 		task.title = title.into();
 		task.start = at(day, hour);
 		task.end = task.start + Duration::minutes(45);
-		state.calendar.replace_cached_task(&task.id, &task);
-		state.calendar.events.push(task);
+		state.calendar.replace_task(&task.id, &task);
 	}
 	state
 }
@@ -1281,8 +1279,9 @@ fn board_layout_renders_at_reference_size_and_in_dark_mode() -> Result<(), Error
 		area: None,
 	})
 	.collect();
-	state.calendar.apply_week_snapshot(
+	state.calendar.accept_snapshot(
 		calendar::Snapshot {
+			revision: 0,
 			calendars: state.calendar.calendars.clone(),
 			events,
 			day: date(15),
