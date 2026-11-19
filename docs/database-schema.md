@@ -372,7 +372,7 @@ empty value, so callers can refuse to save over data they could not read.
 | `contacts` | — | `people::cache::File` | People screen | Raw Google People API responses per signed-in account |
 | `routes` | — | `Vec<travel::Stored>` | Desktop travel | Cached Mapbox trip times: `[{from,to,mode,seconds,meters}]` |
 | `calendar_sync_state` | — | `repository::SyncState` | Calendar refresh | `{"fetched_at", "calendars": [{id,name,color,primary,selected_by_google}], "notice"}` |
-| `dioxus_theme` | — | `String` | Android app | Theme name. The Android home-screen widget reads it directly with SQL (`DayRenderer.kt`) |
+| `dioxus_theme` | — | `String` | Android app | Theme name. Rust publishes it in `widget-day.json`; the Android home-screen widget reads only that snapshot |
 | `settings_imported_at` | — | RFC 3339 string | Schema 5 setup | When this database imported `config.toml`, or found none to import. Present means it never imports one again |
 
 `shared_data` (`core/src/shared_data.rs`) writes the remaining `shared.*` documents and routes brain dumps and task work to normalized tables.

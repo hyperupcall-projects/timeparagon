@@ -22,7 +22,7 @@ pub mod keys {
 	pub const CONTACTS: &str = "contacts";
 	pub const ROUTES: &str = "routes";
 	pub const SYNC_STATE: &str = "calendar_sync_state";
-	/// Android's widget reads this one too: see `DayRenderer.kt`.
+	/// Published by Rust in the Android widget snapshot: see `widget.rs`.
 	pub const THEME: &str = "dioxus_theme";
 }
 

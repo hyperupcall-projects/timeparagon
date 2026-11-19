@@ -326,6 +326,10 @@ clean tree, because the manifest names the widget's resources.
 - `src/widget.rs` writes `files/widget-day.json`. The app does so whenever it shows
   today, and `WidgetRefreshService` syncs about every 30 minutes while it is closed,
   in a separate `:widget` process.
+- The snapshot includes the saved theme preference and is also updated on theme
+  changes, retaining the cached day. Kotlin reads only this atomically replaced
+  JSON file; all database access goes through Rust's SQLite library. System theme
+  choices follow Android's current light/dark setting when the widget renders.
 - `DayRenderer.kt` draws the day and hands the widget's `ListView` one bitmap per
   hour, because `RemoteViews` cannot place a view at a time of day on API 24.
 - Without Google sign-in nothing is synced, and the widget asks you to open the app.

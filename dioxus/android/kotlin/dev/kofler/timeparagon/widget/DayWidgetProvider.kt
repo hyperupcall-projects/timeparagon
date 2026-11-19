@@ -72,10 +72,10 @@ class DayWidgetProvider : AppWidgetProvider() {
     }
 
     private fun redraw(context: Context) {
-        updateAll(context)
+        val snapshot = updateAll(context)
         redrawRows(context)
-        val data = WidgetDay.load(context) ?: return
-        val positions = ids(context).associateWith { scrollPosition(context, it, data) }
+        val data = snapshot.day ?: return
+        val positions = ids(context).associateWith { scrollPosition(context, it, data, snapshot.theme) }
             .filterValues { it != null }
         if (positions.isEmpty()) return
         // Refreshing the rows cancels a scroll in progress, and a list that has to
@@ -129,23 +129,25 @@ class DayWidgetProvider : AppWidgetProvider() {
             ).takeIf { it > 0 } ?: 300
         }
 
-        fun rendererFor(context: Context, data: WidgetDay, id: Int): DayRenderer {
+        fun rendererFor(context: Context, data: WidgetDay, theme: String, id: Int): DayRenderer {
             val metrics = context.resources.displayMetrics
             return DayRenderer(
                 data,
-                WidgetColors.of(context),
+                WidgetColors.of(context, theme),
                 (widthDp(context, id) * metrics.density).toInt().coerceAtLeast(1),
                 metrics.density,
                 context.resources.configuration.fontScale,
             )
         }
 
-        private fun updateAll(context: Context) {
-            val data = WidgetDay.load(context)
-            val colors = WidgetColors.of(context)
+        private fun updateAll(context: Context): WidgetSnapshot {
+            val snapshot = WidgetSnapshot.load(context)
+            val data = snapshot.day
+            val colors = WidgetColors.of(context, snapshot.theme)
             ids(context).forEach { id ->
                 manager(context).updateAppWidget(id, views(context, id, data, colors))
             }
+            return snapshot
         }
 
         private fun views(
@@ -212,6 +214,7 @@ class DayWidgetProvider : AppWidgetProvider() {
             context: Context,
             id: Int,
             data: WidgetDay,
+            theme: String,
         ): Int? {
             val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             val stamp = "${data.day}-${Calendar.getInstance().get(Calendar.HOUR_OF_DAY)}"
@@ -219,7 +222,7 @@ class DayWidgetProvider : AppWidgetProvider() {
             val countKey = "scroll-count-$id"
             val count = if (prefs.getString(key, null) == stamp) prefs.getInt(countKey, 0) else 0
             if (count >= SCROLLS_PER_HOUR) return null
-            val renderer = rendererFor(context, data, id)
+            val renderer = rendererFor(context, data, theme, id)
             val hour = renderer.allDayRows.size + renderer.scrollHour()
             // The list only scrolls until the row comes into view, so a row lands
             // on the bottom edge going down and on the top edge going up. Going

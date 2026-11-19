@@ -10,6 +10,26 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
+/** Rust publishes the theme even before a calendar day is available. */
+class WidgetSnapshot(val theme: String = "system", val day: WidgetDay? = null) {
+    companion object {
+        fun load(context: Context): WidgetSnapshot = try {
+            val json = JSONObject(File(context.filesDir, "widget-day.json").readText())
+            WidgetSnapshot(
+                theme = json.optString("theme", "system"),
+                day = try {
+                    WidgetDay.parse(json)
+                } catch (_: Exception) {
+                    null
+                },
+            )
+        } catch (_: Exception) {
+            // Not written yet, or from a version that wrote something else.
+            WidgetSnapshot()
+        }
+    }
+}
+
 /** The day as `dioxus/src/widget.rs` writes it. */
 class WidgetDay(
     /** `yyyy-MM-dd`. */
@@ -37,14 +57,7 @@ class WidgetDay(
         fun heading(date: Date): String =
             SimpleDateFormat("EEE, MMM d", Locale.getDefault()).format(date)
 
-        fun load(context: Context): WidgetDay? = try {
-            parse(JSONObject(File(context.filesDir, "widget-day.json").readText()))
-        } catch (_: Exception) {
-            // Not written yet, or from a version that wrote something else.
-            null
-        }
-
-        private fun parse(json: JSONObject) = WidgetDay(
+        internal fun parse(json: JSONObject) = WidgetDay(
             day = json.getString("day"),
             dayStartMinutes = json.getInt("day_start_minutes"),
             updated = json.getString("updated"),

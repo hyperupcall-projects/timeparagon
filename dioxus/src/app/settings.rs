@@ -14,6 +14,15 @@ pub(super) fn ThemePreference() -> Element {
 		let _ = document::eval(&format!(
 			"document.documentElement.dataset.theme = '{name}';"
 		));
+		// Also publish on startup, before a calendar day may be available.
+		#[cfg(target_os = "android")]
+		spawn(async move {
+			let _ = editor::worker(|| {
+				widget::publish_theme();
+				Ok(())
+			})
+			.await;
+		});
 	});
 
 	rsx! {}
@@ -98,9 +107,6 @@ fn SettingsForm() -> Element {
 		let chosen = Theme::parse(&event.value());
 		theme.set(chosen);
 		chosen.save();
-		// The widget reads the same preference.
-		#[cfg(target_os = "android")]
-		widget::notify();
 	};
 	let first_day = config.read().calendar.first_day_of_week;
 	let error = settings_error().or(full_sync_error()).map(|message| {

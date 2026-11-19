@@ -28,9 +28,9 @@ class DayWidgetService : RemoteViewsService() {
         override fun onCreate() = Unit
 
         override fun onDataSetChanged() {
-            val data = WidgetDay.load(context)
-            renderer = data?.let {
-                DayWidgetProvider.rendererFor(context, it, widgetId)
+            val snapshot = WidgetSnapshot.load(context)
+            renderer = snapshot.day?.let {
+                DayWidgetProvider.rendererFor(context, it, snapshot.theme, widgetId)
             }
             allDayRows = renderer?.allDayRows.orEmpty()
         }

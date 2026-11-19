@@ -4,6 +4,7 @@
 //! natively from `widget-day.json`, which this module writes into the app's
 //! files directory. The app publishes every day it shows for today, and
 //! `WidgetRefreshService` calls `refresh` to sync while the app is closed.
+//! The snapshot also carries the theme; Kotlin never opens the database.
 
 #[cfg(any(target_os = "android", test))]
 use chrono::NaiveDate;
@@ -149,25 +150,60 @@ fn path() -> Option<std::path::PathBuf> {
 	Some(std::path::PathBuf::from(std::env::var_os("HOME")?).join("widget-day.json"))
 }
 
-/// Saves the day for the widget. Returns whether the file changed.
+/// Updates the day, or just its theme while retaining any cached day. Read the
+/// saved preference under the same lock as the snapshot write so a background
+/// refresh cannot restore an older theme after the app publishes a new one.
+#[cfg(any(target_os = "android", test))]
+fn write_snapshot(
+	path: &std::path::Path,
+	day: Option<&WidgetDay>,
+	load_theme: impl FnOnce() -> day::Theme,
+) -> std::io::Result<bool> {
+	use timeparagon_core::fsutil::{Kind, write_atomic};
+	timeparagon_core::fsutil::locked(path, || {
+		let current = match std::fs::read(path) {
+			Ok(bytes) => Some(bytes),
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+			Err(error) => return Err(error),
+		};
+		let mut snapshot = match day {
+			Some(day) => serde_json::to_value(day)?,
+			None => current
+				.as_deref()
+				.and_then(|bytes| serde_json::from_slice::<serde_json::Value>(bytes).ok())
+				.filter(serde_json::Value::is_object)
+				.unwrap_or_else(|| serde_json::json!({})),
+		};
+		snapshot["theme"] = load_theme().name().into();
+		let json = serde_json::to_vec(&snapshot)?;
+		if current.as_deref() == Some(json.as_slice()) {
+			return Ok(false);
+		}
+		write_atomic(path, &json, Kind::Cache)?;
+		Ok(true)
+	})
+}
+
 #[cfg(target_os = "android")]
-fn write(
-	model: &DayModel,
-	travel: &[TravelBox],
-	settings: &CalendarSettings,
-	updated: chrono::DateTime<chrono::Local>,
-) -> bool {
+fn write(day: Option<&WidgetDay>) -> bool {
 	let Some(path) = path() else {
 		return false;
 	};
-	let Ok(json) = serde_json::to_vec(&widget_day(model, travel, settings, updated)) else {
-		return false;
-	};
-	if std::fs::read(&path).is_ok_and(|current| current == json) {
-		return false;
+	match write_snapshot(&path, day, day::Theme::load) {
+		Ok(changed) => changed,
+		Err(error) => {
+			eprintln!("Could not write widget snapshot: {error}");
+			false
+		}
 	}
-	use timeparagon_core::fsutil::{Kind, write_atomic};
-	write_atomic(&path, &json, Kind::Cache).is_ok()
+}
+
+/// Publishes the saved preference even when no calendar day is available.
+#[cfg(target_os = "android")]
+pub fn publish_theme() {
+	if write(None) {
+		notify();
+	}
 }
 
 /// Publishes the day the app is showing, if it is today.
@@ -179,7 +215,7 @@ pub fn publish(
 	settings: &CalendarSettings,
 	updated: chrono::DateTime<chrono::Local>,
 ) {
-	if model.day == today && write(model, travel, settings, updated) {
+	if model.day == today && write(Some(&widget_day(model, travel, settings, updated))) {
 		notify();
 	}
 }
@@ -235,6 +271,7 @@ pub fn notify() {
 #[cfg(target_os = "android")]
 fn refresh() -> bool {
 	let config = day::load_config();
+	publish_theme();
 	// Standalone alarms do not depend on Google sign-in or calendar reminders.
 	crate::reminders::publish(&config);
 	if !day::signed_in() {
@@ -248,7 +285,12 @@ fn refresh() -> bool {
 	crate::habits::name_events(&mut snapshot.events);
 	let model = day::build_model(&snapshot, &config.calendar);
 	let travel = day::travel_boxes(&model, &config.travel, config.appearance.distance_unit);
-	write(&model, &travel, &config.calendar, snapshot.fetched_at);
+	write(Some(&widget_day(
+		&model,
+		&travel,
+		&config.calendar,
+		snapshot.fetched_at,
+	)));
 	if config.reminders.any_enabled() {
 		refresh_reminders(&config, today);
 	}
@@ -468,13 +510,51 @@ mod tests {
 	#[test]
 	fn the_file_format_matches_what_the_kotlin_reader_expects() {
 		let day = build(vec![event("Standup", "work", at(9, 0), at(10, 0))]);
-		let json = serde_json::to_value(&day).unwrap();
+		let directory = tempfile::tempdir().unwrap();
+		let path = directory.path().join("widget-day.json");
+		write_snapshot(&path, Some(&day), || day::Theme::DarkHighContrast).unwrap();
+		let json: serde_json::Value =
+			serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
 
+		assert_eq!(json["theme"], "dark-high-contrast");
 		assert_eq!(json["day"], "2026-10-26");
 		assert_eq!(json["hours"][15], "3p");
 		assert_eq!(json["updated"], "10a");
 		assert_eq!(json["items"][0]["start"], 540);
 		assert_eq!(json["items"][0]["end"], 600);
 		assert!(json["items"][0]["color"].as_str().unwrap().starts_with('#'));
+	}
+
+	#[test]
+	fn changing_theme_retains_the_cached_day_and_does_not_rewrite_unchanged_data() {
+		let directory = tempfile::tempdir().unwrap();
+		let path = directory.path().join("widget-day.json");
+		let day = build(vec![event("Standup", "work", at(9, 0), at(10, 0))]);
+		write_snapshot(&path, Some(&day), || day::Theme::Light).unwrap();
+		assert!(write_snapshot(&path, None, || day::Theme::SystemHighContrast).unwrap());
+		let mut json: serde_json::Value =
+			serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+		assert_eq!(
+			json.as_object_mut().unwrap().remove("theme").unwrap(),
+			"system-high-contrast"
+		);
+		assert_eq!(json, serde_json::to_value(&day).unwrap());
+		assert!(!write_snapshot(&path, None, || day::Theme::SystemHighContrast).unwrap());
+	}
+
+	#[test]
+	fn theme_is_available_before_the_first_day_and_survives_the_first_calendar_update() {
+		let directory = tempfile::tempdir().unwrap();
+		let path = directory.path().join("widget-day.json");
+		assert!(write_snapshot(&path, None, || day::Theme::Dark).unwrap());
+		let json: serde_json::Value =
+			serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+		assert_eq!(json, serde_json::json!({"theme": "dark"}));
+		let day = build(vec![]);
+		write_snapshot(&path, Some(&day), || day::Theme::Dark).unwrap();
+		let json: serde_json::Value =
+			serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+		assert_eq!(json["theme"], "dark");
+		assert_eq!(json["day"], "2026-10-26");
 	}
 }
