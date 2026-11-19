@@ -2705,6 +2705,37 @@ fn quick_create_cycles_types_without_committing_and_escape_dismisses() {
 }
 
 #[test]
+fn entering_life_migrates_legacy_objectives_once() {
+	let mut state = State::blank();
+	state.config.projects = serde_json::from_value(serde_json::json!({
+		"items": [],
+		"areas": [{"id": 1, "name": "Personal", "objectives": [{"id": 10, "name": "Read"}]}]
+	}))
+	.unwrap();
+	let _ = update(
+		&mut state,
+		Message::Navigation(NavigationMessage::ScreenSelected(Screen::Life)),
+	);
+	let area = &state.config.projects.areas[0];
+	assert_eq!(area.goals.len(), 1);
+	assert_eq!(area.goals[0].name, "General");
+	assert_eq!(area.objectives[0].goal, area.goals[0].id);
+	assert!(state.save_queued, "migration must be saved");
+	let migrated = state.config.projects.clone();
+	state.save_queued = false;
+	let _ = update(
+		&mut state,
+		Message::Navigation(NavigationMessage::ScreenSelected(Screen::Calendar)),
+	);
+	let _ = update(
+		&mut state,
+		Message::Navigation(NavigationMessage::ScreenSelected(Screen::Life)),
+	);
+	assert_eq!(state.config.projects, migrated);
+	assert!(!state.save_queued);
+}
+
+#[test]
 fn life_area_opens_in_a_separate_panel_and_escape_closes_it() {
 	use crate::life::Action;
 	use iced::Settings;
@@ -2740,6 +2771,8 @@ fn life_area_opens_in_a_separate_panel_and_escape_closes_it() {
 		let mut panel = Simulator::with_size(Settings::default(), size, ui::editor_window(&state));
 		assert!(panel.find("Vision").is_ok());
 		assert!(panel.find("Personal").is_ok());
+		assert!(panel.find("Objectives without a goal").is_err());
+		assert!(panel.find("Add objective").is_err());
 		panel.click("Add goal").unwrap();
 		assert!(
 			panel
@@ -2906,7 +2939,11 @@ fn every_life_page_and_panel_renders_with_goals_objectives_and_reviews() {
 		Selection::Project(project),
 	] {
 		life(&mut state, Action::Open(selection));
-		let _ = Simulator::with_size(Settings::default(), size, ui::editor_window(&state));
+		let mut panel = Simulator::with_size(Settings::default(), size, ui::editor_window(&state));
+		if selection == Selection::Goal(goal) {
+			assert!(panel.find("Add objective").is_ok());
+			assert!(panel.find("Remove goal").is_err());
+		}
 	}
 	let mut panel = Simulator::with_size(Settings::default(), size, ui::editor_window(&state));
 	assert!(panel.find("Objectives it serves").is_ok());

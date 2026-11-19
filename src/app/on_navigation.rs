@@ -124,6 +124,12 @@ pub(super) fn select_screen(state: &mut State, screen: Screen) -> Task<Message> 
 			close,
 			Task::done(Message::Habits(crate::habits::Action::Refresh)),
 		])
+	} else if screen == Screen::Life {
+		let page = state.life.page;
+		Task::batch([
+			close,
+			crate::life::update(state, crate::life::Action::ShowPage(page)),
+		])
 	} else {
 		close
 	}

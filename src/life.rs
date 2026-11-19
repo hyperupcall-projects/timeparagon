@@ -212,7 +212,7 @@ pub struct Open {
 	pub vision_mode: VisionMode,
 	/// The goal typed into an area's page.
 	pub new_goal: String,
-	/// The objective typed into an area's or goal's page.
+	/// The objective typed into a goal's page.
 	pub new_objective: String,
 	/// The project typed into an area's page.
 	pub new_project: String,
@@ -343,15 +343,15 @@ pub enum Action {
 	GoalDescription(u64, String),
 	GoalWhy(u64, String),
 	GoalStatus(u64, Status),
-	/// The objective box on an area's or goal's page changed.
+	/// The objective box on a goal's page changed.
 	NewObjective(String),
 	AddObjective,
 
 	// An objective.
 	ObjectiveName(u64, String),
 	ObjectiveDescription(u64, String),
-	/// Put an objective under another goal of its area, or none.
-	ObjectiveGoal(u64, Option<u64>),
+	/// Put an objective under another goal of its area.
+	ObjectiveGoal(u64, u64),
 	ObjectiveStatus(u64, Status),
 	Focus(u64, bool),
 	/// A start date as `YYYY-MM-DD`, or blank for none.
@@ -422,6 +422,9 @@ fn prepare_review(state: &mut State) {
 
 pub fn update(state: &mut State, action: Action) -> Task<Message> {
 	state.config.projects.ensure_personal_area();
+	if state.config.projects.migrate_objective_goals() {
+		let _ = queue_save(state);
+	}
 
 	match action {
 		Action::ShowPage(page) => {
@@ -512,6 +515,12 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 		}
 
 		Action::Remove => {
+			if let Some(Selection::Goal(id)) = selected(state)
+				&& let Some((area, _)) = state.config.projects.find_goal(id)
+				&& area.objectives_of(id).next().is_some()
+			{
+				return Task::none();
+			}
 			if let Some(open) = &mut state.life.open
 				&& open.selection != Selection::Area(PERSONAL_AREA)
 			{
@@ -541,14 +550,9 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 				// area that is gone resolves to Personal.
 				Selection::Area(id) => projects.remove_area(id),
 				Selection::Goal(id) => {
-					for area in &mut projects.areas {
-						area.goals.retain(|goal| goal.id != id);
-						// Its objectives stay, unassigned.
-						for objective in &mut area.objectives {
-							if objective.goal == Some(id) {
-								objective.goal = None;
-							}
-						}
+					if !projects.remove_goal(id) {
+						state.life.open = Some(open_now);
+						return Task::none();
 					}
 				}
 				Selection::Objective(id) => {
@@ -735,16 +739,13 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			if name.is_empty() {
 				return Task::none();
 			}
-			let (area, goal) = match open.selection {
-				Selection::Area(area) => (area, None),
-				Selection::Goal(goal) => {
-					let Some((area, _)) = state.config.projects.find_goal(goal) else {
-						return Task::none();
-					};
-					(area.id, Some(goal))
-				}
-				_ => return Task::none(),
+			let Selection::Goal(goal) = open.selection else {
+				return Task::none();
 			};
+			let Some((area, _)) = state.config.projects.find_goal(goal) else {
+				return Task::none();
+			};
+			let area = area.id;
 			open.new_objective.clear();
 			let today = today();
 			if let Some(id) = state.config.projects.add_objective(area, goal, name)
@@ -760,7 +761,15 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 		Action::ObjectiveDescription(id, description) => {
 			edit_objective(state, id, |o| o.description = description)
 		}
-		Action::ObjectiveGoal(id, goal) => edit_objective(state, id, |o| o.goal = goal),
+		Action::ObjectiveGoal(id, goal) => {
+			let Some((area, _)) = state.config.projects.find_objective(id) else {
+				return Task::none();
+			};
+			if area.goal(goal).is_none() {
+				return Task::none();
+			}
+			edit_objective(state, id, |o| o.goal = goal)
+		}
 		Action::ObjectiveStatus(id, status) => edit_objective(state, id, |o| {
 			o.status = status;
 			// Done or set aside is not something to focus on this week.
@@ -1345,7 +1354,7 @@ mod tests {
 	}
 
 	#[test]
-	fn objectives_sit_under_goals_and_fall_back_to_unassigned() {
+	fn objectives_require_a_goal_and_prevent_removing_it() {
 		let mut state = state();
 		let goal = add_goal(&mut state, PERSONAL_AREA, "Fit");
 		let first = add_objective(&mut state, goal, " 5k run ".trim());
@@ -1354,21 +1363,66 @@ mod tests {
 		let _ = update(&mut state, Action::AddObjective);
 
 		let area = state.config.projects.area(PERSONAL_AREA).unwrap();
-		assert_eq!(area.objectives.len(), 2);
-		assert_eq!(
-			area.objective_goal(area.objective(first).unwrap()),
-			Some(goal)
-		);
-		assert_eq!(area.objective_goal(&area.objectives[1]), None);
+		assert_eq!(area.objectives.len(), 1, "cannot add directly to an area");
+		assert_eq!(area.objective(first).unwrap().goal, goal);
 		assert_eq!(area.objectives[0].start, Some(today()), "pace starts today");
 
-		// Removing the goal leaves its objectives, unassigned.
+		// A goal cannot be removed while it still has objectives.
+		let _ = update(&mut state, Action::Open(Selection::Goal(goal)));
+		let _ = update(&mut state, Action::Remove);
+		assert!(!state.life.open.as_ref().unwrap().confirm_remove);
+		// Even an old confirmation cannot leave objectives without a goal.
+		state.life.open.as_mut().unwrap().confirm_remove = true;
+		let _ = update(&mut state, Action::ConfirmRemove);
+		let area = state.config.projects.area(PERSONAL_AREA).unwrap();
+		assert!(area.goal(goal).is_some());
+		assert_eq!(area.objective(first).unwrap().goal, goal);
+
+		// Moving its objective makes the old goal safe to remove.
+		let other = add_goal(&mut state, PERSONAL_AREA, "Healthy");
+		let _ = update(&mut state, Action::ObjectiveGoal(first, other));
 		let _ = update(&mut state, Action::Open(Selection::Goal(goal)));
 		let _ = update(&mut state, Action::Remove);
 		let _ = update(&mut state, Action::ConfirmRemove);
-		let area = state.config.projects.area(PERSONAL_AREA).unwrap();
-		assert_eq!(area.objectives.len(), 2);
-		assert!(area.objectives.iter().all(|o| o.goal.is_none()));
+		assert!(state.config.projects.find_goal(goal).is_none());
+		assert_eq!(
+			state.config.projects.find_objective(first).unwrap().1.goal,
+			other
+		);
+	}
+
+	#[test]
+	fn an_objective_can_only_move_to_an_existing_goal_in_its_area() {
+		let mut state = state();
+		let goal = add_goal(&mut state, PERSONAL_AREA, "Fit");
+		let objective = add_objective(&mut state, goal, "Run 5k");
+		let health = add(&mut state, "Health");
+		let elsewhere = add_goal(&mut state, health, "Sleep well");
+		for invalid in [0, elsewhere] {
+			let _ = update(&mut state, Action::ObjectiveGoal(objective, invalid));
+			assert_eq!(
+				state
+					.config
+					.projects
+					.find_objective(objective)
+					.unwrap()
+					.1
+					.goal,
+				goal
+			);
+		}
+		let other = add_goal(&mut state, PERSONAL_AREA, "Run a marathon");
+		let _ = update(&mut state, Action::ObjectiveGoal(objective, other));
+		assert_eq!(
+			state
+				.config
+				.projects
+				.find_objective(objective)
+				.unwrap()
+				.1
+				.goal,
+			other
+		);
 	}
 
 	#[test]
@@ -1641,7 +1695,7 @@ mod tests {
 			.area_mut(health)
 			.unwrap()
 			.objectives
-			.push(crate::config::Objective::new(o, "Run".into(), Some(b)));
+			.push(crate::config::Objective::new(o, "Run".into(), b));
 		assert!(projects.ensure_unique_life_ids());
 		assert!(!projects.ensure_unique_life_ids(), "once is enough");
 		// The earlier area keeps its ids; the later one's are renewed.
@@ -1650,14 +1704,8 @@ mod tests {
 		assert_ne!(second.goals[0].id, b);
 		assert_ne!(first.objectives[0].id, second.objectives[0].id);
 		// Each objective still serves the goal of its own area.
-		assert_eq!(
-			first.objective_goal(&first.objectives[0]),
-			Some(first.goals[0].id)
-		);
-		assert_eq!(
-			second.objective_goal(&second.objectives[0]),
-			Some(second.goals[0].id)
-		);
+		assert_eq!(first.objectives[0].goal, first.goals[0].id);
+		assert_eq!(second.objectives[0].goal, second.goals[0].id);
 	}
 
 	#[test]
@@ -1710,7 +1758,7 @@ mod tests {
 		let goal = config.projects.add_goal(id, "Sleep well".into()).unwrap();
 		let objective = config
 			.projects
-			.add_objective(id, Some(goal), "8 hours".into())
+			.add_objective(id, goal, "8 hours".into())
 			.unwrap();
 		{
 			let o = config.projects.objective_mut(objective).unwrap();

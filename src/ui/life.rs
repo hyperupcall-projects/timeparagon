@@ -220,10 +220,7 @@ fn score_of(state: &State) -> impl Fn(&str) -> Option<f64> + '_ {
 
 /// Where an objective sits: its goal and area.
 fn objective_context(area: &LifeArea, objective: &Objective) -> String {
-	match area
-		.objective_goal(objective)
-		.and_then(|goal| area.goal(goal))
-	{
+	match area.goal(objective.goal) {
 		Some(goal) => format!("{} · {}", goal.name, area.name),
 		None => area.name.clone(),
 	}
@@ -921,11 +918,7 @@ fn goals_page<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 			.iter()
 			.filter(|goal| filter.shows(goal.status))
 			.collect();
-		let loose: Vec<_> = area
-			.objectives_of(None)
-			.filter(|o| filter.shows(o.status))
-			.collect();
-		if goals.is_empty() && loose.is_empty() {
+		if goals.is_empty() {
 			continue;
 		}
 		any = true;
@@ -947,7 +940,7 @@ fn goals_page<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 		for goal in goals {
 			let progress = area.goal_progress(goal, &score);
 			let objectives: Vec<_> = area
-				.objectives_of(Some(goal.id))
+				.objectives_of(goal.id)
 				.filter(|o| filter == GoalFilter::All || o.status != Status::Dropped)
 				.collect();
 			let mut header = column![
@@ -989,22 +982,6 @@ fn goals_page<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 					))
 					.padding([0, 10]),
 				);
-			}
-			page = page.push(
-				container(card)
-					.padding(6)
-					.width(Fill)
-					.style(controls::row_surface),
-			);
-		}
-
-		if !loose.is_empty() {
-			let mut card =
-				column![container(label("Objectives without a goal", metrics)).padding([2, 10])]
-					.spacing(6)
-					.width(Fill);
-			for objective in loose {
-				card = card.push(objective_row(state, area, objective, metrics));
 			}
 			page = page.push(
 				container(card)
@@ -1348,10 +1325,7 @@ pub fn panel<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 		Selection::Objective(id) => {
 			if let Some((area, objective)) = projects.find_objective(id) {
 				crumbs = crumbs.push(crumb(area.name.clone(), Selection::Area(area.id)));
-				if let Some(goal) = area
-					.objective_goal(objective)
-					.and_then(|goal| area.goal(goal))
-				{
+				if let Some(goal) = area.goal(objective.goal) {
 					crumbs = crumbs.push(separator());
 					crumbs = crumbs.push(crumb(goal.name.clone(), Selection::Goal(goal.id)));
 				}
@@ -1515,7 +1489,7 @@ fn area_panel<'a>(
 	page = page.push(heading("Goals", Some(area.goals.len()), metrics));
 	for goal in &area.goals {
 		let progress = area.goal_progress(goal, &score);
-		let count = area.objectives_of(Some(goal.id)).count();
+		let count = area.objectives_of(goal.id).count();
 		let mut words = column![
 			row![
 				text(&goal.name)
@@ -1556,26 +1530,6 @@ fn area_panel<'a>(
 		"Add goal",
 		|name| msg(Action::NewGoal(name)),
 		msg(Action::AddGoal),
-		metrics,
-	));
-
-	// Objectives that serve no goal.
-	let loose: Vec<_> = area.objectives_of(None).collect();
-	page = page.push(gap());
-	page = page.push(heading(
-		"Objectives without a goal",
-		Some(loose.len()),
-		metrics,
-	));
-	for objective in loose {
-		page = page.push(objective_row(state, area, objective, metrics));
-	}
-	page = page.push(add_row(
-		"New objective",
-		&open.new_objective,
-		"Add objective",
-		|name| msg(Action::NewObjective(name)),
-		msg(Action::AddObjective),
 		metrics,
 	));
 
@@ -1786,7 +1740,8 @@ fn goal_panel<'a>(
 	.spacing(metrics.spacing)
 	.width(Fill);
 
-	let objectives: Vec<_> = area.objectives_of(Some(id)).collect();
+	let objectives: Vec<_> = area.objectives_of(id).collect();
+	let has_objectives = !objectives.is_empty();
 	page = page.push(gap());
 	page = page.push(heading("Objectives", Some(objectives.len()), metrics));
 	page = page.push(label(
@@ -1806,12 +1761,14 @@ fn goal_panel<'a>(
 	));
 
 	page = page.push(gap());
-	page = page.push(remove_control(
-		open,
-		"goal",
-		"Its objectives stay, without a goal.",
-		metrics,
-	));
+	if has_objectives {
+		page = page.push(label(
+			"Move or remove this goal's objectives before removing the goal.",
+			metrics,
+		));
+	} else {
+		page = page.push(remove_control(open, "goal", "", metrics));
+	}
 	page.into()
 }
 
@@ -1841,21 +1798,21 @@ fn objective_panel<'a>(
 			.width(Fill);
 
 	// The goal it serves.
-	let mut goal_options = vec![Choice {
-		id: None,
-		name: "No goal".to_owned(),
-	}];
-	goal_options.extend(area.goals.iter().map(|goal| Choice {
-		id: Some(goal.id),
-		name: goal.name.clone(),
-	}));
-	let current_goal = area.objective_goal(objective);
-	let selected_goal = goal_options.iter().find(|c| c.id == current_goal).cloned();
-	let goal_picker = controls::pick_list(
-		goal_options,
-		selected_goal,
-		move |to: Choice<Option<u64>>| msg(Action::ObjectiveGoal(id, to.id)),
-	)
+	let goal_options: Vec<_> = area
+		.goals
+		.iter()
+		.map(|goal| Choice {
+			id: goal.id,
+			name: goal.name.clone(),
+		})
+		.collect();
+	let selected_goal = goal_options
+		.iter()
+		.find(|c| c.id == objective.goal)
+		.cloned();
+	let goal_picker = controls::pick_list(goal_options, selected_goal, move |to: Choice<u64>| {
+		msg(Action::ObjectiveGoal(id, to.id))
+	})
 	.text_size(size - 1.0);
 
 	let focus = controls::toggler(objective.focus)

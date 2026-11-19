@@ -643,7 +643,7 @@ Stored as the `shared.projects` document (shared). In the apps' config it is
 erDiagram
     LifeArea ||--o{ Goal : goals
     LifeArea ||--o{ Objective : objectives
-    Goal |o--o{ Objective : "objective.goal"
+    Goal ||--o{ Objective : "objective.goal"
     Objective }o--o{ Habit : "objective.habits"
     Objective }o--o{ Project : "objective.projects"
     LifeArea |o--o{ Project : "project.area"
@@ -688,7 +688,7 @@ erDiagram
 | | `why` | Why it matters |
 | | `status` | `active` (default), `paused`, `done`, `dropped` |
 | `Objective` | | How a goal will be reached: specific, measurable and time-bound, like a SMART goal or key result |
-| | `goal` | A goal of the **same** area. Unset or missing means unassigned |
+| | `goal` | Required: a goal of the **same** area |
 | | `habits` | IDs of the habits that carry it out |
 | | `projects` | IDs of the projects that carry it out |
 | | `status` | As for goals. Only `active` objectives can be in focus |
@@ -702,6 +702,13 @@ erDiagram
 Goal and objective IDs are unique across **all** areas, so either can be found
 by ID alone. Data from before that rule is repaired on first use: a duplicate
 in a later area gets a new ID, and its area's objectives follow their goal.
+
+Every objective belongs to a goal. Objectives can only be added from a goal,
+and a goal's objectives must be moved or removed before the goal can be removed.
+On first use of Life after upgrading, existing objectives with a missing or
+invalid goal are preserved under a new **General** goal in each affected area.
+`projects.objective_goals_migrated` records that this migration has run; General
+is never created automatically again.
 
 ---
 

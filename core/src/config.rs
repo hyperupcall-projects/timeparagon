@@ -241,14 +241,6 @@ impl LifeArea {
 		self.color.map(Color::from)
 	}
 
-	/// The goal `objective` is listed under: its own when that goal still
-	/// exists in this area, otherwise none.
-	pub fn objective_goal(&self, objective: &Objective) -> Option<u64> {
-		objective
-			.goal
-			.filter(|id| self.goals.iter().any(|goal| goal.id == *id))
-	}
-
 	/// Whether any objective of this area is carried out by `habit`.
 	pub fn has_habit(&self, habit: &str) -> bool {
 		self.objectives
@@ -264,11 +256,11 @@ impl LifeArea {
 		self.objectives.iter().find(|objective| objective.id == id)
 	}
 
-	/// The objectives listed under `goal`, or with none.
-	pub fn objectives_of(&self, goal: Option<u64>) -> impl Iterator<Item = &Objective> {
+	/// The objectives listed under `goal`.
+	pub fn objectives_of(&self, goal: u64) -> impl Iterator<Item = &Objective> {
 		self.objectives
 			.iter()
-			.filter(move |objective| self.objective_goal(objective) == goal)
+			.filter(move |objective| objective.goal == goal)
 	}
 
 	/// How far a goal has come: the mean progress of its objectives that are
@@ -282,7 +274,7 @@ impl LifeArea {
 			return Some(1.0);
 		}
 		crate::life::mean(
-			self.objectives_of(Some(goal.id))
+			self.objectives_of(goal.id)
 				.filter(|objective| objective.status != Status::Dropped)
 				.filter_map(|objective| objective.progress(habit_score)),
 		)
@@ -326,8 +318,8 @@ impl Goal {
 	}
 }
 
-/// Something concrete that a life area works towards, usually in service of
-/// one of its goals: specific, measurable and bound to a time frame, like a
+/// Something concrete that a life area works towards in service of one of
+/// its goals: specific, measurable and bound to a time frame, like a
 /// SMART goal or a key result. Carried out by habits and projects.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Objective {
@@ -335,10 +327,10 @@ pub struct Objective {
 	pub name: String,
 	#[serde(default, skip_serializing_if = "String::is_empty")]
 	pub description: String,
-	/// The [`Goal`] of the same area it serves. Unset, or pointing at a goal
-	/// that is gone, means it is unassigned.
-	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub goal: Option<u64>,
+	/// The required [`Goal`] of the same area it serves. Zero is accepted
+	/// only while reading old data, for the one-time migration.
+	#[serde(default, deserialize_with = "deserialize_objective_goal")]
+	pub goal: u64,
 	/// Habits that carry it out, by habit id.
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub habits: Vec<String>,
@@ -375,8 +367,14 @@ pub struct Objective {
 	pub milestones: Vec<Milestone>,
 }
 
+fn deserialize_objective_goal<'de, D: serde::Deserializer<'de>>(
+	deserializer: D,
+) -> Result<u64, D::Error> {
+	Ok(Option::<u64>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 impl Objective {
-	pub fn new(id: u64, name: String, goal: Option<u64>) -> Self {
+	pub fn new(id: u64, name: String, goal: u64) -> Self {
 		Self {
 			id,
 			name,
@@ -484,6 +482,10 @@ pub struct ProjectsSettings {
 	/// Weekly reviews, oldest first.
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	pub reviews: Vec<Review>,
+	/// Existing objectives without a goal have been moved to General once.
+	/// An absent field identifies data from before goals were required.
+	#[serde(default)]
+	objective_goals_migrated: bool,
 }
 
 impl Default for ProjectsSettings {
@@ -511,6 +513,7 @@ impl Default for ProjectsSettings {
 			items,
 			areas: default_areas(),
 			reviews: Vec::new(),
+			objective_goals_migrated: true,
 		};
 		settings.sort();
 		settings
@@ -631,8 +634,8 @@ impl ProjectsSettings {
 				}
 			}
 			for objective in &mut area.objectives {
-				if let Some(goal) = objective.goal.and_then(|g| renamed.get(&g)) {
-					objective.goal = Some(*goal);
+				if let Some(goal) = renamed.get(&objective.goal) {
+					objective.goal = *goal;
 				}
 				if !objectives.insert(objective.id) {
 					objective.id = next;
@@ -643,6 +646,31 @@ impl ProjectsSettings {
 			}
 		}
 		changed
+	}
+
+	/// Preserves legacy objectives without a valid goal under a new General
+	/// goal in each affected area. The saved flag prevents doing this again,
+	/// even after General has been renamed or removed.
+	pub fn migrate_objective_goals(&mut self) -> bool {
+		if self.objective_goals_migrated {
+			return false;
+		}
+		let mut next = unique_id(self.areas.iter().flat_map(|a| a.goals.iter().map(|g| g.id)));
+		for area in &mut self.areas {
+			let goals: std::collections::HashSet<_> = area.goals.iter().map(|g| g.id).collect();
+			if area.objectives.iter().any(|o| !goals.contains(&o.goal)) {
+				let goal = next;
+				next += 1;
+				area.goals.push(Goal::new(goal, "General".into()));
+				for objective in &mut area.objectives {
+					if !goals.contains(&objective.goal) {
+						objective.goal = goal;
+					}
+				}
+			}
+		}
+		self.objective_goals_migrated = true;
+		true
 	}
 
 	/// Tidies an area name and checks that no other area (`except` is the
@@ -771,8 +799,20 @@ impl ProjectsSettings {
 		Some(id)
 	}
 
-	/// Adds an objective to an area, under `goal` if given, and returns its id.
-	pub fn add_objective(&mut self, area: u64, goal: Option<u64>, name: String) -> Option<u64> {
+	/// Removes an empty goal. Its objectives must be moved or removed first.
+	pub fn remove_goal(&mut self, id: u64) -> bool {
+		let Some(area) = self.areas.iter_mut().find(|area| area.goal(id).is_some()) else {
+			return false;
+		};
+		if area.objectives_of(id).next().is_some() {
+			return false;
+		}
+		area.goals.retain(|goal| goal.id != id);
+		true
+	}
+
+	/// Adds an objective under an existing goal of its area and returns its id.
+	pub fn add_objective(&mut self, area: u64, goal: u64, name: String) -> Option<u64> {
 		// Unique across every area, so an objective can be found by id alone.
 		let id = unique_id(
 			self.areas
@@ -780,6 +820,7 @@ impl ProjectsSettings {
 				.flat_map(|a| a.objectives.iter().map(|o| o.id)),
 		);
 		let area = self.area_mut(area)?;
+		area.goal(goal)?;
 		area.objectives.push(Objective::new(id, name, goal));
 		Some(id)
 	}
@@ -1600,6 +1641,117 @@ impl Config {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn objectives_require_an_existing_goal_in_their_area() {
+		let mut projects = ProjectsSettings::default();
+		let health = projects.add_area("Health".into());
+		let goal = projects.add_goal(PERSONAL_AREA, "Fit".into()).unwrap();
+		let elsewhere = projects.add_goal(health, "Sleep well".into()).unwrap();
+		for invalid in [0, elsewhere] {
+			assert!(
+				projects
+					.add_objective(PERSONAL_AREA, invalid, "Run".into())
+					.is_none()
+			);
+		}
+		let objective = projects
+			.add_objective(PERSONAL_AREA, goal, "Run".into())
+			.unwrap();
+		assert_eq!(projects.find_objective(objective).unwrap().1.goal, goal);
+		assert!(!projects.remove_goal(goal));
+		assert!(projects.find_goal(goal).is_some());
+		assert!(projects.remove_goal(elsewhere));
+	}
+
+	#[test]
+	fn legacy_objectives_are_preserved_under_general_goals_only_once() {
+		let directory = tempfile::tempdir().unwrap();
+		let path = directory.path().join("timeparagon.sqlite3");
+		let legacy = serde_json::json!({
+			"items": [],
+			"areas": [
+				{
+					"id": 1, "name": "Personal",
+					"goals": [{"id": 10, "name": "Fit"}],
+					"objectives": [
+						{"id": 100, "name": "Run", "goal": 10},
+						{"id": 101, "name": "Read", "habits": ["h1"], "projects": [7],
+						 "focus": true, "measure": "number", "target": 12,
+						 "check_ins": [{"date": "2026-11-09", "value": 3}]},
+						{"id": 102, "name": "Walk", "goal": null},
+						{"id": 103, "name": "Plan", "goal": 20},
+						{"id": 104, "name": "Travel", "goal": 999}
+					]
+				},
+				{
+					"id": 2, "name": "Health",
+					"goals": [{"id": 20, "name": "Sleep well"}],
+					"objectives": [{"id": 200, "name": "Sleep", "goal": null}]
+				},
+				{"id": 3, "name": "Work"}
+			]
+		});
+		crate::shared_data::save_section(&path, "projects", &legacy).unwrap();
+		let before = Config::load_from(&path);
+		let mut after = before.clone();
+		assert!(after.projects.migrate_objective_goals());
+		assert!(!after.projects.migrate_objective_goals());
+
+		for (old_area, area) in before.projects.areas.iter().zip(&after.projects.areas) {
+			if area.id == 3 {
+				assert!(
+					area.goals.is_empty(),
+					"areas without orphaned objectives stay as they were"
+				);
+				continue;
+			}
+			let general = area.goals.last().unwrap();
+			assert_eq!(general.name, "General");
+			for (old, objective) in old_area.objectives.iter().zip(&area.objectives) {
+				let mut expected = old.clone();
+				if old_area.goal(old.goal).is_none() {
+					expected.goal = general.id;
+				}
+				assert_eq!(*objective, expected, "only the missing goal is changed");
+			}
+		}
+		assert_ne!(
+			after.projects.areas[0].goals[1].id,
+			after.projects.areas[1].goals[1].id
+		);
+		crate::settings::save(&path, &before, &after).unwrap();
+		let mut reloaded = Config::load_from(&path);
+		assert_eq!(reloaded.projects, after.projects);
+		assert!(
+			!reloaded.projects.migrate_objective_goals(),
+			"the saved flag survives a restart"
+		);
+
+		// Moving the objectives and removing General does not recreate it.
+		let baseline = reloaded.clone();
+		for area in &mut reloaded.projects.areas {
+			if let Some(goal) = area.goals.first() {
+				let goal = goal.id;
+				for objective in &mut area.objectives {
+					objective.goal = goal;
+				}
+				area.goals.truncate(1);
+			}
+		}
+		crate::settings::save(&path, &baseline, &reloaded).unwrap();
+		let mut again = Config::load_from(&path);
+		assert!(!again.projects.migrate_objective_goals());
+		assert_eq!(again.projects, reloaded.projects);
+		assert!(
+			again
+				.projects
+				.areas
+				.iter()
+				.flat_map(|a| &a.goals)
+				.all(|g| g.name != "General")
+		);
+	}
 
 	#[test]
 	fn legacy_directories_and_database_are_moved_once() {

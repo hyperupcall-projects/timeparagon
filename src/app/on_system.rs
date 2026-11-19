@@ -126,6 +126,13 @@ pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message>
 				state.calendar.set_day(day, day);
 			}
 			let mut tasks = vec![adopted];
+			if state.screen == Screen::Life {
+				let page = state.life.page;
+				tasks.push(crate::life::update(
+					state,
+					crate::life::Action::ShowPage(page),
+				));
+			}
 			let pane_widths_changed =
 				previous.views.calendar_width != state.config.views.calendar_width;
 			let views_changed = pane_widths_changed
