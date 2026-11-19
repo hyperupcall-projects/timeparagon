@@ -340,3 +340,24 @@ clean tree, because the manifest names the widget's resources.
 - **Settings** edits the theme, first day of the week, database sync,
   reminders and the Google client ID and secret. Other settings are edited
   in the iced application; this crate reloads the settings when they change.
+
+## App structure
+
+`src/app/mod.rs` composes the mobile app and provides small state handles for
+sibling components. It does not read reactive values while rendering. Keep new
+subscriptions in the component or service that uses them:
+
+- `navigation.rs` owns page navigation, panel visibility and calendar selections.
+- `polling.rs` observes local changes and runs the refresh/day-rollover timers.
+- `calendar_state.rs` reconciles fetched and cached days, derives display models,
+  follows event links and publishes widget/reminder updates.
+- `calendar_view.rs` renders the day, planner, headers and warnings;
+  `sheets.rs` composes calendar and auxiliary sheets.
+- `authentication.rs`, `settings.rs` and `sleep_controls.rs` own their respective
+  workflows. Form drafts live in the open form. Sign-in, full-sync and sleep
+  callbacks have session lifetime so dismissing a sheet does not cancel them.
+
+The state handles contain separate signals rather than a single app-wide signal.
+A sync log update therefore wakes its consumers without redrawing navigation or
+rebuilding the day model. Calendar data lives below the workspace boundary, so
+settings and background status consumers do not subscribe to calendar fetching.

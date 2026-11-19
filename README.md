@@ -6,11 +6,15 @@ I really love this app. If you're interested in using it, it requires a [bit of 
 
 ## Tour
 
-Docked mode is the feature that I love the most. Your day is always at a glance. You can still hover over and view information about events and tasks:
+This section shows the main user interfaces. The screenshots are a little oudated.
+
+First, docked mode:
 
 ![Dock view](./assets/timeparagon-dock.png)
 
-But you'll typically plan the day within the larger panel:
+It's the feature that I love the most. Your day is always at a glance. You can still hover over and view information about events and tasks.
+
+But, you'll typically plan the day within the larger panel:
 
 ![Day view](./assets/timeparagon-schedule.png)
 
@@ -91,7 +95,7 @@ Of course, there's also week, 2-week, and month views:
 	- **Set objectives:**
 		- Connected to a goal, specifying specifically how it will be achieved, usually like SMART goals, or OKRs.
 		- Give them a start and due date, or pick "by end of week/month/quarter/year".
-		- Measure them by a number with check-ins (e.g. 90 kg → 80 kg), by milestones, or by the strength of their habits.
+		- Measure them by a number with data entry, by milestones, or by the strength of their habits.
 		- Pin them, see when they are due in timeline (???).
 		- See whether each is on track, behind or overdue.
   - **Manage and track habits:**
