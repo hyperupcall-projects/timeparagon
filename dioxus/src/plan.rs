@@ -4,7 +4,7 @@
 
 use chrono::{DateTime, Local, NaiveDate, NaiveTime};
 use dioxus::prelude::*;
-use timeparagon_core::calendar::task_sort::InboxSort;
+use timeparagon_core::calendar::task_sort::{InboxSort, sort_tasks};
 use timeparagon_core::calendar::time_format::{self, TimeFormat};
 use timeparagon_core::calendar::{self, Calendar, Event, deadline, ids};
 use timeparagon_core::config::{CalendarSettings, Config};
@@ -191,38 +191,6 @@ fn backlog_order(event: &Event) -> (bool, Option<NaiveDate>, Option<NaiveTime>, 
 		due.and_then(|due| due.time),
 		tb::metadata(event).order,
 	)
-}
-
-fn sort_tasks(tasks: &mut [&Event], sort: InboxSort) {
-	tasks.sort_by_cached_key(|event| {
-		let metadata = tb::metadata(event);
-		let timestamp = match sort {
-			InboxSort::CreatedAscending | InboxSort::CreatedDescending => metadata.created_at,
-			InboxSort::ModifiedAscending | InboxSort::ModifiedDescending => {
-				event.details.task_updated_at
-			}
-			InboxSort::Manual => None,
-		};
-		let descending = matches!(
-			sort,
-			InboxSort::CreatedDescending | InboxSort::ModifiedDescending
-		);
-		let manual = if sort == InboxSort::Manual {
-			metadata.order
-		} else {
-			0
-		};
-		// Unknown timestamps go last in either direction, and ties stay put
-		// across syncs.
-		(
-			timestamp.is_none(),
-			timestamp.filter(|_| !descending),
-			std::cmp::Reverse(timestamp.filter(|_| descending)),
-			manual,
-			event.title.to_lowercase(),
-			event.id.clone(),
-		)
-	});
 }
 
 /// The day or time a task has been planned for, if it has one.

@@ -16,6 +16,9 @@
 //! record a number each day, with a target ([`Measure`]). That is kept for the
 //! Value chart and never changes the score.
 
+mod events;
+pub mod store;
+
 use std::collections::BTreeMap;
 
 use chrono::{Datelike, Duration, Months, NaiveDate, NaiveTime, Timelike, Weekday};

@@ -21,6 +21,7 @@ use crate::app::{Message, State};
 use crate::blocking;
 use crate::calendar::{self, api::HabitEvent, api::HabitListing, colors, deadline};
 use crate::recurrence::Rule;
+use timeparagon_core::habits::store::Storage;
 
 pub use crate::recurrence::{EndKind, MonthlyMode, Recurrence, RepeatMode, WEEKDAYS};
 pub use timeparagon_core::habit_edit::{
@@ -308,9 +309,8 @@ pub struct Store {
 	/// Each habit's record worked out for display, as of `today`.
 	computed: HashMap<String, Computed>,
 	today: Option<NaiveDate>,
-	/// The file `library` is kept in. Unset in tests, and when the file exists
-	/// but cannot be read, so that it is not overwritten.
-	path: Option<PathBuf>,
+	/// Shared persistence, disabled when the saved library could not be read.
+	storage: Storage,
 	/// The habit events on the calendar.
 	pub series: Vec<Series>,
 	/// Whether the events have been fetched at least once.
@@ -348,11 +348,7 @@ pub struct Store {
 
 impl Store {
 	pub fn reload_shared(&mut self) {
-		let Some(path) = &self.path else {
-			return;
-		};
-		if let Ok(Some(library)) = crate::task_db::read_document(path, crate::task_db::keys::HABITS)
-		{
+		if let Ok(Some(library)) = self.storage.read() {
 			self.adopt_shared(library);
 		}
 	}
@@ -368,7 +364,7 @@ impl Store {
 
 	/// Where the habits are saved, when they are.
 	pub fn path(&self) -> Option<&std::path::Path> {
-		self.path.as_deref()
+		self.storage.path()
 	}
 
 	/// Changes with each local change that is saved.
@@ -392,25 +388,22 @@ impl Store {
 	/// rather than replaced by an empty list on the next save.
 	pub fn keep_in(&mut self, path: Option<PathBuf>) {
 		let Some(path) = path else { return };
-		match crate::task_db::read_document(&path, crate::task_db::keys::HABITS) {
-			Ok(library) => {
-				self.library = library.unwrap_or_default();
-				self.path = Some(path);
+		// Drop any previous write destination before attempting a new read.
+		self.storage = Storage::default();
+		match Storage::load(Some(path)) {
+			Ok((storage, library)) => {
+				self.library = library;
+				self.storage = storage;
+				self.error = None;
 			}
-			Err(error) => {
-				log::warn!("the saved habits could not be read: {error}");
-				self.error = Some(
-					"The saved habits could not be read, so changes to habits will not be saved"
-						.to_owned(),
-				);
-			}
+			Err(error) => self.error = Some(error),
 		}
 		self.recompute();
 	}
 
 	/// Whether changes reach the disk.
 	pub fn persists(&self) -> bool {
-		self.path.is_some()
+		self.storage.path().is_some()
 	}
 
 	/// Today, as far as the computed records go.
@@ -471,24 +464,12 @@ impl Store {
 	/// the final say, because a completed occurrence keeps its own copy of the
 	/// properties from when it was completed.
 	pub fn habit_of<'a>(&'a self, event: &'a calendar::Event) -> Option<&'a str> {
-		if event.is_task() {
-			return event
-				.linked_habit_id()
-				.filter(|id| self.library.habit(id).is_some());
-		}
-		let series_id = event
-			.details
-			.recurring_event_id
-			.as_deref()
-			.unwrap_or(&event.id);
-		if let Some(series) = self.series.iter().find(|series| series.id == series_id) {
-			return self.habit_of_series(series);
-		}
-		event
-			.details
-			.habit_id
-			.as_deref()
-			.filter(|id| self.library.habit(id).is_some())
+		self.library.habit_of(
+			event,
+			self.series
+				.iter()
+				.map(|series| (series.id.as_str(), series.habit_id.as_deref())),
+		)
 	}
 
 	/// The events connected to a habit.
@@ -536,13 +517,13 @@ impl Store {
 	}
 }
 
-fn write(path: &std::path::Path, library: &Library) -> std::io::Result<()> {
-	crate::task_db::write_document(path, crate::task_db::keys::HABITS, library)
-}
-
 #[cfg(test)]
 pub(crate) fn write_for_test(state: &State, path: &std::path::Path) {
-	write(path, &state.habits.library).unwrap();
+	Storage::load(Some(path.to_owned()))
+		.unwrap()
+		.0
+		.save(&state.habits.library)
+		.unwrap();
 }
 
 /// Keep cached days and the open editor in step with the habit library.
@@ -560,13 +541,14 @@ pub(crate) fn name_events(state: &mut State) {
 }
 
 pub(crate) fn persist(state: &mut State) -> Task<Message> {
-	let Some(path) = state.habits.path.clone() else {
+	if !state.habits.persists() {
 		return Task::none();
-	};
+	}
+	let storage = state.habits.storage.clone();
 	state.habits.revision += 1;
 	state.habits.saves_in_flight += 1;
 	let library = state.habits.library.clone();
-	blocking::run(move || write(&path, &library).map_err(|error| error.to_string()))
+	blocking::run(move || storage.save(&library))
 		.map(|result| Message::Habits(Action::Persisted(result)))
 }
 
@@ -697,7 +679,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			state.habits.saves_in_flight = state.habits.saves_in_flight.saturating_sub(1);
 			if let Err(error) = result {
 				log::warn!("could not save habits: {error}");
-				state.habits.error = Some(format!("Could not save habits: {error}"));
+				state.habits.error = Some(error);
 			}
 			Task::none()
 		}
@@ -1165,56 +1147,18 @@ fn sync_occurrences(state: &mut State, id: &str, day: NaiveDate) -> Task<Message
 	let Some(habit) = state.habits.library.habit(id) else {
 		return Task::none();
 	};
-	// Only a "Yes" habit is done by completing an event.
-	if habit.kind != Kind::Yes {
-		return Task::none();
-	}
-	let times = habit.times_on(day) as usize;
-	let wanted = match state.habits.computed(id).map(|c| c.status(day)) {
-		Some(Status::Yes | Status::Partial(_)) => times,
-		_ => 0,
-	};
-	let occurrences: Vec<calendar::Event> = state
-		.calendar
-		.events_on(day)
-		.into_iter()
-		.filter(|event| {
-			event.details.habit
-				&& state.habits.habit_of(event) == Some(id)
-				&& !state.habits.completing.contains(&event.id)
-		})
-		.cloned()
-		.collect();
-	let done = occurrences.iter().filter(|event| event.completed).count();
-	let mut writes = Vec::new();
-	if done < wanted {
-		for event in occurrences
-			.iter()
-			.filter(|event| !event.completed)
-			.take(wanted - done)
-		{
-			writes.push(write_occurrence(
-				state,
-				event.clone(),
-				true,
-				Action::OccurrenceSynced,
-			));
-		}
-	} else {
-		for event in occurrences
-			.iter()
-			.rev()
-			.filter(|event| event.completed)
-			.take(done - wanted)
-		{
-			writes.push(write_occurrence(
-				state,
-				event.clone(),
-				false,
-				Action::OccurrenceSynced,
-			));
-		}
-	}
+	let occurrences = state.calendar.events_on(day);
+	let changes = habit.occurrence_changes(
+		day,
+		state.habits.today(),
+		occurrences.into_iter().filter(|event| {
+			state.habits.habit_of(event) == Some(id) && !state.habits.completing.contains(&event.id)
+		}),
+	);
+	let writes = changes.into_iter().map(|event| {
+		let completed = event.completed;
+		write_occurrence(state, event, completed, Action::OccurrenceSynced)
+	});
 	Task::batch(writes)
 }
 
@@ -1241,22 +1185,8 @@ pub(crate) fn record_occurrence(state: &mut State, event: &calendar::Event) -> T
 	let Some(id) = state.habits.habit_of(event).map(str::to_owned) else {
 		return Task::none();
 	};
-	let day = event.start.date_naive();
-	let Some(habit) = state.habits.library.habit_mut(&id) else {
+	if !state.habits.library.record_completion(&id, event) {
 		return Task::none();
-	};
-	if habit.kind != Kind::Yes {
-		return Task::none();
-	}
-	let completed = if event.is_task() {
-		crate::timeblocking::task_status(event) == crate::timeblocking::TaskStatus::Completed
-	} else {
-		event.completed
-	};
-	if completed {
-		habit.add_rep(day);
-	} else {
-		habit.remove_rep(day);
 	}
 	state.habits.recompute_one(&id);
 	persist(state)

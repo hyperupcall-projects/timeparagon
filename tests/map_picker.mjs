@@ -20,7 +20,7 @@ class Marker {
  constructor(){marker=this;}
  setLngLat(c){this.coords=c;return this;} addTo(){return this;} remove(){this.removed=true;}
 }
-const context={document:doc,MapboxSearchBox:Search,mapboxgl:{supported:()=>true,Map,Marker,NavigationControl:class{}},URL,URLSearchParams,fetch:async()=>response};
+const context={document:doc,requestAnimationFrame:()=>0,MapboxSearchBox:Search,mapboxgl:{supported:()=>true,Map,Marker,NavigationControl:class{}},URL,URLSearchParams,fetch:async()=>response};
 vm.runInNewContext(script,context);
 await new Promise(resolve=>setImmediate(resolve));
 const message=()=>JSON.parse(doc.title.slice('timeparagon-map:'.length));

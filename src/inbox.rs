@@ -22,6 +22,7 @@ use crate::{blocking, task_db};
 
 pub use crate::calendar::scheduled::DEFAULT_LIST;
 pub use crate::calendar::task_sort::InboxSort;
+use crate::calendar::task_sort::sort_tasks;
 /// Widget id of the add task text box, so it can be focused when it opens.
 pub const TITLE_FIELD: &str = "inbox-title";
 const MAX_TITLE_CHARS: usize = 1024;
@@ -234,37 +235,6 @@ fn unfinished_tasks_at(state: &State, now: chrono::DateTime<Local>) -> Vec<&Even
 		.collect();
 	sort_tasks(&mut tasks, state.config.calendar.overdue_sort);
 	tasks
-}
-
-fn sort_tasks(tasks: &mut Vec<&Event>, sort: InboxSort) {
-	tasks.sort_by_cached_key(|event| {
-		let metadata = tb::metadata(event);
-		let timestamp = match sort {
-			InboxSort::CreatedAscending | InboxSort::CreatedDescending => metadata.created_at,
-			InboxSort::ModifiedAscending | InboxSort::ModifiedDescending => {
-				event.details.task_updated_at
-			}
-			InboxSort::Manual => None,
-		};
-		let descending = matches!(
-			sort,
-			InboxSort::CreatedDescending | InboxSort::ModifiedDescending
-		);
-		let manual = if sort == InboxSort::Manual {
-			metadata.order
-		} else {
-			0
-		};
-		// Keep unknown timestamps last in either direction, and ties stable across syncs.
-		(
-			timestamp.is_none(),
-			timestamp.filter(|_| !descending),
-			std::cmp::Reverse(timestamp.filter(|_| descending)),
-			manual,
-			event.title.to_lowercase(),
-			event.id.clone(),
-		)
-	});
 }
 
 /// Whether `calendar_id` is the list that collects triaged tasks.

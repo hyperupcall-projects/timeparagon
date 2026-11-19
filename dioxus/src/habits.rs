@@ -20,6 +20,7 @@ use timeparagon_core::calendar::time_format::{self, TimeFormat};
 use timeparagon_core::calendar::{self, Event};
 use timeparagon_core::config::CalendarSettings;
 use timeparagon_core::habit_edit::{DayDialog, Form, FormAction, FrequencyKind, Log, SectionEdit};
+use timeparagon_core::habits::store::Storage;
 use timeparagon_core::habits::{
 	self as model, Bucket, Computed, Habit, Icons, Kind, Library, Outcome, PALETTE_SIZE, Section,
 	SortKey, Status,
@@ -46,28 +47,19 @@ pub struct EventNames(pub Signal<Library>);
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Saved {
 	pub library: Library,
-	path: Option<PathBuf>,
+	storage: Storage,
 	pub error: Option<String>,
 }
 
 pub fn read(path: Option<PathBuf>) -> Saved {
-	let Some(path) = path else {
-		return Saved {
-			error: Some("There is nowhere to keep habits on this device.".to_owned()),
-			..Saved::default()
-		};
-	};
-	match timeparagon_core::task_db::read_document(&path, timeparagon_core::task_db::keys::HABITS) {
-		Ok(library) => Saved {
-			library: library.unwrap_or_default(),
-			path: Some(path),
+	match Storage::load(path) {
+		Ok((storage, library)) => Saved {
+			library,
+			storage,
 			error: None,
 		},
-		Err(_) => Saved {
-			error: Some(
-				"The saved habits could not be read, so changes to habits will not be saved."
-					.to_owned(),
-			),
+		Err(error) => Saved {
+			error: Some(error),
 			..Saved::default()
 		},
 	}
@@ -75,15 +67,9 @@ pub fn read(path: Option<PathBuf>) -> Saved {
 
 impl Saved {
 	fn save(&mut self) {
-		let Some(path) = &self.path else { return };
-		let written = timeparagon_core::task_db::write_document(
-			path,
-			timeparagon_core::task_db::keys::HABITS,
-			&self.library,
-		);
-		self.error = written
-			.err()
-			.map(|error| format!("Could not save habits: {error}"));
+		if self.storage.path().is_some() {
+			self.error = self.storage.save(&self.library).err();
+		}
 	}
 }
 
@@ -121,25 +107,15 @@ pub fn record_completion(event: &Event) {
 	if saved.error.is_some() {
 		return;
 	}
-	let library = &saved.library;
-	let Some(id) = event.linked_habit_id().map(str::to_owned).filter(|id| {
-		library
-			.habit(id)
-			.is_some_and(|habit| habit.kind == Kind::Yes)
-	}) else {
+	let Some(id) = saved
+		.library
+		.habit_of(event, std::iter::empty())
+		.map(str::to_owned)
+	else {
 		return;
 	};
-	let day = event.start.date_naive();
-	if let Some(habit) = saved.library.habit_mut(&id) {
-		if event.completed
-			&& (!event.is_task()
-				|| timeparagon_core::timeblocking::task_status(event)
-					== timeparagon_core::timeblocking::TaskStatus::Completed)
-		{
-			habit.add_rep(day);
-		} else {
-			habit.remove_rep(day);
-		}
+	if !saved.library.record_completion(&id, event) {
+		return;
 	}
 	saved.save();
 }
@@ -213,19 +189,12 @@ fn habit_of_series<'a>(library: &'a Library, series: &'a Series) -> Option<&'a s
 /// final say, because a completed occurrence keeps its own copy of the
 /// properties from when it was completed.
 fn habit_of<'a>(library: &'a Library, series: &'a [Series], event: &'a Event) -> Option<&'a str> {
-	let series_id = event
-		.details
-		.recurring_event_id
-		.as_deref()
-		.unwrap_or(&event.id);
-	if let Some(series) = series.iter().find(|series| series.id == series_id) {
-		return habit_of_series(library, series);
-	}
-	event
-		.details
-		.habit_id
-		.as_deref()
-		.filter(|id| library.habit(id).is_some())
+	library.habit_of(
+		event,
+		series
+			.iter()
+			.map(|series| (series.id.as_str(), series.habit_id.as_deref())),
+	)
 }
 
 fn events_of<'a>(library: &Library, series: &'a [Series], habit_id: &str) -> Vec<&'a Series> {
@@ -1783,50 +1752,14 @@ fn sync_occurrences(ctx: Ctx, id: &str, day: NaiveDate, events: &[Event]) {
 	let Some(habit) = library.habit(id) else {
 		return;
 	};
-	// Only a "Yes" habit is done by completing an event.
-	if habit.kind != Kind::Yes {
-		return;
-	}
-	let times = habit.times_on(day) as usize;
-	let wanted = match habit.compute(ctx.today).status(day) {
-		Status::Yes | Status::Partial(_) => times,
-		_ => 0,
-	};
 	let series = ctx.series.peek().clone();
-	let occurrences: Vec<Event> = events
-		.iter()
-		.filter(|event| {
-			event.details.habit
-				&& event.start.date_naive() == day
-				&& habit_of(&library, &series, event) == Some(id)
-		})
-		.cloned()
-		.collect();
-	let done = occurrences.iter().filter(|event| event.completed).count();
-	let writes: Vec<Event> = if done < wanted {
-		occurrences
-			.into_iter()
-			.filter(|event| !event.completed)
-			.take(wanted - done)
-			.map(|mut event| {
-				event.completed = true;
-				event.details.habit_completed_at = Some(timeparagon_core::clock::now());
-				event
-			})
-			.collect()
-	} else {
-		occurrences
-			.into_iter()
-			.rev()
-			.filter(|event| event.completed)
-			.take(done - wanted)
-			.map(|mut event| {
-				event.completed = false;
-				event.details.habit_completed_at = None;
-				event
-			})
-			.collect()
-	};
+	let writes = habit.occurrence_changes(
+		day,
+		ctx.today,
+		events
+			.iter()
+			.filter(|event| habit_of(&library, &series, event) == Some(id)),
+	);
 	if writes.is_empty() {
 		return;
 	}
