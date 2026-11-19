@@ -965,7 +965,7 @@ fn the_new_event_pane_shows_the_shared_repeat_controls() {
 }
 
 #[test]
-fn hiding_google_tasks_preserves_task_rows_inside_time_blocks() {
+fn task_visibility_keeps_time_block_actions_in_place() {
 	use crate::timeblocking::{self as tb, Metadata};
 	let mut state = State::blank();
 	let mut snapshot = calendar::sample_snapshot();
@@ -978,6 +978,7 @@ fn hiding_google_tasks_preserves_task_rows_inside_time_blocks() {
 	block.start = block.start.with_hour(1).unwrap().with_minute(0).unwrap();
 	block.end = block.start + chrono::Duration::hours(1);
 	state.config.calendar.app_calendar = Some(block.calendar_id.clone());
+	let block_id = block.id.clone();
 	let mut task = block.clone();
 	task.id = "task:planned".into();
 	task.calendar_id = "tasks:list".into();
@@ -1018,7 +1019,7 @@ fn hiding_google_tasks_preserves_task_rows_inside_time_blocks() {
 			size,
 			day_grid(&state, &metrics, crate::clock::now()),
 		);
-		// The assigned task row occupies the right half of the 1am block.
+		// The block action uses the space previously occupied by task rows.
 		ui.point_at(Point::new(400.0, state.calendar.hour_height + 10.0));
 		ui.simulate([
 			iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
@@ -1026,8 +1027,8 @@ fn hiding_google_tasks_preserves_task_rows_inside_time_blocks() {
 		]);
 		assert!(
 			ui.into_messages().any(|message| matches!(message,
-            Message::Event(EventMessage::EventOpened(id)) if id == "task:planned")),
-			"assigned task must remain visible and clickable with show_tasks={show}"
+            Message::TimeBlocking(crate::timeblocking::Action::View(id)) if id == block_id)),
+			"the block action must remain clickable with show_tasks={show}"
 		);
 	}
 }
@@ -1048,6 +1049,7 @@ fn time_block_regions_dispatch_different_actions() {
 		canvas.blocks[0].time_block = true;
 		canvas.blocks[0].columns = columns;
 		let bounds = canvas.block_rect(&canvas.blocks[0], width);
+		assert_eq!(bounds, canvas.rect_for(&canvas.blocks[0], width, 540, 570));
 		let (label, focus, plan) = block_actions(bounds);
 		assert_eq!(label.x, bounds.x);
 		assert_eq!(focus.x, plan.x);
@@ -1106,57 +1108,6 @@ fn a_task_released_over_a_time_block_assigns_it_instead_of_creating_an_event() {
 		m,
 		Message::EventDraft(EventDraftMessage::EventDraftStarted { .. })
 	)));
-}
-
-#[test]
-fn task_rows_drag_from_the_title_and_estimate_and_show_grab_cursors() {
-	for fraction in [0.1, 0.5, 0.95] {
-		let mut canvas = canvas_with_one_block();
-		canvas.blocks[0].time_block = true;
-		canvas.blocks[0].tasks = vec![("task".into(), "Task title".into(), 30)];
-		let bounds = Rectangle::new(Point::ORIGIN, Size::new(600.0, 1440.0));
-		let rect = canvas.block_rect(&canvas.blocks[0], bounds.width);
-		let start = Point::new(
-			rect.x + rect.width + 4.0 + fraction * rect.width,
-			rect.y + 10.0,
-		);
-		let cursor = mouse::Cursor::Available(start);
-		assert_eq!(
-			canvas::Program::mouse_interaction(&canvas, &DrawState::default(), bounds, cursor),
-			mouse::Interaction::Grab
-		);
-		canvas.external_drag = true;
-		assert_eq!(
-			canvas::Program::mouse_interaction(&canvas, &DrawState::default(), bounds, cursor),
-			mouse::Interaction::Grabbing
-		);
-		canvas.external_drag = false;
-		let element: Element<'_, Message> = canvas_widget(canvas).width(600).height(1440).into();
-		let mut ui = iced_test::Simulator::with_size(
-			iced_test::core::Settings::default(),
-			bounds.size(),
-			element,
-		);
-		ui.point_at(start);
-		ui.simulate([iced::Event::Mouse(mouse::Event::ButtonPressed(
-			mouse::Button::Left,
-		))]);
-		let position = Point::new(start.x, start.y + 10.0);
-		ui.point_at(position);
-		ui.simulate([iced::Event::Mouse(mouse::Event::CursorMoved { position })]);
-		ui.simulate([iced::Event::Mouse(mouse::Event::ButtonReleased(
-			mouse::Button::Left,
-		))]);
-		let messages: Vec<_> = ui.into_messages().collect();
-		assert!(messages.iter().any(
-			|m| matches!(m, Message::TimeBlocking(crate::timeblocking::Action::Drag(id, _)) if id == "task")
-		));
-		assert!(
-			!messages
-				.iter()
-				.any(|m| matches!(m, Message::Event(EventMessage::EventOpened(_))))
-		);
-	}
 }
 
 #[test]
@@ -1265,7 +1216,6 @@ fn canvas_with_one_block() -> DayCanvas {
 		external_drag: false,
 		drop_preview: None,
 		drop_block: None,
-		dragged_task: None,
 	}
 }
 
@@ -1309,7 +1259,6 @@ fn trip_before_standup(minutes: u32) -> TravelBox {
 		column: 0,
 		columns: 1,
 		column_span: 1,
-		time_block: false,
 	}
 }
 

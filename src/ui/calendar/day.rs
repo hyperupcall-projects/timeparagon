@@ -143,7 +143,7 @@ pub(super) fn day_canvas<'a>(
 				sleep_timer: (!hidden)
 					.then(|| calendar::sleep::timer(event, now))
 					.flatten(),
-				// A block owns its task rows independently of standalone task visibility.
+				// Planned capacity is independent of standalone task visibility.
 				tasks: if time_block {
 					crate::timeblocking::tasks_in(
 						event,
@@ -256,16 +256,12 @@ pub(super) fn day_canvas<'a>(
 		})
 	});
 	let drop_block = crate::ui::drop_preview::block_or_row(state).and_then(|target| {
-		let task = dragged.filter(|task| task.id != target)?;
+		dragged.filter(|task| task.id != target)?;
 		let block = blocks.iter().find(|block| {
 			block.time_block
 				&& (block.id == target || block.tasks.iter().any(|row| row.0 == target))
 		})?;
-		Some((
-			block.id.clone(),
-			crate::timeblocking::task_label(task),
-			crate::timeblocking::metadata(task).minutes,
-		))
+		Some(block.id.clone())
 	});
 
 	canvas_widget(DayCanvas {
@@ -283,7 +279,6 @@ pub(super) fn day_canvas<'a>(
 		can_create,
 		selection,
 		external_drag: state.timeblocking.dragging.is_some(),
-		dragged_task: state.timeblocking.dragging.clone(),
 		drop_preview,
 		drop_block,
 	})

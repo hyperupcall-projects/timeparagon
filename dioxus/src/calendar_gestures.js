@@ -163,7 +163,7 @@ function begin(target, x, y, id) {
     const grid = target.closest('.grid[data-calendar-day]');
     const movable = target.closest('[data-calendar-event][data-draggable="true"]');
     const source = movable?.disabled ? null : movable;
-    const empty = grid && !target.closest('.grid-event, .block-task') && !target.closest('.alarm-tap');
+    const empty = grid && !target.closest('.grid-event') && !target.closest('.alarm-tap');
     if (!source && !empty && !(draft && grid)) return;
     pending = { source, grid: empty ? grid : null, x, y, id, dismiss: draft && !!grid };
     timer = setTimeout(() => {

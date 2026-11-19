@@ -376,9 +376,6 @@ pub(super) fn travel_key(travel: &[TravelBox]) -> u64 {
 		hash = hash.wrapping_mul(31).wrapping_add(trip.column as u64);
 		hash = hash.wrapping_mul(31).wrapping_add(trip.columns as u64);
 		hash = hash.wrapping_mul(31).wrapping_add(trip.column_span as u64);
-		hash = hash
-			.wrapping_mul(31)
-			.wrapping_add(u64::from(trip.time_block));
 		for byte in trip.label.bytes() {
 			hash = hash.wrapping_mul(31).wrapping_add(u64::from(byte));
 		}

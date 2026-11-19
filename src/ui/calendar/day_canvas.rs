@@ -58,14 +58,12 @@ pub(super) struct TravelBox {
 	pub(super) column: usize,
 	pub(super) columns: usize,
 	pub(super) column_span: usize,
-	pub(super) time_block: bool,
 }
 
 pub(super) use timeparagon_core::theme::TRAVEL_MIN_HEIGHT;
 use timeparagon_core::theme::{
-	BLOCK_ACTION, BLOCK_FILLED, BLOCK_ROW_OVER, BLOCK_ROW_OVER_TEXT, BLOCK_ROW_TEXT, EVENT_DROPS,
-	EVENT_EDGE, HOUR_LINE, TIME_BLOCK_INSET, TIME_BLOCK_LABEL_SHARE, TIME_BLOCK_ROW,
-	TIME_BLOCK_ROW_GAP, TIME_BLOCK_SHARE, TRAVEL_EDGE,
+	BLOCK_ACTION, BLOCK_FILLED, EVENT_DROPS, EVENT_EDGE, HOUR_LINE, TIME_BLOCK_LABEL_SHARE,
+	TRAVEL_EDGE,
 };
 
 /// The gray boxes for the day's trips, found from the blocks already laid out.
@@ -89,7 +87,6 @@ pub(super) fn travel_boxes(state: &State, blocks: &[Block], day: NaiveDate) -> V
 				column: block.column,
 				columns: block.columns,
 				column_span: block.column_span,
-				time_block: block.time_block,
 			})
 		})
 		.collect()
@@ -122,14 +119,10 @@ pub(super) struct DayCanvas {
 	/// draft. It stays highlighted after the pointer is released.
 	pub(super) selection: Option<(i32, i32)>,
 	pub(super) external_drag: bool,
-	/// The task currently being dragged by an external row, so its own row on
-	/// the grid can be left out while it is in the air.
-	pub(super) dragged_task: Option<String>,
 	/// The task in the air as it would be placed on this day if let go now.
 	pub(super) drop_preview: Option<Block>,
-	/// The time block the task in the air would join if let go now, with the
-	/// label and estimate of the row it would add there.
-	pub(super) drop_block: Option<(String, String, u32)>,
+	/// The time block the task in the air would join if let go now.
+	pub(super) drop_block: Option<String>,
 }
 
 /// A drag on empty grid space that is drawing out a new event.
@@ -196,7 +189,6 @@ pub(super) struct DrawState {
 	/// The new-event drag in progress, if any. Kept out of the grid cache for
 	/// the same reason as `drag`.
 	pub(super) create: std::cell::RefCell<Option<CreateDrag>>,
-	pub(super) task_press: Option<(String, Point)>,
 }
 
 impl DrawState {
@@ -230,7 +222,6 @@ impl Default for DrawState {
 			hovered: std::cell::Cell::new(None),
 			drag: std::cell::RefCell::new(None),
 			create: std::cell::RefCell::new(None),
-			task_press: None,
 		}
 	}
 }
@@ -262,16 +253,7 @@ impl canvas::Program<Message> for DayCanvas {
 			iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
 		) && self.external_drag
 		{
-			state.task_press = None;
 			let point = cursor.position_in(bounds)?;
-			if let Some(id) = self.task_at(point, bounds.width) {
-				return Some(
-					canvas::Action::publish(Message::TimeBlocking(
-						crate::timeblocking::Action::DropTask(id.to_owned()),
-					))
-					.and_capture(),
-				);
-			}
 			let block = self.blocks.iter().find(|b| {
 				b.time_block
 					&& self
@@ -319,20 +301,7 @@ impl canvas::Program<Message> for DayCanvas {
 					.and_capture(),
 				)
 			}
-			iced::Event::Mouse(mouse::Event::CursorMoved { position }) => {
-				if let Some((id, origin)) = &state.task_press {
-					if position.distance(*origin) >= 4.0 {
-						let id = id.clone();
-						state.task_press = None;
-						return Some(
-							canvas::Action::publish(Message::TimeBlocking(
-								crate::timeblocking::Action::Drag(id, *position),
-							))
-							.and_capture(),
-						);
-					}
-					return Some(canvas::Action::capture());
-				}
+			iced::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
 				// A drag owns the pointer until it is released, so the hover
 				// highlight stays out of the way while the block follows it.
 				if let Some(drag) = state.drag() {
@@ -444,11 +413,6 @@ impl canvas::Program<Message> for DayCanvas {
 					);
 				}
 
-				if let Some(id) = self.task_at(point, bounds.width) {
-					state.task_press = Some((id.to_owned(), cursor.position()?));
-					return Some(canvas::Action::request_redraw().and_capture());
-				}
-
 				// A press on a draggable block starts a drag. The click that
 				// opens the details card is decided on release, so a press that
 				// never moves still opens it.
@@ -494,19 +458,6 @@ impl canvas::Program<Message> for DayCanvas {
 				}
 			}
 			iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
-				if let Some((id, origin)) = state.task_press.take() {
-					return if cursor
-						.position()
-						.is_some_and(|point| point.distance(origin) < 4.0)
-					{
-						Some(
-							canvas::Action::publish(Message::Event(EventMessage::EventOpened(id)))
-								.and_capture(),
-						)
-					} else {
-						Some(canvas::Action::capture())
-					};
-				}
 				// A new-event drag is finished first: it never shares the
 				// pointer with a move or resize.
 				if let Some(create) = state.create.take() {
@@ -612,14 +563,6 @@ impl canvas::Program<Message> for DayCanvas {
 			}
 		}
 
-		if cursor
-			.position_in(bounds)
-			.and_then(|point| self.task_at(point, bounds.width))
-			.is_some()
-		{
-			return mouse::Interaction::Grab;
-		}
-
 		match cursor
 			.position_in(bounds)
 			.and_then(|point| self.grab(point, bounds.width))
@@ -662,15 +605,7 @@ impl canvas::Program<Message> for DayCanvas {
 		.wrapping_mul(31)
 		.wrapping_add(travel_key(&self.travel))
 		.wrapping_mul(31)
-		.wrapping_add(self.time_format as u64)
-		// A task row in the air leaves its row behind, so the cached grid has
-		// to retrace when the drag starts and when it ends.
-		.wrapping_mul(31)
-		.wrapping_add(self.dragged_task.as_deref().map_or(u64::MAX, |id| {
-			id.bytes().fold(0_u64, |hash, byte| {
-				hash.wrapping_mul(31).wrapping_add(u64::from(byte))
-			})
-		}));
+		.wrapping_add(self.time_format as u64);
 		if state.key.get() != key {
 			state.grid.clear();
 			state.key.set(key);
@@ -695,10 +630,10 @@ impl canvas::Program<Message> for DayCanvas {
 					.color
 					.scale_alpha(0.10),
 			);
-			if let Some((id, label, minutes)) = &self.drop_block
+			if let Some(id) = &self.drop_block
 				&& let Some(block) = self.blocks.iter().find(|block| &block.id == id)
 			{
-				self.draw_block_drop(&mut overlay, theme, block, label, *minutes);
+				self.draw_block_drop(&mut overlay, theme, block);
 			}
 			if let Some(preview) = &self.drop_preview {
 				self.draw_block(&mut overlay, preview);
@@ -788,16 +723,8 @@ impl DayCanvas {
 		}
 	}
 
-	/// Outlines the time block a task in the air would join, and shows the
-	/// row it would add after the block's other tasks.
-	fn draw_block_drop(
-		&self,
-		frame: &mut Frame,
-		theme: &Theme,
-		block: &Block,
-		label: &str,
-		minutes: u32,
-	) {
+	/// Outlines the time block a task in the air would join.
+	fn draw_block_drop(&self, frame: &mut Frame, theme: &Theme, block: &Block) {
 		let color = theme.extended_palette().primary.strong.color;
 		let bounds = self.block_rect(block, frame.width());
 		frame.stroke(
@@ -812,44 +739,9 @@ impl DayCanvas {
 				..Stroke::default()
 			},
 		);
-		// A task already in the block only moves within it, so it gets no
-		// new row.
-		if block
-			.tasks
-			.iter()
-			.any(|task| Some(task.0.as_str()) == self.dragged_task.as_deref())
-		{
-			return;
-		}
-		let x = bounds.x + bounds.width + TIME_BLOCK_ROW_GAP;
-		let y = bounds.y + block.tasks.len() as f32 * TIME_BLOCK_ROW;
-		let row = Size::new(bounds.width, 19.0);
-		frame.fill(
-			&Path::rounded_rectangle(Point::new(x, y), row, 3.0.into()),
-			color,
-		);
-		let label = if minutes == 0 {
-			format!("○ {label}")
-		} else {
-			format!("○ {label} · {minutes}m")
-		};
-		fill_glyphs(
-			frame,
-			Text {
-				content: fit_lines(&label, 11.0, bounds.width - 6.0, 1)
-					.into_iter()
-					.next()
-					.unwrap_or_default(),
-				position: Point::new(x + 3.0, y + 2.0),
-				color: on_color(color),
-				size: Pixels(11.0),
-				..Text::default()
-			},
-		);
 	}
 
-	/// Draws one event block with its label, actions and, for a time block,
-	/// its task rows.
+	/// Draws one event block with its label, actions and planned capacity.
 	pub(super) fn draw_block(&self, frame: &mut Frame, block: &Block) {
 		{
 			let block_bounds = self.block_rect(block, frame.width());
@@ -875,7 +767,6 @@ impl DayCanvas {
 			frame.fill(&shape, fill);
 			if block.time_block {
 				let total: u32 = block.tasks.iter().map(|t| t.2).sum();
-				let duration = (block.end_min - block.start_min).max(1) as f32;
 				let visible_start = block.start_min.max(0) as f32;
 				let visible_end = block.end_min.min(DAY_MINUTES) as f32;
 				let occupied_end = (block.start_min as f32 + total as f32).min(visible_end);
@@ -887,49 +778,6 @@ impl DayCanvas {
 					Size::new(block_bounds.width, block_bounds.height * occupied),
 					BLOCK_FILLED,
 				);
-				let mut elapsed = 0;
-				for (i, (id, title, minutes)) in block.tasks.iter().enumerate() {
-					elapsed += minutes;
-					let over = elapsed as f32 > duration;
-					let y = block_bounds.y + i as f32 * TIME_BLOCK_ROW;
-					let x = block_bounds.x + block_bounds.width + TIME_BLOCK_ROW_GAP;
-					// The task in the air leaves its row behind, matching the
-					// row widget that hides itself while it is dragged.
-					if self.dragged_task.as_deref() == Some(id.as_str()) {
-						continue;
-					}
-					if over {
-						frame.fill_rectangle(
-							Point::new(x, y),
-							Size::new(block_bounds.width, 19.0),
-							BLOCK_ROW_OVER,
-						);
-					}
-					// A hidden task reports no estimate, so it gets no suffix.
-					let label = if *minutes == 0 {
-						format!("○ {title}")
-					} else {
-						format!("○ {} · {}m", title, minutes)
-					};
-					let label = fit_lines(&label, 11.0, block_bounds.width - 6.0, 1)
-						.into_iter()
-						.next()
-						.unwrap_or_default();
-					fill_glyphs(
-						frame,
-						Text {
-							content: label,
-							position: Point::new(x + 3.0, y + 2.0),
-							color: if over {
-								BLOCK_ROW_OVER_TEXT
-							} else {
-								BLOCK_ROW_TEXT
-							},
-							size: Pixels(11.0),
-							..Text::default()
-						},
-					);
-				}
 			}
 			// An unconfirmed write is outlined in grey with an italic label,
 			// so the block reads as not yet final until Google answers.
@@ -1038,10 +886,7 @@ impl DayCanvas {
 		let height = (trip.minutes as f32 * minute_height).max(TRAVEL_MIN_HEIGHT);
 		let anchor = trip.anchor_min as f32 * minute_height;
 		let span = trip.column_span.max(1) as f32;
-		let mut box_width = (span * grid_width / columns - EVENT_GAP).max(8.0);
-		if trip.time_block {
-			box_width = (box_width - TIME_BLOCK_INSET) * TIME_BLOCK_SHARE;
-		}
+		let box_width = (span * grid_width / columns - EVENT_GAP).max(8.0);
 
 		Rectangle {
 			x: self.gutter + trip.column as f32 * (grid_width / columns) + EVENT_GAP / 2.0,
@@ -1373,29 +1218,6 @@ impl DayCanvas {
 		})
 	}
 
-	/// The task row beside a time block, including its title and estimate.
-	pub(super) fn task_at(&self, point: Point, width: f32) -> Option<&str> {
-		self.blocks
-			.iter()
-			.filter(|block| block.time_block)
-			.find_map(|block| {
-				let rect = self.block_rect(block, width);
-				let rows = Rectangle {
-					x: rect.x + rect.width + 4.0,
-					y: rect.y,
-					width: rect.width,
-					height: block.tasks.len() as f32 * 20.0,
-				};
-				if !rows.contains(point) {
-					return None;
-				}
-				block
-					.tasks
-					.get(((point.y - rows.y) / 20.0) as usize)
-					.map(|task| task.0.as_str())
-			})
-	}
-
 	/// Whether the block at this index can be dragged at all.
 	pub(super) fn draggable(&self, index: usize) -> bool {
 		self.blocks
@@ -1587,11 +1409,7 @@ impl DayCanvas {
 	}
 
 	pub(super) fn block_rect(&self, block: &Block, width: f32) -> Rectangle {
-		let mut rect = self.rect_for(block, width, block.start_min, block.end_min);
-		if block.time_block {
-			rect.width = (rect.width - TIME_BLOCK_INSET) * TIME_BLOCK_SHARE;
-		}
-		rect
+		self.rect_for(block, width, block.start_min, block.end_min)
 	}
 
 	/// The rectangle a block occupies for a given pair of times, so the drag

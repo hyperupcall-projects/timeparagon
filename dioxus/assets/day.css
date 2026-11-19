@@ -655,28 +655,6 @@ textarea {
     border-radius: var(--event-radius);
 }
 
-.block-task {
-    appearance: none;
-    position: absolute;
-    height: 19px;
-    padding: 0 3px;
-    overflow: hidden;
-    border: none;
-    background: transparent;
-    color: var(--block-row-text);
-    font-size: 12px;
-    line-height: 19px;
-    text-align: left;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    cursor: pointer;
-}
-
-.block-task.over {
-    background: var(--block-row-over);
-    color: var(--block-row-over-text);
-}
-
 /* Only there to read: a tap goes through to the event underneath. */
 .grid-travel {
     position: absolute;

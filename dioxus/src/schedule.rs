@@ -332,12 +332,9 @@ fn schedule_grid(
 								{
 									let opened = timed.event.clone();
 									let is_block = timed.time_block;
-									// Two or three columns leave task details to the block popup.
-									let mut shown = timed.clone();
-									shown.time_block = count == 1 && is_block;
 									rsx! {
 										button { key: "{timed.event.id}", class: if is_block { "grid-event block" } else { "grid-event" }, "data-sending": timed.event.details.sending, disabled: timed.event.details.sending,
-											style: "{crate::event_style(&shown, search)}",
+											style: "{crate::event_style(timed, search)}",
 											"data-calendar-event": timed.event.id.clone(),
 											"data-event-calendar": timed.event.calendar_id.clone(),
 											"data-draggable": crate::calendar_gestures::can_drag(&timed.event).to_string(),
@@ -353,9 +350,6 @@ fn schedule_grid(
 										}
 									}
 								}
-							}
-							if count == 1 {
-								for timed in &model.timed { {crate::block_task_buttons(timed, on_open, search).into_iter()} }
 							}
 							if let Some(config) = travel_config {
 								for trip in day::travel_boxes(model, &config.travel, config.appearance.distance_unit) {

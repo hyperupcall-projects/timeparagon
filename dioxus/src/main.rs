@@ -575,12 +575,6 @@ fn timeline(
 			)
 		})
 		.collect();
-	let block_tasks: Vec<Element> = model
-		.timed
-		.iter()
-		.flat_map(|timed| block_task_rows(timed, editing, search))
-		.collect();
-
 	let trips: Vec<Element> = travel
 		.iter()
 		.map(|trip| {
@@ -636,7 +630,6 @@ fn timeline(
 							{lines.into_iter()}
 							alarms::AlarmLines { day: model.day, hour_start: model.hour_start }
 							{events.into_iter()}
-							{block_tasks.into_iter()}
 							{trips.into_iter()}
 							{now_line}
 							alarms::AlarmMarks { day: model.day, hour_start: model.hour_start, time_format }
@@ -846,66 +839,6 @@ fn timed_event_view(
 	}
 }
 
-/// A time block's tasks, listed in the space it leaves beside itself. The
-/// ones that run past the block's end are marked.
-fn block_task_rows(
-	timed: &TimedEvent,
-	mut editing: Signal<Option<Event>>,
-	search: &Search,
-) -> Vec<Element> {
-	block_task_buttons(
-		timed,
-		EventHandler::new(move |event| editing.set(Some(event))),
-		search,
-	)
-}
-
-fn block_task_buttons(
-	timed: &TimedEvent,
-	on_open: EventHandler<Event>,
-	search: &Search,
-) -> Vec<Element> {
-	let top = scaled_px(timed.start_min as f32 * HOUR_HEIGHT / 60.0);
-	let duration = (timed.scheduled_end_min - timed.scheduled_start_min).max(1) as u32;
-	let (left, span) = column_position(timed.column, timed.columns, timed.column_span);
-	let width = time_block_width(span);
-	let mut elapsed = 0;
-	timed
-        .tasks
-        .iter()
-        .enumerate()
-        .map(|(index, task)| {
-            elapsed += task.minutes;
-            let class = if elapsed > duration {
-                "block-task over"
-            } else {
-                "block-task"
-            };
-            let icon = status_icon(task.status);
-            let title = if search.hides_details(&task.event) {
-                calendar::search::PRIVATE_TITLE.to_owned()
-            } else {
-                format!("{icon} {} · {}m", tb::task_label(&task.event), task.minutes)
-            };
-            let row_offset = index as f32 * look::TIME_BLOCK_ROW;
-            let inset = look::EVENT_GAP / 2.0;
-            let gap = look::TIME_BLOCK_ROW_GAP;
-            let opened = task.event.clone();
-            rsx! {
-                button {
-                    key: "{task.event.id}",
-                    class: "{class}",
-                    "data-sending": task.event.details.sending,
-                    disabled: task.event.details.sending,
-                    style: "top:calc({top} + {row_offset:.1}px);left:calc({left:.4}% + {inset}px + {width} + {gap}px);width:{width};",
-                    onclick: move |_| on_open.call(opened.clone()),
-                    "{title}"
-                }
-            }
-        })
-        .collect()
-}
-
 fn time_block_modal(
 	block: &TimeBlock,
 	context: &EditContext,
@@ -1054,25 +987,12 @@ fn column_width(span: f32) -> String {
 	format!("calc({span:.4}% - {}px)", look::EVENT_GAP)
 }
 
-/// A time block leaves part of its column for its task rows, as on the desktop.
-fn time_block_width(span: f32) -> String {
-	format!(
-		"calc(({span:.4}% - {}px) * {})",
-		look::EVENT_GAP + look::TIME_BLOCK_INSET,
-		look::TIME_BLOCK_SHARE
-	)
-}
-
 fn event_style(timed: &TimedEvent, search: &Search) -> String {
 	let top = scaled_px(timed.start_min as f32 * HOUR_HEIGHT / 60.0);
 	let duration = scaled_px((timed.end_min - timed.start_min) as f32 * HOUR_HEIGHT / 60.0);
 	let height = format!("max({EVENT_MIN_HEIGHT}px, {duration})");
 	let (left, span) = column_position(timed.column, timed.columns, timed.column_span);
-	let width = if timed.time_block {
-		time_block_width(span)
-	} else {
-		column_width(span)
-	};
+	let width = column_width(span);
 	let inset = look::EVENT_GAP / 2.0;
 	let color = if search.hides_details(&timed.event) {
 		calendar::search::PRIVATE_COLOR
@@ -1088,18 +1008,14 @@ fn event_style(timed: &TimedEvent, search: &Search) -> String {
 }
 
 /// Where a trip's box sits: ending at the start of the event it leads to, in
-/// that event's column. Over a time block it is half as wide, as on the desktop.
+/// that event's column.
 fn travel_style(trip: &day::TravelBox) -> String {
 	let duration = scaled_px(trip.minutes as f32 * HOUR_HEIGHT / 60.0);
 	let height = format!("max({}px, {duration})", look::TRAVEL_MIN_HEIGHT);
 	let anchor = scaled_px(trip.anchor_min as f32 * HOUR_HEIGHT / 60.0);
 	let top = format!("max(0px, calc({anchor} - {height}))");
 	let (left, span) = column_position(trip.column, trip.columns, trip.column_span);
-	let width = if trip.time_block {
-		time_block_width(span)
-	} else {
-		column_width(span)
-	};
+	let width = column_width(span);
 	let inset = look::EVENT_GAP / 2.0;
 	let background = css_color(calendar::colors::TRAVEL);
 	let ink = css_color(calendar::colors::on_color(calendar::colors::TRAVEL));

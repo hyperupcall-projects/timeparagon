@@ -146,16 +146,8 @@ pub const BLOCK_PADDING: f32 = 6.0;
 pub const BLOCK_PADDING_RIGHT: f32 = 4.0;
 /// The space inside a block above its first line.
 pub const BLOCK_TOP: f32 = 3.0;
-/// A time block takes this share of its column, after this much is taken off
-/// it, leaving the rest for its task rows.
-pub const TIME_BLOCK_SHARE: f32 = 0.5;
-pub const TIME_BLOCK_INSET: f32 = 6.0;
 /// The share of a time block taken by its label, beside its actions.
 pub const TIME_BLOCK_LABEL_SHARE: f32 = 0.6;
-/// How far apart a time block's task rows sit.
-pub const TIME_BLOCK_ROW: f32 = 20.0;
-/// How far a time block's task rows sit from it.
-pub const TIME_BLOCK_ROW_GAP: f32 = 4.0;
 pub const NEEDLE_RADIUS: f32 = 5.5;
 /// The shortest a travel box is drawn, so its words fit in it.
 pub const TRAVEL_MIN_HEIGHT: f32 = 16.0;
@@ -182,10 +174,6 @@ pub const EVENT_DROPS: [(f32, f32); 2] = [(1.0, 0.10), (2.5, 0.05)];
 pub const BLOCK_FILLED: Color = Color::from_rgba(0.15, 0.15, 0.15, 0.28);
 /// A time block's action buttons, over the block's own color.
 pub const BLOCK_ACTION: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.27);
-/// The label of a task in a time block, and of one that runs past its end.
-pub const BLOCK_ROW_TEXT: Color = Color::from_rgb(125.0 / 255.0, 125.0 / 255.0, 125.0 / 255.0);
-pub const BLOCK_ROW_OVER_TEXT: Color = Color::from_rgb(220.0 / 255.0, 65.0 / 255.0, 55.0 / 255.0);
-pub const BLOCK_ROW_OVER: Color = Color::from_rgba(0.9, 0.2, 0.15, 0.22);
 
 #[cfg(test)]
 mod tests {
