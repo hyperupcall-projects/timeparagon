@@ -1037,8 +1037,10 @@ fn task_visibility_keeps_time_block_actions_in_place() {
 fn time_block_regions_dispatch_different_actions() {
 	// (x fraction, y fraction, expected: 0 = focus, 1 = plan, 2 = details)
 	for (width, columns, x, y, expected) in [
-		(600.0, 1, 0.8, 0.1, 0),
-		(600.0, 1, 0.8, 0.9, 1),
+		(600.0, 1, 0.8, 0.2, 0),
+		(600.0, 1, 0.8, 0.8, 1),
+		(600.0, 1, 0.8, 0.5, 2),
+		(600.0, 1, 0.997, 0.25, 2),
 		(600.0, 1, 0.2, 0.1, 2),
 		(600.0, 1, 0.2, 0.9, 2),
 		(240.0, 3, 0.9, 0.2, 0),
@@ -1053,9 +1055,12 @@ fn time_block_regions_dispatch_different_actions() {
 		let (label, focus, plan) = block_actions(bounds);
 		assert_eq!(label.x, bounds.x);
 		assert_eq!(focus.x, plan.x);
-		assert_eq!(focus.y, bounds.y);
-		assert_eq!(focus.height, bounds.height / 2.0);
-		assert_eq!(plan.y, bounds.y + focus.height);
+		assert!(focus.x > label.x + label.width);
+		assert!(focus.y > bounds.y);
+		assert!(focus.height < bounds.height / 2.0);
+		assert!(plan.y > focus.y + focus.height);
+		assert!(plan.y + plan.height < bounds.y + bounds.height);
+		assert!(plan.x + plan.width < bounds.x + bounds.width);
 		let element: Element<'_, Message> = canvas_widget(canvas).width(width).height(1440).into();
 		let mut ui = iced_test::Simulator::with_size(
 			iced_test::core::Settings::default(),
@@ -1080,9 +1085,12 @@ fn time_block_regions_dispatch_different_actions() {
 				m,
 				Message::TimeBlocking(crate::timeblocking::Action::Plan(id)) if id == "standup"
 			))),
-			_ => assert!(messages.iter().any(
-				|m| matches!(m, Message::Event(EventMessage::EventOpened(id)) if id == "standup")
-			)),
+			_ => assert!(
+				messages.iter().any(
+					|m| matches!(m, Message::Event(EventMessage::EventOpened(id)) if id == "standup")
+				),
+				"expected details at ({x}, {y}) in {width}px/{columns} columns, got {messages:?}"
+			),
 		}
 	}
 }
@@ -2802,21 +2810,26 @@ fn the_event_pane_offers_a_calendar_dropdown_without_timeparagon() {
 }
 
 #[test]
-fn a_habit_events_record_button_is_full_height_and_leaves_the_rest_clickable() {
+fn a_habit_events_record_button_has_margins_and_leaves_the_rest_clickable() {
 	let day = NaiveDate::from_ymd_opt(2026, 3, 4).unwrap();
 	// (x fraction, y fraction, whether it lands on the button)
 	for (x, y, record) in [
-		(0.99, 0.02, true),
-		(0.99, 0.5, true),
-		(0.99, 0.98, true),
+		(0.95, 0.2, true),
+		(0.95, 0.5, true),
+		(0.95, 0.8, true),
+		(0.95, 0.02, false),
+		(0.95, 0.98, false),
+		(0.997, 0.5, false),
 		(0.2, 0.5, false),
 	] {
 		let mut canvas = canvas_with_one_block();
 		canvas.blocks[0].habit = Some(("h".into(), day));
 		let bounds = canvas.block_rect(&canvas.blocks[0], 600.0);
 		let (label, button) = habit_actions(bounds);
-		assert_eq!((button.y, button.height), (bounds.y, bounds.height));
-		assert_eq!(label.width + button.width, bounds.width);
+		assert!(button.x > label.x + label.width);
+		assert!(button.y > bounds.y);
+		assert!(button.y + button.height < bounds.y + bounds.height);
+		assert!(button.x + button.width < bounds.x + bounds.width);
 		let element: Element<'_, Message> = canvas_widget(canvas).width(600).height(1440).into();
 		let mut ui = iced_test::Simulator::with_size(
 			iced_test::core::Settings::default(),

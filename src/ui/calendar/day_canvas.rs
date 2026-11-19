@@ -62,8 +62,7 @@ pub(super) struct TravelBox {
 
 pub(super) use timeparagon_core::theme::TRAVEL_MIN_HEIGHT;
 use timeparagon_core::theme::{
-	BLOCK_ACTION, BLOCK_FILLED, EVENT_DROPS, EVENT_EDGE, HOUR_LINE, TIME_BLOCK_LABEL_SHARE,
-	TRAVEL_EDGE,
+	BLOCK_ACTION, BLOCK_FILLED, EVENT_DROPS, HOUR_LINE, TIME_BLOCK_LABEL_SHARE, TRAVEL_EDGE,
 };
 
 /// The gray boxes for the day's trips, found from the blocks already laid out.
@@ -752,10 +751,11 @@ impl DayCanvas {
 	pub(super) fn draw_block(&self, frame: &mut Frame, block: &Block) {
 		{
 			let block_bounds = self.block_rect(block, frame.width());
+			let border = event_border(false);
 			let shape = Path::rounded_rectangle(
 				Point::new(block_bounds.x, block_bounds.y),
 				Size::new(block_bounds.width, block_bounds.height),
-				EVENT_RADIUS.into(),
+				border.radius,
 			);
 
 			let fill = block.color;
@@ -798,8 +798,8 @@ impl DayCanvas {
 					}
 				} else {
 					Stroke {
-						style: Style::Solid(EVENT_EDGE),
-						width: 1.0,
+						style: Style::Solid(border.color),
+						width: border.width,
 						..Stroke::default()
 					}
 				},
@@ -1120,32 +1120,40 @@ impl DayCanvas {
 			return;
 		};
 		let ink = on_color(block.color);
-		let bounds = match part {
-			HoverPart::Body => self.block_rect(block, frame.width()),
-			HoverPart::Action(bounds) => bounds.shrink(1.0),
+		let border = event_border(true);
+		let bounds = self.block_rect(block, frame.width());
+		frame.stroke(
+			&Path::rounded_rectangle(bounds.position(), bounds.size(), border.radius),
+			Stroke {
+				style: Style::Solid(border.color),
+				width: border.width,
+				..Stroke::default()
+			},
+		);
+		match part {
+			HoverPart::Body => {}
+			HoverPart::Action(bounds) => {
+				let shape = Path::rounded_rectangle(
+					bounds.position(),
+					bounds.size(),
+					BLOCK_ACTION_RADIUS.into(),
+				);
+				frame.fill(&shape, ink.scale_alpha(0.09));
+				frame.stroke(
+					&shape,
+					Stroke {
+						style: Style::Solid(border.color),
+						width: 1.0,
+						..Stroke::default()
+					},
+				);
+			}
 			HoverPart::Checkbox(bounds) => {
 				if let Some(completion) = block.completion {
 					draw_completion_checkbox(frame, bounds, completion.completed(), ink, true);
 				}
-				return;
 			}
-		};
-		let shape = Path::rounded_rectangle(
-			Point::new(bounds.x, bounds.y),
-			Size::new(bounds.width, bounds.height),
-			EVENT_RADIUS.into(),
-		);
-		if matches!(part, HoverPart::Action(_)) {
-			frame.fill(&shape, ink.scale_alpha(0.09));
 		}
-		frame.stroke(
-			&shape,
-			Stroke {
-				style: Style::Solid(ink.scale_alpha(0.65)),
-				width: 2.0,
-				..Stroke::default()
-			},
-		);
 	}
 
 	/// Draws the block being dragged at its preview position, in its own
@@ -1523,8 +1531,9 @@ pub(super) fn draw_pill(frame: &mut Frame, bounds: Rectangle, label: &str, color
 }
 
 /// A time block is split into the label on the left, with Focus stacked over
-/// Plan on the right. Anything outside the two buttons opens the details card
-/// through the usual click/drag handling. Returns (label, focus, plan).
+/// Plan on the right, inset from the edges and each other. Anything outside
+/// the two buttons opens the details card through the usual click/drag
+/// handling. Returns (label, focus, plan).
 pub(super) fn block_actions(bounds: Rectangle) -> (Rectangle, Rectangle, Rectangle) {
 	let label = Rectangle {
 		width: bounds.width * TIME_BLOCK_LABEL_SHARE,
@@ -1540,14 +1549,14 @@ pub(super) fn block_actions(bounds: Rectangle) -> (Rectangle, Rectangle, Rectang
 		y: bounds.y + focus.height,
 		..focus
 	};
-	(label, focus, plan)
+	(label, inset_action(focus), inset_action(plan))
 }
 
 /// The widest a habit event's Record button gets. Habit events span their whole
 /// column, where a share of the width would make it far larger than its label.
 const HABIT_RECORD_WIDTH: f32 = 56.0;
 
-/// A habit event is split into the label on the left and a full height Record
+/// A habit event is split into the label on the left and an inset Record
 /// button on the right. Returns (label, record).
 pub(super) fn habit_actions(bounds: Rectangle) -> (Rectangle, Rectangle) {
 	let width = (bounds.width * (1.0 - TIME_BLOCK_LABEL_SHARE)).min(HABIT_RECORD_WIDTH);
@@ -1560,7 +1569,7 @@ pub(super) fn habit_actions(bounds: Rectangle) -> (Rectangle, Rectangle) {
 		width,
 		..bounds
 	};
-	(label, record)
+	(label, inset_action(record))
 }
 
 /// The widest a night's Start/Finish sleep button gets.
@@ -1579,17 +1588,33 @@ pub(super) fn sleep_actions(bounds: Rectangle) -> (Rectangle, Rectangle) {
 		width,
 		..bounds
 	};
-	(label, timer)
+	(label, inset_action(timer))
 }
+
+/// Leave a small margin around every event action, reducing it in tight spaces.
+fn inset_action(bounds: Rectangle) -> Rectangle {
+	let margin = 3.0_f32.min(bounds.width / 4.0).min(bounds.height / 4.0);
+	bounds.shrink(margin)
+}
+
+/// The corner radius of a button drawn on a block.
+const BLOCK_ACTION_RADIUS: f32 = 4.0;
 
 /// One of the buttons drawn on a block.
 fn draw_action(frame: &mut Frame, rect: Rectangle, name: &str, ink: Color) {
-	frame.fill(
-		&Path::rounded_rectangle(rect.position(), rect.size(), EVENT_RADIUS.into()),
-		BLOCK_ACTION,
+	let shape = Path::rounded_rectangle(rect.position(), rect.size(), BLOCK_ACTION_RADIUS.into());
+	frame.fill(&shape, BLOCK_ACTION);
+	frame.stroke(
+		&shape,
+		Stroke {
+			style: Style::Solid(event_border(false).color),
+			width: 1.0,
+			..Stroke::default()
+		},
 	);
 	// Keep the label inside its box even in overlapping columns.
-	let size = 10.0 * ((rect.width - 2.0).max(0.0) / text_width_of(name, 10.0)).min(1.0);
+	let size = (10.0 * ((rect.width - 2.0).max(0.0) / text_width_of(name, 10.0)).min(1.0))
+		.min(rect.height.max(0.0));
 	if size > 0.0 {
 		fill_glyphs(
 			frame,
@@ -1669,11 +1694,7 @@ fn draw_completion_checkbox(
 		frame.stroke(
 			&tick,
 			Stroke {
-				style: Style::Solid(if completed {
-					ink
-				} else {
-					Color::from_rgb8(128, 128, 128)
-				}),
+				style: Style::Solid(ink),
 				width: 1.8,
 				..Stroke::default()
 			},

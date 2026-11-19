@@ -300,6 +300,10 @@ pub(crate) fn weekly_task_chip<'a>(
 	metrics: &Metrics,
 ) -> Element<'a, Message> {
 	let hidden = state.calendar.search.hides_details(task);
+	let style = |theme: &Theme, status| button::Style {
+		background: None,
+		..crate::ui::controls::ghost(theme, status)
+	};
 	let mut check = button(
 		text(if task.completed && !hidden {
 			"●"
@@ -309,7 +313,7 @@ pub(crate) fn weekly_task_chip<'a>(
 		.size(metrics.label()),
 	)
 	.padding(2)
-	.style(crate::ui::controls::ghost);
+	.style(style);
 	if state.task_operations.busy.is_empty() && !hidden {
 		check = check.on_press(Message::Task(TaskMessage::TaskToggled(task.id.clone())));
 	}
@@ -329,18 +333,15 @@ pub(crate) fn weekly_task_chip<'a>(
 	.padding([3, 2])
 	.width(Fill)
 	.on_press(Message::Event(EventMessage::EventOpened(task.id.clone())))
-	.style(crate::ui::controls::ghost);
+	.style(style);
 	let chip = super::super::task_drag::task_drag(
-		container(row![check, title].spacing(2).align_y(Alignment::Center))
+		button(row![check, title].spacing(2).align_y(Alignment::Center))
+			.padding(0)
 			.width(Fill)
-			.style(|theme: &Theme| container::Style {
-				background: Some(theme.extended_palette().background.weakest.color.into()),
-				border: iced::Border {
-					color: theme.extended_palette().background.strong.color,
-					width: 1.0,
-					radius: crate::ui::controls::RADIUS_ROW.into(),
-				},
-				..container::Style::default()
+			.on_press(Message::Event(EventMessage::EventOpened(task.id.clone())))
+			.style(|theme: &Theme, status| {
+				let color = theme.extended_palette().background.weakest.color;
+				event_chip_style(color, on_color(color), status)
 			}),
 		&task.id,
 		state.timeblocking.dragging.as_deref(),
@@ -383,17 +384,9 @@ pub(super) fn all_day_chip<'a>(
 pub(super) fn event_chip_style(color: Color, ink: Color, status: button::Status) -> button::Style {
 	let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
 	button::Style {
-		background: Some(if hovered { lift(color) } else { color }.into()),
+		background: Some(color.into()),
 		text_color: ink,
-		border: iced::Border {
-			color: if hovered {
-				Color::BLACK.scale_alpha(0.55)
-			} else {
-				timeparagon_core::theme::EVENT_EDGE
-			},
-			width: if hovered { 2.0 } else { 1.0 },
-			radius: EVENT_RADIUS.into(),
-		},
+		border: event_border(hovered),
 		shadow: iced::Shadow {
 			color: Color::BLACK.scale_alpha(if hovered { 0.2 } else { 0.12 }),
 			offset: iced::Vector::new(0.0, if hovered { 3.0 } else { 1.0 }),

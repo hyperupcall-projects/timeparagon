@@ -84,6 +84,19 @@ use timeparagon_core::theme::{
 	BLOCK_PADDING, BLOCK_PADDING_RIGHT, BLOCK_TOP, EVENT_GAP, EVENT_RADIUS, NEEDLE_RADIUS,
 };
 
+/// The same neutral outline for every event, independent of its text color.
+fn event_border(hovered: bool) -> iced::Border {
+	iced::Border {
+		color: if hovered {
+			Color::BLACK.scale_alpha(0.65)
+		} else {
+			timeparagon_core::theme::EVENT_EDGE
+		},
+		width: if hovered { 2.0 } else { 1.0 },
+		radius: EVENT_RADIUS.into(),
+	}
+}
+
 /// The gap between a block's title and the time label under it.
 const BLOCK_GAP: f32 = 2.0;
 /// The mark that says a title was cut short to fit its block.
