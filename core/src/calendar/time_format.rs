@@ -6,39 +6,30 @@ use chrono::Timelike;
 #[serde(rename_all = "snake_case")]
 pub enum TimeFormat {
 	TwelveHour,
-	TwentyFourHour,
 	/// "9:30p"
 	Compact,
-	/// "930p"
-	#[serde(rename = "compact_2")]
-	Compact2,
+	TwentyFourHour,
 }
 
 impl TimeFormat {
-	pub const ALL: [Self; 4] = [
-		Self::TwelveHour,
-		Self::TwentyFourHour,
-		Self::Compact,
-		Self::Compact2,
-	];
+	pub const ALL: [Self; 3] = [Self::TwelveHour, Self::Compact, Self::TwentyFourHour];
 
 	pub fn is_24_hour(self) -> bool {
 		self == Self::TwentyFourHour
 	}
 
-	/// Either compact style, which use "a"/"p" periods.
+	/// The compact style uses "a"/"p" periods.
 	pub fn is_compact(self) -> bool {
-		matches!(self, Self::Compact | Self::Compact2)
+		self == Self::Compact
 	}
 }
 
 impl std::fmt::Display for TimeFormat {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		f.write_str(match self {
-			Self::TwelveHour => "12-hour time",
-			Self::TwentyFourHour => "24-hour time",
-			Self::Compact => "9:30p",
-			Self::Compact2 => "930p",
+			Self::TwelveHour => "12-hour (AM/PM)",
+			Self::Compact => "12-hour (a/p)",
+			Self::TwentyFourHour => "24-hour",
 		})
 	}
 }
@@ -55,17 +46,12 @@ fn parts(time: &impl Timelike, time_format: TimeFormat) -> (String, &'static str
 			format!("{twelve}:{minute:02}"),
 			if pm { "PM" } else { "AM" },
 		),
-		TimeFormat::Compact | TimeFormat::Compact2 => {
+		TimeFormat::Compact => {
 			let period = if pm { "p" } else { "a" };
-			let separator = if time_format == TimeFormat::Compact {
-				":"
-			} else {
-				""
-			};
 			if minute == 0 {
 				(twelve.to_string(), period)
 			} else {
-				(format!("{twelve}{separator}{minute:02}"), period)
+				(format!("{twelve}:{minute:02}"), period)
 			}
 		}
 	}
@@ -103,7 +89,7 @@ pub fn hour(hour: u32, time_format: TimeFormat) -> String {
 	match time_format {
 		TimeFormat::TwentyFourHour => format!("{:02}:00", hour % 24),
 		TimeFormat::TwelveHour => super::hour_label(hour),
-		TimeFormat::Compact | TimeFormat::Compact2 => clock(
+		TimeFormat::Compact => clock(
 			chrono::NaiveTime::from_hms_opt(hour % 24, 0, 0).unwrap(),
 			time_format,
 		),
@@ -128,27 +114,24 @@ mod tests {
 
 	#[test]
 	fn compact_time_omits_zero_minutes_and_uses_short_periods() {
-		for (h, m, one, two) in [
-			(0, 0, "12a", "12a"),
-			(0, 7, "12:07a", "1207a"),
-			(1, 0, "1a", "1a"),
-			(1, 30, "1:30a", "130a"),
-			(11, 59, "11:59a", "1159a"),
-			(12, 0, "12p", "12p"),
-			(13, 0, "1p", "1p"),
-			(13, 5, "1:05p", "105p"),
-			(21, 30, "9:30p", "930p"),
-			(23, 47, "11:47p", "1147p"),
+		for (h, m, expected) in [
+			(0, 0, "12a"),
+			(0, 7, "12:07a"),
+			(1, 0, "1a"),
+			(1, 30, "1:30a"),
+			(11, 59, "11:59a"),
+			(12, 0, "12p"),
+			(13, 0, "1p"),
+			(13, 5, "1:05p"),
+			(21, 30, "9:30p"),
+			(23, 47, "11:47p"),
 		] {
 			let time = NaiveTime::from_hms_opt(h, m, 0).unwrap();
-			assert_eq!(clock(time, TimeFormat::Compact), one);
-			assert_eq!(clock(time, TimeFormat::Compact2), two);
+			assert_eq!(clock(time, TimeFormat::Compact), expected);
 		}
-		for format in [TimeFormat::Compact, TimeFormat::Compact2] {
-			assert_eq!(hour(0, format), "12a");
-			assert_eq!(hour(13, format), "1p");
-			assert_eq!(hour(24, format), "12a");
-		}
+		assert_eq!(hour(0, TimeFormat::Compact), "12a");
+		assert_eq!(hour(13, TimeFormat::Compact), "1p");
+		assert_eq!(hour(24, TimeFormat::Compact), "12a");
 	}
 
 	#[test]
@@ -156,7 +139,6 @@ mod tests {
 		let t = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap();
 		for (start, end, format, expected) in [
 			(t(21, 0), t(21, 30), TimeFormat::Compact, "9 – 9:30p"),
-			(t(21, 0), t(21, 30), TimeFormat::Compact2, "9 – 930p"),
 			(t(21, 0), t(21, 30), TimeFormat::TwelveHour, "9:00 – 9:30PM"),
 			(t(11, 30), t(12, 30), TimeFormat::Compact, "11:30a – 12:30p"),
 			(
@@ -165,7 +147,7 @@ mod tests {
 				TimeFormat::TwelveHour,
 				"11:30AM – 12:30PM",
 			),
-			(t(23, 0), t(1, 0), TimeFormat::Compact2, "11p – 1a"),
+			(t(23, 0), t(1, 0), TimeFormat::Compact, "11p – 1a"),
 			(
 				t(21, 0),
 				t(21, 30),

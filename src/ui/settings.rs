@@ -1943,7 +1943,7 @@ mod tests {
 				preferences(&state, &Metrics::of(size)),
 			);
 			if width < 200.0 {
-				ui.click("930p").unwrap();
+				ui.click("24-hour").unwrap();
 				assert!(ui.into_messages().any(|message| matches!(
 					message,
 					Message::Settings(SettingsMessage::TimeFormatSelected(TimeFormat::TwelveHour))
