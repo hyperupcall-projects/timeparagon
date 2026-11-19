@@ -1297,7 +1297,7 @@ const LEGACY_DATABASE: &str = "timeslay.sqlite3";
 
 /// Moves what the app kept under its old name, TimeSlay, to the TimeParagon
 /// directories. A directory is only moved when its new one does not exist
-/// yet, so nothing is ever overwritten; `packaging/install.sh` does the same.
+/// yet, so nothing is ever overwritten; `scripts/install.sh` does the same.
 /// Inside the data directory the database is renamed too, its WAL first so
 /// that an interruption never separates committed pages from the database.
 fn migrate_legacy_dirs(legacy: &ProjectDirs, current: &ProjectDirs) {

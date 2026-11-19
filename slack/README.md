@@ -66,13 +66,13 @@ no compile step: `.ts` files run as-is.
 Leave it running while you use Slack. Socket Mode receives events over its own connection. Connecting workspaces
 uses the HTTPS installation endpoint described below.
 
-For automatic startup, run `packaging/install.sh` from the repository root.
+For automatic startup, run `scripts/install.sh` from the repository root.
 It installs and enables the **`timeparagon-slack.service`** systemd user service,
 copies the current credentials and token cache on first installation, and
 starts the bridge. Stop a manually running `npm start` before switching to
 the service. After installation, edit `~/.config/timeparagon/slack/.env` and
 use `systemctl --user restart timeparagon-slack.service` to apply changes.
-See [the packaging guide](../packaging/README.md#slack-service) for paths,
+See [the installation guide](../scripts/README.md#slack-service) for paths,
 logs, and uninstall behavior.
 
 ### App-level token rotation
@@ -126,7 +126,7 @@ use the same connection link once per workspace.
    ```
 
    Keep `SLACK_APP_TOKEN` and its app-level refresh settings. Restart `npm start` or the installed
-   `timeparagon-slack.service` after upgrading it with `packaging/install.sh`.
+   `timeparagon-slack.service` after upgrading it with `scripts/install.sh`.
 5. Open the **private connection link** printed at startup. For the service:
 
    ```sh

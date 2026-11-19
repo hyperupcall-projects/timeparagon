@@ -13,7 +13,7 @@
 # removed, and its data directories are moved to their TimeParagon names.
 #
 # Usage:
-#   packaging/install.sh [--prefix DIR] [--no-build] [--no-enable] [--help]
+#   scripts/install.sh [--prefix DIR] [--no-build] [--no-enable] [--help]
 #
 #   --prefix DIR   Install the binary under DIR/bin (default: ~/.local)
 #   --no-build     Use an existing target/debug/timeparagon instead of
@@ -27,6 +27,7 @@ set -eu
 # --- Locate the repository -------------------------------------------------
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH='' cd -- "$script_dir/.." && pwd)
+resources_dir=$repo_root/resources
 
 # --- Defaults and argument parsing -----------------------------------------
 prefix=${PREFIX:-$HOME/.local}
@@ -276,7 +277,7 @@ fi
 
 # --- Install the desktop entry and icon ------------------------------------
 mkdir -p "$app_dir" "$icon_dir"
-sed "s|@EXEC@|$binary|g" "$script_dir/timeparagon.desktop.in" \
+sed "s|@EXEC@|$binary|g" "$resources_dir/timeparagon.desktop.in" \
     > "$app_dir/timeparagon.desktop"
 chmod 0644 "$app_dir/timeparagon.desktop"
 say "Installed desktop: $app_dir/timeparagon.desktop"
@@ -286,12 +287,12 @@ say "Installed icon:    $icon_dir/timeparagon.png"
 
 # --- Install the systemd user services -------------------------------------
 mkdir -p "$unit_dir"
-sed "s|@EXEC@|$binary|g" "$script_dir/timeparagon.service.in" \
+sed "s|@EXEC@|$binary|g" "$resources_dir/timeparagon.service.in" \
     > "$unit_dir/timeparagon.service"
 chmod 0644 "$unit_dir/timeparagon.service"
 say "Installed unit:    $unit_dir/timeparagon.service"
 
-sed "s|@EXEC@|$binary|g" "$script_dir/timeparagon-shortcuts.service.in" \
+sed "s|@EXEC@|$binary|g" "$resources_dir/timeparagon-shortcuts.service.in" \
     > "$unit_dir/timeparagon-shortcuts.service"
 chmod 0644 "$unit_dir/timeparagon-shortcuts.service"
 say "Installed unit:    $unit_dir/timeparagon-shortcuts.service"
@@ -336,11 +337,11 @@ sed -e "s|@NODE@|$(unit_value "$node_bin")|g" \
     -e "s|@INSTALLATIONS_FILE@|$(unit_value "$slack_installations")|g" \
     -e "s|@ENV_PATH@|$(unit_path "$slack_env")|g" \
     -e "s|@WORKDIR@|$(unit_path "$slack_dir")|g" \
-    "$script_dir/timeparagon-slack.service.in" > "$unit_dir/timeparagon-slack.service"
+    "$resources_dir/timeparagon-slack.service.in" > "$unit_dir/timeparagon-slack.service"
 chmod 0644 "$unit_dir/timeparagon-slack.service"
 if [ "$sync_installed" -eq 1 ]; then
     sed "s|@SYNC_BINARY@|$(unit_value "$sync_binary")|g" \
-        "$script_dir/timeparagon-database-sync.service.in" > "$unit_dir/timeparagon-database-sync.service"
+        "$resources_dir/timeparagon-database-sync.service.in" > "$unit_dir/timeparagon-database-sync.service"
     chmod 0644 "$unit_dir/timeparagon-database-sync.service"
 fi
 say "Installed unit:    $unit_dir/timeparagon-slack.service"

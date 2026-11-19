@@ -33,10 +33,10 @@ Nothing needs root; everything lives under your home directory.
 ## Usage
 
 ```sh
-packaging/install.sh              # build, install and enable for future sessions
-packaging/install.sh --no-build   # reuse binaries in target/debug
-packaging/install.sh --no-enable  # install the units without enabling or starting
-packaging/install.sh --prefix /usr/local   # install the binary elsewhere
+scripts/install.sh              # build, install and enable for future sessions
+scripts/install.sh --no-build   # reuse binaries in target/debug
+scripts/install.sh --no-enable  # install the units without enabling or starting
+scripts/install.sh --prefix /usr/local   # install the binary elsewhere
 ```
 
 The installer does not launch the TimeParagon application. Open it from the
@@ -58,14 +58,15 @@ Calendar event and work history.
 To remove it again:
 
 ```sh
-packaging/uninstall.sh            # remove binary, entry, icon and unit
-packaging/uninstall.sh --purge    # also delete config and cache
+scripts/uninstall.sh            # remove binary, entry, icon and unit
+scripts/uninstall.sh --purge    # also delete config and cache
 ```
 
 ## The systemd unit
 
-`timeparagon.service.in` is a template; `@EXEC@` is replaced with the absolute
-path of the installed binary. It is a user unit bound to
+The desktop entry and systemd templates live in the repository's `resources/`
+directory. In `resources/timeparagon.service.in`, `@EXEC@` is replaced with the
+absolute path of the installed binary. It is a user unit bound to
 `graphical-session.target`, so it starts and stops with the desktop session.
 
 TimeParagon is Wayland-only, so the daemon needs a Wayland display. Most
@@ -112,7 +113,7 @@ journalctl --user -u timeparagon-slack.service -f
 
 `--no-enable` installs the service without enabling or starting it.
 Uninstalling removes the service and runtime; credentials and token state
-remain unless `packaging/uninstall.sh --purge` is used.
+remain unless `scripts/uninstall.sh --purge` is used.
 
 ## The side panel
 

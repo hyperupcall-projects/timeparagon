@@ -1304,7 +1304,7 @@ pub fn boot_add_something() -> (State, Task<Message>) {
 /// height is filled in once the monitor size is known, in [`Message::MonitorSized`].
 ///
 /// Where the window lands is the compositor's call on Wayland, where a client
-/// cannot dictate its own position; see the packaging README.
+/// cannot dictate its own position; see scripts/README.md.
 pub fn boot_sidebar() -> (State, Task<Message>) {
 	let panel = panel::PanelConfig::load();
 
@@ -1681,7 +1681,7 @@ pub fn title(state: &State, window: window::Id) -> String {
 	}
 
 	// The panel carries a stable, distinctive title so a window rule can pick
-	// it out from the main window; see the packaging README.
+	// it out from the main window; see scripts/README.md.
 	if state.sidebar.is_some() {
 		return "TimeParagon Sidebar".to_owned();
 	}

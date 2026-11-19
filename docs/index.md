@@ -12,7 +12,7 @@ Grab a release binary from GitHub or build it yourself:
 cargo run -p timeparagon --release
 
 # Install Iced desktop app.
-./packaging/install.sh
+./scripts/install.sh
 
 # Dioxus mobile app.
 ./scripts/build-android.sh

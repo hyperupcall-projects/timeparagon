@@ -2,7 +2,7 @@
 # Remove the TimeParagon desktop application installed by install.sh.
 #
 # Usage:
-#   packaging/uninstall.sh [--prefix DIR] [--purge] [--help]
+#   scripts/uninstall.sh [--prefix DIR] [--purge] [--help]
 #
 #   --prefix DIR   The prefix the binary was installed under (default: ~/.local)
 #   --purge        Also delete the user's config and cache
