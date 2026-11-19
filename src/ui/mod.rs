@@ -415,8 +415,10 @@ pub fn view(state: &State) -> Element<'_, Message> {
 		match state.popup {
 			Some(Popup::ViewMenu) => layers.push(view_menu(state, &nav_metrics)),
 			Some(Popup::MoreMenu) => layers.push(more_menu::view(state, &nav_metrics)),
-			Some(Popup::ActivityLog) => layers.push(activity_log(state, &nav_metrics)),
 			_ => {}
+		}
+		if state.activity.open {
+			layers.push(activity_log(state, &nav_metrics));
 		}
 		// Shared state is visible to both windows, but dialogs have one owner.
 		// Add task creation stays in the sidebar, including its supporting dialogs.

@@ -1,6 +1,5 @@
 use iced::{Size, widget::Id};
 use iced_test::{Simulator, core::Settings};
-use timeparagon::app::Popup;
 use timeparagon::app::{EventMessage, SystemMessage};
 use timeparagon::{
 	app::{self, Message, Sidebar, State},
@@ -203,7 +202,7 @@ fn panel_footer_shows_logs_beside_the_plus_and_opens_the_log() {
 	for message in ui.into_messages() {
 		let _ = app::update(&mut state, message);
 	}
-	assert_eq!(state.popup, Some(Popup::ActivityLog));
+	assert!(state.activity.open);
 
 	state
 		.activity

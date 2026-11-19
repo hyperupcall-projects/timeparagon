@@ -43,11 +43,17 @@ pub(super) fn update(state: &mut State, message: NavigationMessage) -> Task<Mess
 			Task::none()
 		}
 		NavigationMessage::MoreMenuToggled => {
-			state.toggle_popup(Popup::MoreMenu);
+			if state.toggle_popup(Popup::MoreMenu) {
+				state.activity.open = false;
+			}
 			Task::none()
 		}
 		NavigationMessage::ActivityLogToggled => {
-			state.toggle_popup(Popup::ActivityLog);
+			state.activity.open = !state.activity.open;
+			if state.activity.open {
+				state.close_popup(Popup::ViewMenu);
+				state.close_popup(Popup::MoreMenu);
+			}
 			Task::none()
 		}
 		NavigationMessage::PopupDismissed => {
@@ -68,6 +74,7 @@ pub(super) fn select_screen(state: &mut State, screen: Screen) -> Task<Message> 
 	state.view_layout_input = None;
 	// Choosing a destination puts any popup away.
 	state.popup = None;
+	state.activity.open = false;
 	// Alarm setting belongs to the day view, so leaving it ends both.
 	state.alarms.mode = false;
 	state.alarms.editor = None;

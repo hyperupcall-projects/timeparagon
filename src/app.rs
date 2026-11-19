@@ -333,8 +333,6 @@ pub enum Popup {
 	ViewMenu,
 	/// The More menu under the right-hand navigation group.
 	MoreMenu,
-	/// The log of background work, rising from the foot of the panel.
-	ActivityLog,
 	/// The Calendars tab of the calendar header's View sheet.
 	CalendarMenu,
 	/// The Filter tab of the same sheet. The filter stays on after it closes.
@@ -2051,6 +2049,9 @@ fn key_message(state: &State, key: Key, modifiers: keyboard::Modifiers) -> Optio
 	// The calendar's own popups wait their turn further down.
 	if state.popup.is_some_and(|popup| !popup.is_calendar()) {
 		return escape(Message::Navigation(NavigationMessage::PopupDismissed));
+	}
+	if state.activity.open {
+		return escape(Message::Navigation(NavigationMessage::ActivityLogToggled));
 	}
 
 	if state.task_editor().estimate_task.is_some() {

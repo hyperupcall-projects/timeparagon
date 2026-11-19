@@ -2930,10 +2930,6 @@ fn opening_a_popup_replaces_the_one_on_show() {
 			Popup::MoreMenu,
 		),
 		(
-			Message::Navigation(NavigationMessage::ActivityLogToggled),
-			Popup::ActivityLog,
-		),
-		(
 			Message::Calendar(CalendarMessage::CalendarMenuToggled),
 			Popup::CalendarMenu,
 		),
@@ -2960,7 +2956,6 @@ fn escape_puts_away_the_popup_on_show() {
 	for popup in [
 		Popup::ViewMenu,
 		Popup::MoreMenu,
-		Popup::ActivityLog,
 		Popup::CalendarMenu,
 		Popup::CalendarSearch,
 		Popup::CalendarActions,
@@ -3002,6 +2997,76 @@ fn an_open_event_closes_before_a_calendar_popup_but_not_before_a_menu() {
 		escape(&state),
 		Some(Message::Navigation(NavigationMessage::PopupDismissed))
 	));
+}
+
+#[test]
+fn the_log_opens_alongside_a_calendar_popup_and_escape_closes_it_first() {
+	let mut state = State::blank();
+	let logs = || Message::Navigation(NavigationMessage::ActivityLogToggled);
+
+	state.popup = Some(Popup::CalendarActions);
+	let _ = update(&mut state, logs());
+	assert!(state.activity.open);
+	assert_eq!(state.popup, Some(Popup::CalendarActions));
+
+	let escape = key_message(
+		&state,
+		Key::Named(keyboard::key::Named::Escape),
+		keyboard::Modifiers::default(),
+	)
+	.expect("Escape closes the log");
+	let _ = update(&mut state, escape);
+	assert!(!state.activity.open);
+	assert_eq!(state.popup, Some(Popup::CalendarActions));
+
+	// A calendar popup opening leaves the log where it is.
+	state.popup = None;
+	let _ = update(&mut state, logs());
+	let _ = update(
+		&mut state,
+		Message::Calendar(CalendarMessage::CalendarMenuToggled),
+	);
+	assert!(state.activity.open);
+	assert_eq!(state.popup, Some(Popup::CalendarMenu));
+}
+
+#[test]
+fn the_log_and_the_navigation_menus_keep_their_own_rules() {
+	let mut state = State::blank();
+	let logs = || Message::Navigation(NavigationMessage::ActivityLogToggled);
+
+	// The log puts both menus away.
+	for popup in [Popup::ViewMenu, Popup::MoreMenu] {
+		state.popup = Some(popup);
+		state.activity.open = false;
+		let _ = update(&mut state, logs());
+		assert!(state.activity.open);
+		assert_eq!(state.popup, None, "{popup:?} makes way for the log");
+	}
+
+	// More puts the log away, and Plan leaves it open.
+	let _ = update(
+		&mut state,
+		Message::Navigation(NavigationMessage::MoreMenuToggled),
+	);
+	assert!(!state.activity.open);
+
+	state.popup = None;
+	state.activity.open = true;
+	let _ = update(
+		&mut state,
+		Message::Navigation(NavigationMessage::ViewMenuToggled),
+	);
+	assert!(state.activity.open);
+	assert_eq!(state.popup, Some(Popup::ViewMenu));
+
+	// Choosing a screen puts everything away.
+	let _ = update(
+		&mut state,
+		Message::Navigation(NavigationMessage::ScreenSelected(Screen::Calendar)),
+	);
+	assert!(!state.activity.open);
+	assert_eq!(state.popup, None);
 }
 
 #[test]
