@@ -2132,8 +2132,13 @@ mod tests {
 	fn habits_that_cannot_be_read_are_never_saved_over() {
 		let directory = tempfile_dir();
 		let path = directory.join("test.sqlite3");
-		let key = timeparagon_core::task_db::keys::HABITS;
-		timeparagon_core::task_db::write_document_json(&path, key, "not json").unwrap();
+		let mut initial = read(Some(path.clone()));
+		initial.library.habits.push(Habit::new("a", "Run"));
+		initial.save();
+		rusqlite::Connection::open(&path)
+			.unwrap()
+			.execute("UPDATE habits SET color='not a number'", [])
+			.unwrap();
 		let mut saved = read(Some(path.clone()));
 		assert!(saved.error.is_some());
 		saved.library.habits.push(Habit::new("a", "Run"));

@@ -35,13 +35,10 @@ use std::{
 const TABLE: &str = "timeparagon_revisions_v1";
 /// The documents shared between devices. The rows of the synced tables are
 /// too (see [`rows`]); everything else stays local.
-const SHARED_KEYS: [&str; 7] = [
-	"habits",
+const SHARED_KEYS: [&str; 4] = [
 	"alarms",
 	"shared.notepad",
-	"shared.brain_dump",
 	"shared.projects",
-	"shared.task_work",
 	"shared.routines",
 ];
 /// Edits per document left unfolded, for recovery and so a fresh save always
@@ -114,7 +111,7 @@ pub fn unsent_edits() -> usize {
 		.and_then(|db| {
 			db.query_row(
 				&format!(
-					"SELECT COUNT(*) FROM timeparagon_sync_edits WHERE uploaded=0 AND ({})",
+					"SELECT (SELECT COUNT(*) FROM timeparagon_sync_edits WHERE uploaded=0 AND ({})) + (SELECT COUNT(*) FROM timeparagon_relational_state WHERE dirty=1)",
 					shared_predicate()
 				),
 				[],
@@ -249,6 +246,8 @@ pub fn enroll(path: &Path) -> io::Result<()> {
         CREATE TABLE IF NOT EXISTS timeparagon_sync_edits(id TEXT PRIMARY KEY, document TEXT NOT NULL, before_json TEXT, after_json TEXT, clock INTEGER NOT NULL, uploaded INTEGER NOT NULL DEFAULT 0);
         CREATE INDEX IF NOT EXISTS timeparagon_sync_edits_clock ON timeparagon_sync_edits(clock);").map_err(other)?;
 	install_snapshots(&tx).map_err(other)?;
+	crate::local_changes::install(&tx).map_err(other)?;
+	crate::relational::install(&tx)?;
 	// Here rather than in schema setup, since the worker may enroll first.
 	legacy::migrate(&tx, now())?;
 	let shared = shared_sql();
@@ -405,6 +404,7 @@ fn known_ids(db: &Connection) -> io::Result<HashSet<String>> {
 		"timeparagon_sync_edits",
 		"timeparagon_sync_snapshots",
 		"timeparagon_sync_folded",
+		"timeparagon_relational_ignored",
 	] {
 		let mut q = db
 			.prepare(&format!("SELECT id FROM {table}"))
@@ -467,6 +467,19 @@ fn apply(
 			.map_err(other)?
 	};
 	for edit in incoming {
+		if crate::relational::handles(&edit.document) {
+			let collision: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM timeparagon_sync_edits WHERE id=?1 AND document!=?2 UNION ALL SELECT 1 FROM timeparagon_sync_snapshots WHERE id=?1 AND document!=?2)", params![edit.id,edit.document], |r|r.get(0)).map_err(other)?;
+			if collision {
+				return Err(other("replication ID collision; original data retained"));
+			}
+			// Imported at the cutover boundary; never replayed or refetched.
+			tx.execute(
+				"INSERT OR IGNORE INTO timeparagon_relational_ignored VALUES(?1)",
+				[&edit.id],
+			)
+			.map_err(other)?;
+			continue;
+		}
 		// Old devices and servers can still hold scratchpad records. They
 		// must not prevent the remaining documents from syncing.
 		if edit.document == "shared.todos" {
@@ -1070,6 +1083,14 @@ async fn transport(path: &Path, url: &str) -> io::Result<()> {
 	if migrate_remote_table(&conn).await? {
 		replica.push().await.map_err(other)?;
 	}
+	crate::relational::sync::install(&conn).await?;
+	crate::relational::sync::bootstrap(&conn, path, url).await?;
+	// Publish the schema, cutover marker and initial rows together. A new
+	// device must never observe a cutover marker without its migrated data.
+	let relational_pending = crate::relational::sync::pending(&open(path)?)?;
+	crate::relational::sync::send(&conn, &relational_pending).await?;
+	replica.push().await.map_err(other)?;
+	crate::relational::sync::acknowledge(&open(path)?, &relational_pending)?;
 	loop {
 		if crate::config::DatabaseSyncSettings::load().url.trim() != url {
 			return Ok(());
@@ -1102,6 +1123,7 @@ async fn transport(path: &Path, url: &str) -> io::Result<()> {
 				replica.push().await.map_err(other)?;
 			}
 			mark_sent(path, &pending, &applied.remote_deletions)?;
+			crate::relational::sync::cycle(&conn, &replica, path).await?;
 			replica.checkpoint().await.map_err(other)?;
 			if !pending.is_empty() {
 				let sent: Vec<&Edit> = pending.iter().collect();
@@ -1194,8 +1216,28 @@ mod tests {
 		}
 		mark_sent(path, &pending, &applied.remote_deletions).unwrap();
 	}
+	#[test]
+	fn normalized_document_history_is_not_replayed_or_fetched_again() {
+		let (_dir, path) = db();
+		let incoming = Edit {
+			id: "retired-cloud-document".into(),
+			document: "habits".into(),
+			after: Some("{}".into()),
+			clock: 1,
+			..Default::default()
+		};
+		let applied = apply(&path, &[incoming], None, now()).unwrap();
+		assert!(!applied.changed);
+		assert!(
+			known_ids(&open(&path).unwrap())
+				.unwrap()
+				.contains("retired-cloud-document")
+		);
+		assert!(history(&path).unwrap().is_empty());
+	}
+
 	fn habits(path: &Path) -> serde_json::Value {
-		crate::task_db::read_document(path, "habits")
+		crate::task_db::read_document(path, "shared.projects")
 			.unwrap()
 			.unwrap()
 	}
@@ -1203,7 +1245,7 @@ mod tests {
 		let marks: serde_json::Map<String, serde_json::Value> =
 			(0..n).map(|i| (format!("d{i}"), i.into())).collect();
 		let doc = serde_json::json!({"habits":[{"id":"a","marks":marks}]});
-		crate::task_db::write_document(path, "habits", &doc).unwrap();
+		crate::task_db::write_document(path, "shared.projects", &doc).unwrap();
 	}
 	#[test]
 	fn retired_scratchpad_history_and_old_clients_do_not_affect_sync() {
@@ -1219,7 +1261,7 @@ mod tests {
 			.unwrap();
 		db.execute_batch("DROP TRIGGER timeparagon_sync_insert;")
 			.unwrap();
-		db.execute_batch(&sql.replace("'habits'", "'shared.todos','habits'"))
+		db.execute_batch(&sql.replace("'shared.projects'", "'shared.todos','shared.projects'"))
 			.unwrap();
 		db.execute(
 			"INSERT INTO documents VALUES('shared.todos',?1)",
@@ -1534,17 +1576,18 @@ mod tests {
 	#[test]
 	fn enrollment_and_projection_are_retryable_and_do_not_rejournal_remote_writes() {
 		let (_d, path) = db();
-		crate::task_db::write_document_json(&path, "habits", r#"{"habits":[]}"#).unwrap();
+		crate::task_db::write_document_json(&path, "shared.projects", r#"{"habits":[]}"#).unwrap();
 		enroll(&path).unwrap();
 		enroll(&path).unwrap();
 		assert_eq!(history(&path).unwrap().len(), 1);
-		crate::task_db::write_document_json(&path, "habits", r#"{"habits":[{"id":"a"}]}"#).unwrap();
+		crate::task_db::write_document_json(&path, "shared.projects", r#"{"habits":[{"id":"a"}]}"#)
+			.unwrap();
 		let local = history(&path).unwrap();
 		assert_eq!(local.len(), 2);
 		mark_sent(&path, &local, &[]).unwrap();
 		let foreign = Edit {
 			id: "foreign".into(),
-			document: "habits".into(),
+			document: "shared.projects".into(),
 			before: Some(r#"{"habits":[]}"#.into()),
 			after: Some(r#"{"habits":[{"id":"b"}]}"#.into()),
 			clock: 2,
@@ -1553,7 +1596,7 @@ mod tests {
 		apply(&path, std::slice::from_ref(&foreign), None, now()).unwrap();
 		apply(&path, &[foreign], None, now()).unwrap();
 		assert_eq!(history(&path).unwrap().len(), 3);
-		let data: serde_json::Value = crate::task_db::read_document(&path, "habits")
+		let data: serde_json::Value = crate::task_db::read_document(&path, "shared.projects")
 			.unwrap()
 			.unwrap();
 		assert_eq!(data["habits"].as_array().unwrap().len(), 2);
@@ -1590,13 +1633,13 @@ mod tests {
 	fn malformed_remote_records_and_identity_collisions_roll_back() {
 		let (_d, path) = db();
 		enroll(&path).unwrap();
-		crate::task_db::write_document_json(&path, "habits", "{}").unwrap();
+		crate::task_db::write_document_json(&path, "shared.projects", "{}").unwrap();
 		let mut conflicting = history(&path).unwrap()[0].clone();
 		conflicting.after = Some("[]".into());
 		assert!(apply(&path, &[conflicting], None, now()).is_err());
 		let bad = Edit {
 			id: "bad".into(),
-			document: "habits".into(),
+			document: "shared.projects".into(),
 			before: None,
 			after: Some("not json".into()),
 			clock: 2,

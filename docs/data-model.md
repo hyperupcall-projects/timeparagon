@@ -28,7 +28,7 @@ flowchart TB
     GC <-- "immediate writes + refresh" --> DB
     GT <-- "immediate writes + refresh" --> DB
     GP <-- "cache" --> DB
-    DB <-- "7 shared documents,<br/>settings and note metadata" --> TURSO
+    DB <-- "Normalized rows, four documents,<br/>settings and note metadata" --> TURSO
     NOTES <-. "you sync it" .-> SYNCTHING
 ```
 
@@ -37,7 +37,7 @@ flowchart TB
 | **Google Calendar** | Events, time blocks, scheduled (dated) tasks, habit occurrences, sleep nights, meeting guests and replies | Google |
 | **Google Tasks** | Undated tasks (inbox, triaged, backlog) | Google |
 | **Google People** | Contacts, contact groups, Workspace directory | Google |
-| **SQLite** `timeparagon.sqlite3` | Habits, alarms, notepad, brain dump, projects and life areas, work sessions, note colors and connections, [settings](#settings) (calendar choices, colors, places and travel, reminders, sleep schedule, …); caches of everything Google owns; local copies of edits being sent to Google | Turso, for seven documents, settings and note metadata |
+| **SQLite** `timeparagon.sqlite3` | Habits, alarms, notepad, brain dump, projects and life areas, work sessions, note colors and connections, [settings](#settings) (calendar choices, colors, places and travel, reminders, sleep schedule, …); caches of everything Google owns; local copies of edits being sent to Google | Turso, for normalized rows, four documents, settings and note metadata |
 | **`secrets.json`** | Google tokens, connected Gmail accounts, OpenRouter token | Not shared |
 | **Notes directory** | Markdown notes, one file each | Whatever syncs the folder (Syncthing, say) |
 
@@ -74,25 +74,23 @@ scratch directory and never contact Google or the sync server.
 
 ### What is shared between devices
 
-Turso replicates exactly these `documents` rows (`database_sync::SHARED_KEYS`),
+The revision transport replicates these four `documents` rows (`database_sync::SHARED_KEYS`),
 and every row of the `settings` table (see [Settings](#settings)) and of the
 `notes` metadata table:
 
 | Document | Holds |
 | --- | --- |
-| `habits` | [Habits](#habits) |
 | `alarms` | [Alarms](#alarms) |
 | `shared.notepad` | [Notepad](#notepad-and-brain-dump) text |
-| `shared.brain_dump` | [Brain dump](#notepad-and-brain-dump) pages |
 | `shared.projects` | [Projects, life areas, goals, objectives](#life-areas-goals-objectives-and-projects) |
-| `shared.task_work` | [Work sessions and distractions](#work-sessions-distractions-and-pomodoro) |
 | `shared.routines` | [Routines](#routines): plans and reflections per day, week and month |
 
-The `shared.` prefix does not mean "synced". It marks the documents that the
-apps' `Config` holds as sections (once part of `config.toml`), which
-`shared_data` reads and writes. `habits` and `alarms` have their own libraries
-and keys (`task_db::keys`), so they have no prefix, but they are synced all the
-same. Only `SHARED_KEYS` decides what is replicated.
+Habits, brain dumps, work sessions and distractions are stored in
+[normalized tables](./database-schema.md#normalized-habits-brain-dumps-and-task-work)
+and replicated as native Turso rows. They do not use the custom JSON merge
+engine. `shared_data` lays brain dump and work log models into `Config` while
+routing persistence to those tables. The `shared.` prefix is retained at the
+API boundary for compatibility; it does not imply document storage.
 
 Everything else stays on the device. That includes the Google caches and the
 local copies of edits being sent (each device talks to Google itself), the
@@ -100,9 +98,11 @@ stored nights of sleep (each device refreshes them from Google), contacts,
 cached routes, calendar sync state, the Android theme, `device_settings`,
 secrets and notes.
 
-Concurrent edits are merged **field by field**, not by whichever document was
-saved last. See [Merge rules](./database-schema.md#merge-rules). This is why
-every list item in a shared document has a stable identity field.
+The four remaining documents and settings/note rows merge **field by field**;
+see [Merge rules](./database-schema.md#merge-rules). Normalized data uses native
+last-push-wins row conflicts: different dates or sessions survive independently,
+while simultaneous edits to the same row have one winner. Upgrade all devices
+together; old document writes are ignored after the one-time cutover.
 
 ---
 
@@ -568,7 +568,9 @@ not need a calendar event. Any number of events can count towards it through
 `ttHabit`. Marking such an event done records one repetition, and marking it
 not done takes one away.
 
-Stored as the `habits` document (shared), type `habits::Library`:
+Stored in `habits`, `habit_sections`, `habit_weekdays`, `habit_days`,
+`habit_log_entries` and `habit_preferences` (shared). The in-memory type
+`habits::Library` retains this interchange shape:
 
 ```json
 {
@@ -728,10 +730,10 @@ on the device.
 
 ## Notepad and brain dump
 
-| | Document | Shape |
+| | Storage | In-memory shape |
 | --- | --- | --- |
 | Notepad | `shared.notepad` | `{"text": "…"}`. The font size is the device setting `notepad.font_size` |
-| Brain dump | `shared.brain_dump` | `{"entries": [{"date": "2026-11-09", "text": "…"}]}`. At most one page per day. Never sent to Google |
+| Brain dump | `brain_dump_entries`, one row per date | `{"entries": [{"date": "2026-11-09", "text": "…"}]}`. At most one page per day. Never sent to Google |
 
 ---
 
@@ -782,8 +784,9 @@ figures are worked out from the tasks, events, work sessions and habits.
 
 ## Work sessions, distractions and pomodoro
 
-Recorded in time-block focus mode. Stored as the `shared.task_work` document
-(shared), type `task_work::WorkLog`:
+Recorded in time-block focus mode. Stored in `task_work_sessions` and
+`task_work_distractions` (shared), one session or distraction per row. The
+shared core type `task_work::WorkLog` retains this in-memory shape:
 
 ```json
 {
@@ -943,7 +946,8 @@ setup and the timer running on it. Another device would be broken by them.
 | `reminders.*`: the switches, and each kind of reminder | `settings` | ✅ |
 | `alarm.*`: the default alarm profile | `settings` | ✅ |
 | `appearance.*`: theme, time format, distance unit | `settings` | ✅ |
-| Projects, notepad text, brain dump, work sessions, routines | their [documents](#what-is-shared-between-devices) | ✅ |
+| Projects, notepad text, routines | their [documents](#what-is-shared-between-devices) | ✅ |
+| Brain dumps, work sessions and distractions | normalized tables | ✅ |
 | `database_sync.url`. Empty disables sync | `device_settings` | — |
 | `notes.directory` | `device_settings` | — |
 | `window.*`, `views.*`, `panel.*`: sizes, dock and panel geometry, borders, animation, shortcuts | `device_settings` | — |

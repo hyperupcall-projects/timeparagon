@@ -1,35 +1,49 @@
 //! Habit persistence shared by both clients, independent of their save scheduling.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use super::Library;
 use crate::task_db::{self, keys};
 
-/// A writable habit document. Only a successful read enables writes, so an
-/// unreadable document cannot be replaced with an empty library.
-#[derive(Clone, Debug, Default, PartialEq)]
+/// A writable relational habit library with a baseline per editor. Only a
+/// successful read enables writes, protecting unreadable data from replacement.
+#[derive(Clone, Debug, Default)]
 pub struct Storage {
 	path: Option<PathBuf>,
+	baseline: Arc<Mutex<Library>>,
+}
+impl PartialEq for Storage {
+	fn eq(&self, other: &Self) -> bool {
+		self.path == other.path
+	}
 }
 
 impl Storage {
 	pub fn load(path: Option<PathBuf>) -> Result<(Self, Library), String> {
 		let path = path.ok_or("There is nowhere to keep habits on this device.")?;
-		let storage = Self { path: Some(path) };
+		let storage = Self {
+			path: Some(path),
+			..Self::default()
+		};
 		let library = storage.read()?.unwrap_or_default();
 		Ok((storage, library))
 	}
 
-	/// Reads the current document without treating a removed document as an
-	/// empty replacement for the client's in-memory library.
+	/// Reads the current library. A missing path leaves the editor untouched;
+	/// an initialized database with no habits returns an empty library.
 	pub fn read(&self) -> Result<Option<Library>, String> {
 		let Some(path) = self.path() else {
 			return Ok(None);
 		};
-		task_db::read_document(path, keys::HABITS).map_err(|error| {
-			log::warn!("the saved habits could not be read: {error}");
-			"The saved habits could not be read, so changes to habits will not be saved.".to_owned()
-		})
+		let result: Option<Library> =
+			task_db::read_document(path, keys::HABITS).map_err(|error| {
+				log::warn!("the saved habits could not be read: {error}");
+				"The saved habits could not be read, so changes to habits will not be saved."
+					.to_owned()
+			})?;
+		*self.baseline.lock().map_err(|e| e.to_string())? = result.clone().unwrap_or_default();
+		Ok(result)
 	}
 
 	pub fn path(&self) -> Option<&Path> {
@@ -40,8 +54,25 @@ impl Storage {
 		let Some(path) = self.path() else {
 			return Ok(());
 		};
-		task_db::write_document(path, keys::HABITS, library)
-			.map_err(|error| format!("Could not save habits: {error}"))
+		let save = || -> Result<(), String> {
+			let mut baseline = self.baseline.lock().map_err(|e| e.to_string())?;
+			let mut database = task_db::Database::open(path)?;
+			let tx = database
+				.connection()
+				.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+				.map_err(|e| e.to_string())?;
+			crate::relational::save_from(
+				&tx,
+				keys::HABITS,
+				&serde_json::to_value(&*baseline).map_err(|e| e.to_string())?,
+				&serde_json::to_value(library).map_err(|e| e.to_string())?,
+			)
+			.map_err(|e| e.to_string())?;
+			tx.commit().map_err(|e| e.to_string())?;
+			*baseline = library.clone();
+			Ok(())
+		};
+		save().map_err(|error| format!("Could not save habits: {error}"))
 	}
 }
 
@@ -66,7 +97,8 @@ mod tests {
 	fn unreadable_documents_never_enable_writes() {
 		let directory = tempfile::tempdir().unwrap();
 		let path = directory.path().join("habits.sqlite3");
-		task_db::write_document_json(&path, keys::HABITS, "not json").unwrap();
+		let db = rusqlite::Connection::open(&path).unwrap();
+		db.execute_batch("CREATE TABLE documents(key TEXT PRIMARY KEY,value TEXT NOT NULL); INSERT INTO documents VALUES('habits','not json'); PRAGMA user_version=10;").unwrap();
 		assert!(Storage::load(Some(path.clone())).is_err());
 		let raw: String = rusqlite::Connection::open(&path)
 			.unwrap()

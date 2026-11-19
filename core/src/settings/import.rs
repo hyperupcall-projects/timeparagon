@@ -123,6 +123,11 @@ fn store(
 	let file = raw.as_object().unwrap_or(&empty);
 	let mut missing = Vec::new();
 	for section in crate::shared_data::SECTIONS {
+		if crate::relational::handles(&format!("shared.{section}"))
+			&& crate::relational::initialized(tx, &format!("shared.{section}"))?
+		{
+			continue;
+		}
 		if crate::shared_data::section(file, section).is_some()
 			&& document(tx, &format!("shared.{section}"))
 				.map_err(other)?
@@ -131,7 +136,7 @@ fn store(
 			missing.push(section);
 		}
 	}
-	let stored = crate::shared_data::store_in(tx, path, file, &missing)?;
+	let stored = crate::shared_data::store_in(tx, path, file, &missing, None)?;
 
 	if journal {
 		tx.execute(

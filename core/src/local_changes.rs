@@ -59,7 +59,7 @@ fn bump(name: &str) -> String {
 }
 
 /// Makes every insert, update and delete on `table` bump `counter`.
-fn watch(db: &Connection, table: &str, counter: &str) -> rusqlite::Result<()> {
+pub(crate) fn watch(db: &Connection, table: &str, counter: &str) -> rusqlite::Result<()> {
 	for operation in ["INSERT", "UPDATE", "DELETE"] {
 		db.execute_batch(&format!(
             "CREATE TRIGGER IF NOT EXISTS timeparagon_change_{table}_{op} AFTER {operation} ON {table} BEGIN {body} END;",

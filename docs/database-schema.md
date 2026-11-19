@@ -38,13 +38,14 @@ The schema version is stored in `PRAGMA user_version`.
 | `user_version` | Meaning |
 | --- | --- |
 | `0` | New file. `Database::open` creates the schema. |
-| `2` through `9` | Upgraded to 10 on open: see below. |
+| `2` through `10` | Upgraded to 11 on open: see below. |
 | `6` | Like 5, with the app's tables, indexes and triggers prefixed `timeparagon_` instead of `timeslay_`, and the built-in calendar sources' IDs prefixed `timeparagon:` instead of `timeslay:`. |
 | `7` | Adds the synced `notes` metadata table. |
 | `8` | Creates the incremental Google sync cache during upgrade and reinstalls synced data tables and triggers. |
 | `9` | Removes monthly view snapshots, separates confirmed tasks from desired edits, and tracks changes to all calendar inputs. |
-| `10` | Current (`task_db::SCHEMA_VERSION`). Keeps every shared setting in `settings`, and no longer replicates `sleep_nights`. |
-| anything else | Refused: `Unsupported database schema N; expected 10`. |
+| `10` | Keeps every shared setting in `settings`, and no longer replicates `sleep_nights`. |
+| `11` | Current (`task_db::SCHEMA_VERSION`). Normalizes habits, brain dumps and task work; replicates those as native Turso rows. |
+| anything else | Refused: `Unsupported database schema N; expected 11`. |
 
 Builds from before version 5 refuse a version 5 file, so every TimeParagon
 process on a device (panel, dock, shortcut daemon, browser host) has to be
@@ -216,7 +217,7 @@ The tables fall into six groups:
 | [Device sync](#device-sync-turso) | `timeparagon_sync_control`, `timeparagon_sync_edits`, `timeparagon_sync_snapshots`, `timeparagon_sync_folded` + triggers | `database_sync::enroll`, `database_sync::install_snapshots` |
 
 None of the Google tables, nor `sleep_nights`, are replicated between
-devices. Seven `documents` rows and the rows of `settings` and `notes` are. See
+devices. Four `documents` rows, the rows of `settings` and `notes`, and the normalized habit, brain dump and task work tables are. See
 [What is shared between devices](./data-model.md#what-is-shared-between-devices).
 
 ---
@@ -267,6 +268,79 @@ inside an `IMMEDIATE` transaction).
 
 ---
 
+## Normalized habits, brain dumps and task work
+
+Schema 11 moves three former documents into typed tables. The table catalog
+and exact DDL live in `core/src/relational/mod.rs`; `codec.rs` adapts the
+existing Rust models to scalar columns. The public document APIs dispatch
+these three legacy keys to the tables, so callers cannot recreate JSON blobs.
+
+| Table | Primary key | Other columns / purpose |
+| --- | --- | --- |
+| `habit_sections` | `id` | `name`, `collapsed`, `position` |
+| `habits` | `id` | Name, kind, creation date, question, notes, color; frequency kind/times/days; display flags, icons, section ID; measure unit/target/days; area ID, distraction flag, position |
+| `habit_weekdays` | `habit_id, weekday` | One selected weekday per row, Monday = 0 |
+| `habit_days` | `habit_id, date` | `mark`, `repetitions`, `resisted`, `value` in thousandths, `has_log`; NULL preserves the difference between absent and zero |
+| `habit_log_entries` | `habit_id, date, kind, position` | Each happened/resisted entry: `at`, `amount`, `note` |
+| `habit_preferences` | `id` (always 1) | Sort, reversal, visibility flags, chart buckets |
+| `brain_dump_entries` | `date` | `text`, `position`; empty text is a saved page |
+| `task_work_sessions` | `id` | `task_key`, `task_title`, `block_key`, `started_at`, `stopped_at`, `position` |
+| `task_work_distractions` | `id` | `block_key`, `minutes`, `recorded_at`, `position` |
+
+Habit children have foreign keys with cascading deletion. Deleting a section
+sets its habits' section to NULL. Dates and timestamps use the typed models'
+ISO representations. Work row IDs are deterministic hashes of immutable task/
+block and timestamp identities plus an occurrence number, preserving identical
+legacy distractions. A session's ID remains stable when it stops. Area and
+task/block identifiers refer to features outside these normalized tables and
+have no local foreign key.
+
+Indexes support habit-date, section, task-session and block-history queries.
+The usual change counters watch all these tables, including received writes.
+Habit stores remember each editor's baseline, and snapshot saves issue only
+row inserts, updates and deletes that changed from that baseline. Unseen rows
+remain intact. Same-row changes replace that row as a unit.
+
+### Native row sync and cutover
+
+These nine tables bypass `database_sync::model`, its edit journal, snapshots
+and compaction. Each has a corresponding native Turso table with scalar
+columns plus `sync_revision` and `sync_deleted`. Native row conflicts use
+Turso's last-push-wins policy. Different habits/dates/sessions/distractions
+are independent; concurrent changes to the same habit definition, habit day,
+log position or brain-dump date have one winner. Received parent deletions
+remove dependent local rows even if another device edited those children.
+Remote tables omit foreign keys and allow NULL non-key columns for tombstones;
+the local projection enforces and validates the relationships transactionally.
+
+`timeparagon_relational_state(table_name,row_key,revision,deleted,dirty)` is a
+coalescing outbox and the last received row token. `row_key` encodes only the
+primary-key tuple. It contains no before/after payload. Triggers replace the
+token on a changed row, acknowledge only the token actually sent, and record
+old-key deletion on rekey. Remote tombstones are retained, without a time-based
+expiry. Idle pulls scan only keys and tokens; payloads are read for changed
+rows. Repeated local updates to one row occupy one state entry.
+
+The migration decodes the former documents in the schema transaction, copies
+the originals into local-only `timeparagon_relational_legacy(key,value)`, and
+removes their `documents` keys. Invalid or duplicate records abort the upgrade
+and preserve the source. `timeparagon_relational_initialized` prevents an old
+config import from replacing migrated data. Existing revision history is kept
+for recovery, excluded from normal replay/upload, and old cloud IDs are
+remembered in `timeparagon_relational_ignored` to avoid fetching them repeatedly.
+
+Before the first row sync, old local/cloud revision history is merged **once**
+to seed the native tables. `timeparagon_relational_cutover` is committed with
+the initial native rows; `timeparagon_relational_servers` records each device's
+preparation per URL. A late-upgrading device starts from native cloud rows and
+preserves only local edits made after importing its legacy snapshot. New sync
+servers are seeded with existing rows, including previously acknowledged ones.
+
+Upgrade all devices and background processes together. After cutover, edits
+made by old builds to the retired documents do not enter native row sync.
+No production database is changed by building or testing; the local migration
+runs when the updated application opens it.
+
 ## Documents
 
 ### `documents`
@@ -278,7 +352,7 @@ CREATE TABLE documents (
 );
 ```
 
-This is a key–value store. Each kind of app data is one JSON document.
+This is a key–value store for the remaining document-shaped app data.
 Use `task_db::read_document` / `write_document` / `remove_document`, or
 `shared_data::store` / `overlay` for the `shared.*` keys. Writing directly
 bypasses the merge logic described below.
@@ -290,12 +364,9 @@ empty value, so callers can refuse to save over data they could not read.
 
 | Key | Synced | Type (Rust) | Written by | Contents |
 | --- | :---: | --- | --- | --- |
-| `habits` | ✅ | `habits::Library` | Habits screens (desktop + Android) | Every habit, its daily record, sections and list settings. [Details](./data-model.md#habits) |
 | `alarms` | ✅ | `alarms::Library` | Alarms screen | One-shot alarms. [Details](./data-model.md#alarms) |
 | `shared.notepad` | ✅ | `config::NotepadText` | Notepad tab | `{"text": "…"}` |
-| `shared.brain_dump` | ✅ | `brain_dump::Dumps` | Brain dump | `{"entries": [{"date","text"}]}` |
 | `shared.projects` | ✅ | `config::ProjectsSettings` | Life / projects | `{"items": [Project], "areas": [LifeArea]}` |
-| `shared.task_work` | ✅ | `task_work::WorkLog` (desktop) | Time-block focus mode | `{"sessions": [...], "distractions": [...]}` |
 | `shared.routines` | ✅ | `routines::Routines` | Routines (desktop) | `{"entries": [Entry]}`, one per day, week or month. [Details](./data-model.md#routines) |
 | `shared_data_modified_ms` | — | integer as text | `shared_data::store` | When a `shared.*` document last changed, in ms since the epoch |
 | `contacts` | — | `people::cache::File` | People screen | Raw Google People API responses per signed-in account |
@@ -304,7 +375,7 @@ empty value, so callers can refuse to save over data they could not read.
 | `dioxus_theme` | — | `String` | Android app | Theme name. The Android home-screen widget reads it directly with SQL (`DayRenderer.kt`) |
 | `settings_imported_at` | — | RFC 3339 string | Schema 5 setup | When this database imported `config.toml`, or found none to import. Present means it never imports one again |
 
-`shared.*` documents are written by `shared_data` (`core/src/shared_data.rs`).
+`shared_data` (`core/src/shared_data.rs`) writes the remaining `shared.*` documents and routes brain dumps and task work to normalized tables.
 The apps' `Config` holds them as `notepad.text`, `brain_dump`, `projects` and
 `task_work`, laid in among the [settings](#settings) when those are read; a
 save writes back a section that changed. An empty section
@@ -622,13 +693,14 @@ knows nothing about them still increments the counters.
 
 ## Device sync (Turso)
 
-Seven documents and the rows of `settings` and `notes` are shared between
-devices through a Turso sync server (the `database_sync.url` device setting).
-Sync works as an append-only **journal of whole-document edits**, a settings
+Four documents and the rows of `settings` and `notes` use the revision
+transport below. Habits, brain dumps and task work instead use
+[native row sync](#native-row-sync-and-cutover). Both use the Turso server in
+`database_sync.url`. The revision transport works as an append-only **journal of whole-document edits**, a settings
 row counting as a document of its own (see [Settings rows](#settings-rows)). Each device merges the journal
 deterministically, field by field, and writes the result back into
 `documents`. The SQLite file stays an ordinary SQLite file that the Android
-widget and older builds can still read.
+widget can still read. Schema 10 clients must upgrade before reopening it.
 
 ```mermaid
 flowchart LR
@@ -825,7 +897,7 @@ replacement:
   `id`, `started_at`, `recorded_at` or `date`, otherwise a SHA-256 of the item.
   Repeated identities get an occurrence suffix (`#0`, `#1`).
 - Only paths whose value differs between `before` and `after` are applied.
-  Concurrent edits to different fields of the same habit therefore both survive.
+  Concurrent edits to different fields of the same project therefore both survive.
 - Removing a path removes everything under it, including fields another
   device added at the same time, so deleting an entity cannot leave a broken
   fragment of it behind.
@@ -834,10 +906,9 @@ replacement:
 - Invalid JSON is an error, never an empty document.
 
 This is why every list item in a shared document carries one of those identity
-fields: habits and sections have `id`, alarms have `id`, projects and life areas
-have `id`, brain dump entries have `date`, routine entries, objectives and
-highlights have `id`, daily refreshes have `recorded_at`, work sessions have `started_at`, and
-distractions have `recorded_at`.
+fields: alarms, projects, life areas, routine entries, objectives and highlights
+have `id`, while daily refreshes have `recorded_at`. The normalized tables do
+not use these merge rules.
 
 ---
 
@@ -869,8 +940,15 @@ SELECT substr(document, 1, instr(document, ':') - 1) AS tbl, count(*)
 FROM timeparagon_sync_edits WHERE uploaded = 0 AND document GLOB '*:*' GROUP BY tbl;
 
 -- Habits by name
-SELECT json_extract(h.value,'$.id'), json_extract(h.value,'$.name')
-FROM documents d, json_each(d.value,'$.habits') h WHERE d.key='habits';
+SELECT id, name FROM habits ORDER BY position;
+
+-- Work time by task (completed sessions only)
+SELECT task_key, sum(unixepoch(stopped_at)-unixepoch(started_at)) AS seconds
+FROM task_work_sessions WHERE stopped_at IS NOT NULL GROUP BY task_key;
+
+-- Native row changes waiting for sync
+SELECT table_name, count(*) FROM timeparagon_relational_state
+WHERE dirty=1 GROUP BY table_name;
 ```
 
 There are also small programs in `core/examples/`:

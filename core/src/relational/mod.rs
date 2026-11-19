@@ -1,0 +1,482 @@
+//! Normalized storage for habits, work logs and brain dumps. JSON is only an
+//! interchange format at the UI boundary; no collection is persisted as JSON.
+//! These tables bypass database_sync::model and replicate as native Turso rows.
+mod codec;
+pub(crate) mod sync;
+
+use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
+use serde_json::Value;
+use std::{
+	collections::BTreeMap,
+	io,
+	path::{Path, PathBuf},
+	sync::{Mutex, OnceLock},
+};
+
+pub(crate) type Rows = BTreeMap<(usize, String), Vec<Value>>;
+pub(crate) fn error(e: impl std::fmt::Display) -> io::Error {
+	io::Error::other(e.to_string())
+}
+pub(crate) fn invalid(e: impl std::fmt::Display) -> io::Error {
+	io::Error::new(io::ErrorKind::InvalidData, e.to_string())
+}
+
+pub(crate) struct Table {
+	pub name: &'static str,
+	pub columns: &'static [(&'static str, &'static str)],
+	pub keys: usize,
+	constraints: &'static str,
+	pub document: &'static str,
+}
+macro_rules! table {
+    ($name:literal, $doc:literal, $keys:literal, $constraints:literal, $($col:literal => $ty:literal),+ $(,)?) => {
+        Table { name: $name, document: $doc, keys: $keys, constraints: $constraints, columns: &[$(($col,$ty)),+] }
+    };
+}
+// Parents precede children. Deletions run in reverse order.
+pub(crate) const TABLES: &[Table] = &[
+	table!("habit_sections", "habits", 1, "", "id"=>"TEXT", "name"=>"TEXT NOT NULL", "collapsed"=>"BOOLEAN NOT NULL", "position"=>"INTEGER NOT NULL"),
+	table!("habits", "habits", 1, ", FOREIGN KEY(section_id) REFERENCES habit_sections(id) ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED",
+        "id"=>"TEXT", "name"=>"TEXT NOT NULL", "kind"=>"TEXT NOT NULL CHECK(kind IN ('yes','no'))", "created"=>"TEXT", "question"=>"TEXT NOT NULL", "notes"=>"TEXT NOT NULL", "color"=>"INTEGER NOT NULL",
+        "frequency_kind"=>"TEXT NOT NULL CHECK(frequency_kind IN ('interval','times_per_day','weekdays'))", "frequency_times"=>"INTEGER", "frequency_days"=>"INTEGER",
+        "archived"=>"BOOLEAN NOT NULL", "skip_days"=>"BOOLEAN NOT NULL", "question_marks"=>"BOOLEAN NOT NULL", "icons"=>"TEXT NOT NULL", "section_id"=>"TEXT",
+        "measure_present"=>"BOOLEAN NOT NULL", "measure_unit"=>"TEXT", "measure_target"=>"REAL", "measure_days"=>"INTEGER", "area_id"=>"TEXT", "distraction"=>"BOOLEAN NOT NULL", "position"=>"INTEGER NOT NULL"),
+	table!("habit_weekdays", "habits", 2, ", FOREIGN KEY(habit_id) REFERENCES habits(id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED", "habit_id"=>"TEXT", "weekday"=>"INTEGER CHECK(weekday BETWEEN 0 AND 6)"),
+	table!("habit_days", "habits", 2, ", FOREIGN KEY(habit_id) REFERENCES habits(id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED",
+        "habit_id"=>"TEXT", "date"=>"TEXT", "mark"=>"TEXT CHECK(mark IN ('yes','no','skip','reps'))", "repetitions"=>"INTEGER", "resisted"=>"INTEGER", "value"=>"INTEGER", "has_log"=>"BOOLEAN NOT NULL"),
+	table!("habit_log_entries", "habits", 4, ", FOREIGN KEY(habit_id,date) REFERENCES habit_days(habit_id,date) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED",
+        "habit_id"=>"TEXT", "date"=>"TEXT", "kind"=>"TEXT CHECK(kind IN ('happened','resisted'))", "position"=>"INTEGER", "at"=>"TEXT", "amount"=>"INTEGER", "note"=>"TEXT NOT NULL"),
+	table!("habit_preferences", "habits", 1, "", "id"=>"INTEGER CHECK(id=1)", "sort"=>"TEXT NOT NULL", "reversed"=>"BOOLEAN NOT NULL", "hide_archived"=>"BOOLEAN NOT NULL", "hide_completed"=>"BOOLEAN NOT NULL", "score_bucket"=>"TEXT NOT NULL", "history_bucket"=>"TEXT NOT NULL"),
+	table!("brain_dump_entries", "shared.brain_dump", 1, "", "date"=>"TEXT", "text"=>"TEXT NOT NULL", "position"=>"INTEGER NOT NULL"),
+	table!("task_work_sessions", "shared.task_work", 1, "", "id"=>"TEXT", "task_key"=>"TEXT NOT NULL", "task_title"=>"TEXT NOT NULL", "block_key"=>"TEXT", "started_at"=>"TEXT NOT NULL", "stopped_at"=>"TEXT", "position"=>"INTEGER NOT NULL"),
+	table!("task_work_distractions", "shared.task_work", 1, "", "id"=>"TEXT", "block_key"=>"TEXT NOT NULL", "minutes"=>"INTEGER NOT NULL CHECK(minutes>=0)", "recorded_at"=>"TEXT NOT NULL", "position"=>"INTEGER NOT NULL"),
+];
+
+impl Table {
+	pub fn names(&self) -> String {
+		self.columns
+			.iter()
+			.map(|c| c.0)
+			.collect::<Vec<_>>()
+			.join(",")
+	}
+	pub fn key_sql(&self, prefix: &str) -> String {
+		format!(
+			"json_array({})",
+			self.columns[..self.keys]
+				.iter()
+				.map(|c| format!("{prefix}{}", c.0))
+				.collect::<Vec<_>>()
+				.join(",")
+		)
+	}
+	pub fn create(&self, remote: bool) -> String {
+		let columns = self
+			.columns
+			.iter()
+			.enumerate()
+			.map(|(i, (name, ty))| {
+				if remote {
+					format!(
+						"{name} {}{}",
+						ty.split_whitespace().next().unwrap(),
+						if i < self.keys { " NOT NULL" } else { "" }
+					)
+				} else {
+					format!(
+						"{name} {ty}{}",
+						if i < self.keys { " NOT NULL" } else { "" }
+					)
+				}
+			})
+			.collect::<Vec<_>>()
+			.join(",");
+		let keys = self.columns[..self.keys]
+			.iter()
+			.map(|c| c.0)
+			.collect::<Vec<_>>()
+			.join(",");
+		format!(
+			"CREATE TABLE IF NOT EXISTS {}({columns}{},PRIMARY KEY({keys}){})",
+			self.name,
+			if remote {
+				",sync_revision TEXT NOT NULL,sync_deleted INTEGER NOT NULL DEFAULT 0"
+			} else {
+				""
+			},
+			if remote { "" } else { self.constraints }
+		)
+	}
+	pub fn upsert_sql(&self) -> String {
+		let keys = self.columns[..self.keys]
+			.iter()
+			.map(|c| c.0)
+			.collect::<Vec<_>>()
+			.join(",");
+		let updates = self.columns[self.keys..]
+			.iter()
+			.map(|c| format!("{}=excluded.{}", c.0, c.0))
+			.collect::<Vec<_>>()
+			.join(",");
+		format!(
+			"INSERT INTO {}({}) VALUES({}) ON CONFLICT({keys}) DO {}",
+			self.name,
+			self.names(),
+			vec!["?"; self.columns.len()].join(","),
+			if updates.is_empty() {
+				"NOTHING".to_owned()
+			} else {
+				format!("UPDATE SET {updates}")
+			}
+		)
+	}
+	pub fn delete(&self, db: &Connection, key: &str) -> io::Result<()> {
+		db.execute(
+			&format!("DELETE FROM {} WHERE {}", self.name, self.where_key()),
+			[key],
+		)
+		.map_err(error)?;
+		Ok(())
+	}
+	pub fn where_key(&self) -> String {
+		self.columns[..self.keys]
+			.iter()
+			.enumerate()
+			.map(|(i, c)| format!("{}=json_extract(?1,'$[{i}]')", c.0))
+			.collect::<Vec<_>>()
+			.join(" AND ")
+	}
+	pub fn read_one(&self, db: &Connection, key: &str) -> io::Result<Option<Vec<Value>>> {
+		let mut statement = db
+			.prepare(&format!(
+				"SELECT {} FROM {} WHERE {}",
+				self.names(),
+				self.name,
+				self.where_key()
+			))
+			.map_err(error)?;
+		let mut rows = statement.query([key]).map_err(error)?;
+		rows.next()
+			.map_err(error)?
+			.map(|row| self.read_row(row))
+			.transpose()
+	}
+	fn read_row(&self, row: &rusqlite::Row<'_>) -> io::Result<Vec<Value>> {
+		self.columns
+			.iter()
+			.enumerate()
+			.map(|(j, (_, ty))| {
+				use rusqlite::types::ValueRef as S;
+				Ok(match row.get_ref(j).map_err(error)? {
+					S::Null => Value::Null,
+					S::Integer(n) if ty.starts_with("BOOLEAN") => Value::Bool(n != 0),
+					S::Integer(n) => n.into(),
+					S::Real(n) => serde_json::json!(n),
+					S::Text(s) => std::str::from_utf8(s).map_err(invalid)?.into(),
+					S::Blob(_) => return Err(invalid("unexpected blob in relational data")),
+				})
+			})
+			.collect()
+	}
+	pub fn upsert(&self, db: &Connection, row: &[Value]) -> io::Result<()> {
+		let values = row.iter().map(sql_value).collect::<io::Result<Vec<_>>>()?;
+		db.execute(&self.upsert_sql(), params_from_iter(values))
+			.map_err(error)?;
+		Ok(())
+	}
+}
+pub(crate) fn sql_value(value: &Value) -> io::Result<rusqlite::types::Value> {
+	use rusqlite::types::Value as S;
+	Ok(match value {
+		Value::Null => S::Null,
+		Value::String(v) => S::Text(v.clone()),
+		Value::Bool(v) => S::Integer(i64::from(*v)),
+		Value::Number(v) => {
+			if let Some(n) = v.as_i64() {
+				S::Integer(n)
+			} else {
+				S::Real(v.as_f64().ok_or_else(|| invalid("number out of range"))?)
+			}
+		}
+		_ => return Err(invalid("relational columns must be scalar")),
+	})
+}
+pub(crate) fn insert(rows: &mut Rows, table: usize, values: Vec<Value>) -> io::Result<()> {
+	let key = key_for(table, &values);
+	if rows.insert((table, key.clone()), values).is_some() {
+		return Err(invalid(format!(
+			"duplicate {} key {key}",
+			TABLES[table].name
+		)));
+	}
+	Ok(())
+}
+pub(crate) fn key_for(table: usize, values: &[Value]) -> String {
+	Value::Array(values[..TABLES[table].keys].to_vec()).to_string()
+}
+
+pub(crate) fn install(db: &Connection) -> io::Result<()> {
+	db.execute_batch("CREATE TABLE IF NOT EXISTS timeparagon_relational_control(id INTEGER PRIMARY KEY CHECK(id=1),projecting INTEGER NOT NULL DEFAULT 0); INSERT OR IGNORE INTO timeparagon_relational_control VALUES(1,0);
+        CREATE TABLE IF NOT EXISTS timeparagon_relational_state(table_name TEXT NOT NULL,row_key TEXT NOT NULL,revision TEXT NOT NULL,deleted INTEGER NOT NULL,dirty INTEGER NOT NULL,PRIMARY KEY(table_name,row_key));
+        CREATE INDEX IF NOT EXISTS timeparagon_relational_dirty ON timeparagon_relational_state(dirty);
+        CREATE TABLE IF NOT EXISTS timeparagon_relational_legacy(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS timeparagon_relational_initialized(key TEXT PRIMARY KEY);
+		CREATE TABLE IF NOT EXISTS timeparagon_relational_ignored(id TEXT PRIMARY KEY);
+        CREATE TABLE IF NOT EXISTS timeparagon_relational_servers(url TEXT PRIMARY KEY);").map_err(error)?;
+	for table in TABLES {
+		db.execute_batch(&table.create(false)).map_err(error)?;
+		crate::local_changes::watch(
+			db,
+			table.name,
+			if table.document == "habits" {
+				"doc:habits"
+			} else {
+				"settings"
+			},
+		)
+		.map_err(error)?;
+		for (op, prefix, deleted) in [
+			("INSERT", "NEW.", 0),
+			("UPDATE", "NEW.", 0),
+			("DELETE", "OLD.", 1),
+		] {
+			let changed = if op == "UPDATE" {
+				let object = |prefix: &str| {
+					format!(
+						"json_array({})",
+						table
+							.columns
+							.iter()
+							.map(|c| format!("{prefix}{}", c.0))
+							.collect::<Vec<_>>()
+							.join(",")
+					)
+				};
+				format!(" AND {} IS NOT {}", object("OLD."), object("NEW."))
+			} else {
+				String::new()
+			};
+			// A coalescing outbox: one token per row, no before/after copies.
+			db.execute_batch(&format!("CREATE TRIGGER IF NOT EXISTS timeparagon_relational_{}_{op} AFTER {op} ON {} WHEN (SELECT projecting FROM timeparagon_relational_control WHERE id=1)=0{changed} BEGIN
+                INSERT INTO timeparagon_relational_state(table_name,row_key,revision,deleted,dirty) VALUES('{}',{},lower(hex(randomblob(16))),{deleted},1)
+                ON CONFLICT(table_name,row_key) DO UPDATE SET revision=excluded.revision,deleted=excluded.deleted,dirty=1; END;",table.name,table.name,table.name,table.key_sql(prefix))).map_err(error)?;
+		}
+		db.execute_batch(&format!("CREATE TRIGGER IF NOT EXISTS timeparagon_relational_{}_rekey AFTER UPDATE ON {} WHEN (SELECT projecting FROM timeparagon_relational_control WHERE id=1)=0 AND {} IS NOT {} BEGIN
+            INSERT INTO timeparagon_relational_state VALUES('{}',{},lower(hex(randomblob(16))),1,1) ON CONFLICT(table_name,row_key) DO UPDATE SET revision=excluded.revision,deleted=1,dirty=1; END;", table.name, table.name, table.key_sql("OLD."), table.key_sql("NEW."), table.name, table.key_sql("OLD."))).map_err(error)?;
+	}
+	db.execute_batch("CREATE INDEX IF NOT EXISTS habit_days_date ON habit_days(date,habit_id);
+        CREATE INDEX IF NOT EXISTS habits_section ON habits(section_id);
+        CREATE INDEX IF NOT EXISTS task_work_sessions_task ON task_work_sessions(task_key,started_at);
+        CREATE INDEX IF NOT EXISTS task_work_sessions_block ON task_work_sessions(block_key,started_at);
+        CREATE INDEX IF NOT EXISTS task_work_distractions_block ON task_work_distractions(block_key,recorded_at);").map_err(error)?;
+	for key in ["habits", "shared.brain_dump", "shared.task_work"] {
+		let legacy: Option<String> = db
+			.query_row("SELECT value FROM documents WHERE key=?1", [key], |r| {
+				r.get(0)
+			})
+			.optional()
+			.map_err(error)?;
+		if let Some(text) = legacy {
+			let value: Value = serde_json::from_str(&text).map_err(invalid)?;
+			let rows = codec::encode(key, &value)?;
+			if !initialized(db, key)? {
+				for ((i, _), row) in rows {
+					TABLES[i].upsert(db, &row)?;
+				}
+			}
+			db.execute(
+				"INSERT OR IGNORE INTO timeparagon_relational_legacy VALUES(?1,?2)",
+				params![key, text],
+			)
+			.map_err(error)?;
+			mark_initialized(db, key)?;
+			// Old schema-10 triggers still watch these keys during the upgrade.
+			// Removing the source is migration, not a user deletion to replay
+			// when importing legacy cloud history at the first connection.
+			let has_control: bool = db
+				.query_row(
+					"SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='timeparagon_sync_control')",
+					[],
+					|r| r.get(0),
+				)
+				.map_err(error)?;
+			let projecting: Option<i64> = if has_control {
+				db.query_row(
+					"SELECT projecting FROM timeparagon_sync_control WHERE singleton=1",
+					[],
+					|r| r.get(0),
+				)
+				.optional()
+				.map_err(error)?
+			} else {
+				None
+			};
+			if projecting.is_some() {
+				db.execute(
+					"UPDATE timeparagon_sync_control SET projecting=1 WHERE singleton=1",
+					[],
+				)
+				.map_err(error)?;
+			}
+			db.execute("DELETE FROM documents WHERE key=?1", [key])
+				.map_err(error)?;
+			if let Some(projecting) = projecting {
+				db.execute(
+					"UPDATE timeparagon_sync_control SET projecting=?1 WHERE singleton=1",
+					[projecting],
+				)
+				.map_err(error)?;
+			}
+		}
+	}
+	Ok(())
+}
+pub(crate) fn initialized(db: &Connection, key: &str) -> io::Result<bool> {
+	db.query_row(
+		"SELECT EXISTS(SELECT 1 FROM timeparagon_relational_initialized WHERE key=?1)",
+		[key],
+		|r| r.get(0),
+	)
+	.map_err(error)
+}
+fn mark_initialized(db: &Connection, key: &str) -> io::Result<()> {
+	db.execute(
+		"INSERT OR IGNORE INTO timeparagon_relational_initialized VALUES(?1)",
+		[key],
+	)
+	.map_err(error)?;
+	Ok(())
+}
+pub(crate) fn all(db: &Connection, document: Option<&str>) -> io::Result<Rows> {
+	let mut result = Rows::new();
+	for (i, table) in TABLES
+		.iter()
+		.enumerate()
+		.filter(|(_, t)| document.is_none_or(|d| t.document == d))
+	{
+		let mut query = db
+			.prepare(&format!("SELECT {} FROM {}", table.names(), table.name))
+			.map_err(error)?;
+		let mut rows = query.query([]).map_err(error)?;
+		while let Some(row) = rows.next().map_err(error)? {
+			insert(&mut result, i, table.read_row(row)?)?;
+		}
+	}
+	Ok(result)
+}
+
+// Config's existing API saves snapshots. Compare rows against the last read
+// view so an unseen row from sync is never mistaken for a local deletion.
+type Seen = BTreeMap<(PathBuf, String), Rows>;
+static SEEN: OnceLock<Mutex<Seen>> = OnceLock::new();
+pub(crate) fn remember(path: &Path, key: &str, rows: Rows) -> io::Result<()> {
+	SEEN.get_or_init(Default::default)
+		.lock()
+		.map_err(error)?
+		.insert((path.to_owned(), key.to_owned()), rows);
+	Ok(())
+}
+pub(crate) fn read(db: &Connection, path: &Path, key: &str) -> io::Result<Option<Value>> {
+	let rows = all(db, Some(key))?;
+	if rows.is_empty() && !initialized(db, key)? {
+		remember(path, key, rows)?;
+		return Ok(None);
+	}
+	let value = codec::decode(key, &rows)?;
+	remember(path, key, rows)?;
+	Ok(Some(value))
+}
+pub(crate) fn save(db: &Connection, path: &Path, key: &str, value: &Value) -> io::Result<Rows> {
+	let desired = codec::encode(key, value)?;
+	let baseline = SEEN
+		.get_or_init(Default::default)
+		.lock()
+		.map_err(error)?
+		.get(&(path.to_owned(), key.to_owned()))
+		.cloned();
+	let baseline = match baseline {
+		Some(rows) => rows,
+		None => all(db, Some(key))?,
+	};
+	write_diff(db, &baseline, &desired)?;
+	mark_initialized(db, key)?;
+	Ok(desired)
+}
+pub(crate) fn save_from(
+	db: &Connection,
+	key: &str,
+	before: &Value,
+	after: &Value,
+) -> io::Result<()> {
+	write_diff(
+		db,
+		&codec::encode(key, before)?,
+		&codec::encode(key, after)?,
+	)?;
+	mark_initialized(db, key)
+}
+pub(crate) fn write_diff(db: &Connection, baseline: &Rows, desired: &Rows) -> io::Result<()> {
+	if baseline == desired {
+		return Ok(());
+	}
+	let document = desired
+		.keys()
+		.chain(baseline.keys())
+		.next()
+		.map(|(i, _)| TABLES[*i].document);
+	let current = all(db, document)?;
+	for ((i, key), row) in desired {
+		if baseline.get(&(*i, key.clone())) == Some(row)
+			|| current.get(&(*i, key.clone())) == Some(row)
+		{
+			continue;
+		}
+		if *i <= 1
+			&& baseline.contains_key(&(*i, key.clone()))
+			&& !current.contains_key(&(*i, key.clone()))
+		{
+			continue;
+		}
+		// A stale day/log save cannot resurrect a habit deleted elsewhere.
+		if (2..=4).contains(i) {
+			let parent = serde_json::json!([row[0]]).to_string();
+			if !desired.contains_key(&(1, parent.clone()))
+				|| (baseline.contains_key(&(1, parent.clone()))
+					&& !current.contains_key(&(1, parent)))
+			{
+				continue;
+			}
+		}
+		let mut row = row.clone();
+		if *i == 1 && !row[14].is_null() {
+			let exists: bool = db
+				.query_row(
+					"SELECT EXISTS(SELECT 1 FROM habit_sections WHERE id=?1)",
+					[row[14]
+						.as_str()
+						.ok_or_else(|| invalid("invalid section id"))?],
+					|r| r.get(0),
+				)
+				.map_err(error)?;
+			if !exists {
+				row[14] = Value::Null;
+			}
+		}
+		TABLES[*i].upsert(db, &row)?;
+	}
+	for ((i, key), _) in baseline.iter().rev() {
+		if !desired.contains_key(&(*i, key.clone())) {
+			TABLES[*i].delete(db, key)?;
+		}
+	}
+	Ok(())
+}
+pub(crate) fn handles(key: &str) -> bool {
+	matches!(key, "habits" | "shared.brain_dump" | "shared.task_work")
+}
+pub(crate) fn remember_value(path: &Path, key: &str, value: &Value) -> io::Result<()> {
+	remember(path, key, codec::encode(key, value)?)
+}
+
+#[cfg(test)]
+mod tests;

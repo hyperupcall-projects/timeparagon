@@ -1,13 +1,13 @@
 //! The notepad's text, brain dumps, projects, work sessions and routines: data the
-//! user writes, kept as documents in the local database and shared between
+//! user writes, kept in the local database and shared between
 //! devices through Turso by [`crate::database_sync`].
 //!
-//! [`crate::settings`] lays these documents into the settings tree when it is
+//! [`crate::settings`] lays these models into the settings tree when it is
 //! read, and stores a changed section back here when it is saved.
 //!
-//! Each section is one document. A section with nothing in it is not stored at
-//! all, so a fresh device holds nothing that could replace another device's
-//! data when the two are synced.
+//! Brain dumps and work logs use normalized tables with native row sync.
+//! The other sections use documents. A fresh device stores no default data
+//! that could replace another device's data during sync.
 
 use std::io;
 use std::path::Path;
@@ -91,6 +91,12 @@ pub(crate) fn overlay(
 	tree: &mut Map<String, Value>,
 ) -> io::Result<()> {
 	for section in SECTIONS {
+		if crate::relational::handles(&key(section)) {
+			if let Some(value) = crate::relational::read(connection, path, &key(section))? {
+				put(tree, section, value);
+			}
+			continue;
+		}
 		if let Some(text) = document(connection, &key(section)).map_err(other)? {
 			let value: Value = serde_json::from_str(&text)
 				.map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
@@ -108,6 +114,17 @@ pub(crate) struct Stored(Vec<(String, Option<String>)>);
 impl Stored {
 	pub(crate) fn remember(self, path: &Path) {
 		for (key, value) in self.0 {
+			if crate::relational::handles(&key) {
+				if let Some(value) = value {
+					let result = serde_json::from_str(&value)
+						.map_err(other)
+						.and_then(|value| crate::relational::remember_value(path, &key, &value));
+					if let Err(error) = result {
+						log::warn!("could not remember relational view: {error}");
+					}
+				}
+				continue;
+			}
 			crate::database_sync::projection::remember(path, &key, value);
 		}
 	}
@@ -120,16 +137,45 @@ pub(crate) fn store_in(
 	path: &Path,
 	tree: &Map<String, Value>,
 	sections: &[&str],
+	before: Option<&Map<String, Value>>,
 ) -> io::Result<Stored> {
 	let values: Vec<(String, Option<String>)> = sections
 		.iter()
 		.map(|name| {
+			if crate::relational::handles(&key(name)) {
+				return (
+					key(name),
+					Some(
+						section(tree, name)
+							.unwrap_or_else(|| serde_json::json!({}))
+							.to_string(),
+					),
+				);
+			}
 			let value = section(tree, name).filter(|value| !blank(value));
 			(key(name), value.map(|value| value.to_string()))
 		})
 		.collect();
 	let mut changed = false;
 	for (key, desired) in &values {
+		if crate::relational::handles(key) {
+			let value = desired
+				.as_deref()
+				.map(serde_json::from_str)
+				.transpose()
+				.map_err(other)?
+				.unwrap_or_else(|| serde_json::json!({}));
+			if let Some(before) = before {
+				let name = key
+					.strip_prefix("shared.")
+					.ok_or_else(|| other("invalid shared section"))?;
+				let before = section(before, name).unwrap_or_else(|| serde_json::json!({}));
+				crate::relational::save_from(tx, key, &before, &value)?;
+			} else {
+				crate::relational::save(tx, path, key, &value)?;
+			}
+			continue;
+		}
 		let value = crate::database_sync::projection::prepare(path, tx, key, desired)?;
 		if document(tx, key).map_err(other)? == value {
 			continue;
@@ -165,7 +211,7 @@ pub fn save_section(database: &Path, section: &str, value: &impl Serialize) -> i
 		.connection()
 		.transaction_with_behavior(TransactionBehavior::Immediate)
 		.map_err(other)?;
-	let stored = store_in(&tx, database, &tree, &[section])?;
+	let stored = store_in(&tx, database, &tree, &[section], None)?;
 	tx.commit().map_err(other)?;
 	stored.remember(database);
 	Ok(())

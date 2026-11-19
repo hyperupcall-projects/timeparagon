@@ -234,7 +234,7 @@ fn write_tree(
 			crate::shared_data::section(before, name) != crate::shared_data::section(after, name)
 		})
 		.collect();
-	crate::shared_data::store_in(tx, path, after, &changed)
+	crate::shared_data::store_in(tx, path, after, &changed, Some(before))
 }
 
 /// Reads the settings in the database at `path` into `T`, over `T`'s

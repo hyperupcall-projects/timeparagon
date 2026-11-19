@@ -55,19 +55,19 @@ mod tests {
 		let p = d.path().join("test.db");
 		let mut db = crate::task_db::Database::open(&p).unwrap();
 		let initial = json!({"habits":[{"id":"a","name":"A"}]});
-		crate::task_db::write_document(&p, "habits", &initial).unwrap();
-		let _: serde_json::Value = crate::task_db::read_document(&p, "habits")
+		crate::task_db::write_document(&p, "shared.projects", &initial).unwrap();
+		let _: serde_json::Value = crate::task_db::read_document(&p, "shared.projects")
 			.unwrap()
 			.unwrap();
 		let remote = json!({"habits":[{"id":"a","name":"A"},{"id":"b","name":"B"}]});
 		db.connection()
 			.execute(
-				"UPDATE documents SET value=?1 WHERE key='habits'",
+				"UPDATE documents SET value=?1 WHERE key='shared.projects'",
 				[remote.to_string()],
 			)
 			.unwrap();
-		crate::task_db::write_document(&p, "habits", &json!({"habits":[]})).unwrap();
-		let merged: serde_json::Value = crate::task_db::read_document(&p, "habits")
+		crate::task_db::write_document(&p, "shared.projects", &json!({"habits":[]})).unwrap();
+		let merged: serde_json::Value = crate::task_db::read_document(&p, "shared.projects")
 			.unwrap()
 			.unwrap();
 		assert_eq!(merged, json!({"habits":[{"id":"b","name":"B"}]}));

@@ -3115,8 +3115,10 @@ mod tests {
 		reopened.keep_in(Some(path.clone()));
 		assert_eq!(reopened.library.habits[0].name, "Stretch");
 
-		let key = crate::task_db::keys::HABITS;
-		crate::task_db::write_document_json(&path, key, "not json").unwrap();
+		rusqlite::Connection::open(&path)
+			.unwrap()
+			.execute("UPDATE habits SET color='not a number'", [])
+			.unwrap();
 		let mut broken = crate::habits::Store::default();
 		broken.keep_in(Some(path.clone()));
 		assert!(broken.error.is_some());

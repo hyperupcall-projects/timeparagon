@@ -2,8 +2,8 @@
 //! and everything else this device keeps between runs.
 //!
 //! Tasks, confirmed calendar records and settings (see [`crate::settings`]) have
-//! tables of their own. The rest are JSON documents, one per kind of data,
-//! named in [`keys`].
+//! tables of their own, as do habits, brain dumps and task work (see
+//! [`crate::relational`]). Other data uses JSON documents named in [`keys`].
 //!
 use crate::calendar::ids;
 use crate::{calendar::Event, timeblocking::Metadata};
@@ -35,10 +35,10 @@ pub struct TaskData {
 /// The schema this build sets up, kept in SQLite's `user_version`.
 ///
 /// Schema changes are applied transactionally by [`Database::set_up`].
-pub const SCHEMA_VERSION: i64 = 10;
+pub const SCHEMA_VERSION: i64 = 11;
 
 /// Older schemas [`Database::set_up`] can bring up to date.
-const UPGRADABLE: std::ops::RangeInclusive<i64> = 2..=9;
+const UPGRADABLE: std::ops::RangeInclusive<i64> = 2..=10;
 
 fn schema_version(db: &Connection) -> Result<i64, String> {
 	db.query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -123,6 +123,7 @@ impl Database {
 		Self::remove_write_queue(&tx).map_err(|e| e.to_string())?;
 		Self::migrate_calendar(&tx)?;
 		crate::local_changes::install_calendar(&tx).map_err(|e| e.to_string())?;
+		crate::relational::install(&tx).map_err(|e| e.to_string())?;
 		tx.commit().map_err(|e| e.to_string())?;
 
 		if !memory {
@@ -520,6 +521,12 @@ pub fn open() -> Result<Database, String> {
 /// parse are an error, so a caller can decline to save over them.
 pub fn read_document<T: DeserializeOwned>(path: &Path, key: &str) -> io::Result<Option<T>> {
 	let database = Database::open(path).map_err(io::Error::other)?;
+	if crate::relational::handles(key) {
+		return crate::relational::read(&database.0, path, key)?
+			.map(serde_json::from_value)
+			.transpose()
+			.map_err(io::Error::other);
+	}
 	let text: Option<String> = database
 		.0
 		.query_row("SELECT value FROM documents WHERE key=?1", [key], |row| {
@@ -559,6 +566,17 @@ fn change_document(path: &Path, key: &str, desired: Option<String>) -> io::Resul
 		.0
 		.transaction_with_behavior(TransactionBehavior::Immediate)
 		.map_err(io::Error::other)?;
+	if crate::relational::handles(key) {
+		let value = desired
+			.as_deref()
+			.map(serde_json::from_str)
+			.transpose()
+			.map_err(io::Error::other)?
+			.unwrap_or_else(|| serde_json::json!({}));
+		let rows = crate::relational::save(&tx, path, key, &value)?;
+		tx.commit().map_err(io::Error::other)?;
+		return crate::relational::remember(path, key, rows);
+	}
 	let value = crate::database_sync::projection::prepare(path, &tx, key, &desired)?;
 	match value {
 		Some(value) => {

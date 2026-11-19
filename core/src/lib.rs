@@ -28,6 +28,7 @@ pub mod notes;
 pub mod people;
 pub mod places;
 pub mod recurrence;
+pub mod relational;
 pub mod reminders;
 pub mod routines;
 pub mod secrets;
@@ -37,6 +38,7 @@ pub mod sounds;
 pub mod task_db;
 pub mod task_edit;
 pub mod task_input;
+pub mod task_work;
 pub mod theme;
 pub mod timeblocking;
 

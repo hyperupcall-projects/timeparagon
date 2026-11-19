@@ -813,7 +813,7 @@ mod tests {
 	#[test]
 	fn retiring_an_incoming_night_cannot_delete_another_documents_history() {
 		let (_directory, path) = db();
-		crate::task_db::write_document_json(&path, "habits", "{}").unwrap();
+		crate::task_db::write_document_json(&path, "shared.projects", "{}").unwrap();
 		let before = history(&path).unwrap();
 		let collision = Edit {
 			document: r#"sleep_nights:["app","n1"]"#.into(),

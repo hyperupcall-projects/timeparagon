@@ -1,4 +1,4 @@
-//! One free-text brain dump per day, kept in the config file.
+//! One free-text brain dump per day, kept in relational database rows.
 //!
 //! The entries live here rather than in the calendar because they are private
 //! scratch notes: they never travel to Google and a day has at most one page.
@@ -22,7 +22,7 @@ pub struct Dumps {
 }
 
 impl Dumps {
-	/// Whether there is nothing to write to the config file.
+	/// Whether there are no saved pages.
 	pub fn is_empty(&self) -> bool {
 		self.entries.is_empty()
 	}
