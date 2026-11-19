@@ -169,6 +169,15 @@ pub(super) struct Drag {
 	pub(super) preview_end: i32,
 }
 
+/// The control under the pointer, tracked separately from its event so moving
+/// between controls redraws the overlay without rebuilding the cached grid.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum HoverPart {
+	Body,
+	Action(Rectangle),
+	Checkbox(Rectangle),
+}
+
 /// Geometry for the grid, the events and their labels, reused while scrolling.
 ///
 /// The labels are traced into glyph outlines by [`fill_glyphs`], and that
@@ -181,8 +190,8 @@ pub(super) struct DrawState {
 	pub(super) key: std::cell::Cell<u64>,
 	/// Whether Ctrl is held, which turns the wheel into a zoom.
 	pub(super) zoom_held: std::cell::Cell<bool>,
-	/// Index of the timed event under the pointer. Kept out of the grid cache.
-	pub(super) hovered: std::cell::Cell<Option<usize>>,
+	/// Event and control under the pointer. Kept out of the grid cache.
+	pub(super) hovered: std::cell::Cell<Option<(usize, HoverPart)>>,
 	/// The drag in progress, if any. Kept out of the grid cache so the preview
 	/// can follow the pointer without retracing the day.
 	pub(super) drag: std::cell::RefCell<Option<Drag>>,
@@ -558,6 +567,7 @@ impl canvas::Program<Message> for DayCanvas {
 			}
 			if self.record_at(point, bounds.width).is_some()
 				|| self.completion_at(point, bounds.width).is_some()
+				|| self.sleep_timer_at(point, bounds.width).is_some()
 			{
 				return mouse::Interaction::Pointer;
 			}
@@ -665,13 +675,10 @@ impl canvas::Program<Message> for DayCanvas {
 			self.draw_create(&mut overlay, theme, start, end);
 		} else if let Some(drag) = drag {
 			self.draw_drag(&mut overlay, &drag);
-		} else if cursor
-			.position_in(bounds)
-			.is_some_and(|point| self.travel_at(point, bounds.width).is_some())
+		} else if !self.external_drag
+			&& let Some((index, part)) = self.hover_at(cursor.position_in(bounds), bounds.width)
 		{
-			// The box is what a click would open, not the event under it.
-		} else if let Some(index) = self.hit(cursor.position_in(bounds), bounds.width) {
-			self.draw_hover(&mut overlay, index);
+			self.draw_hover(&mut overlay, index, part);
 		}
 
 		vec![grid, overlay.into_geometry()]
@@ -811,7 +818,7 @@ impl DayCanvas {
 			if let Some(completion) = block.completion {
 				let (label, checkbox) = completion_bounds(label_bounds);
 				label_bounds = label;
-				draw_completion_checkbox(frame, checkbox, completion.completed(), ink);
+				draw_completion_checkbox(frame, checkbox, completion.completed(), ink, false);
 			}
 			if label_bounds.height >= 14.0 {
 				draw_block_label(
@@ -1108,20 +1115,33 @@ impl DayCanvas {
 		);
 	}
 
-	pub(super) fn draw_hover(&self, frame: &mut Frame, index: usize) {
+	pub(super) fn draw_hover(&self, frame: &mut Frame, index: usize, part: HoverPart) {
 		let Some(block) = self.blocks.get(index) else {
 			return;
 		};
-		let bounds = self.block_rect(block, frame.width());
+		let ink = on_color(block.color);
+		let bounds = match part {
+			HoverPart::Body => self.block_rect(block, frame.width()),
+			HoverPart::Action(bounds) => bounds.shrink(1.0),
+			HoverPart::Checkbox(bounds) => {
+				if let Some(completion) = block.completion {
+					draw_completion_checkbox(frame, bounds, completion.completed(), ink, true);
+				}
+				return;
+			}
+		};
 		let shape = Path::rounded_rectangle(
 			Point::new(bounds.x, bounds.y),
 			Size::new(bounds.width, bounds.height),
 			EVENT_RADIUS.into(),
 		);
+		if matches!(part, HoverPart::Action(_)) {
+			frame.fill(&shape, ink.scale_alpha(0.09));
+		}
 		frame.stroke(
 			&shape,
 			Stroke {
-				style: Style::Solid(Color::BLACK),
+				style: Style::Solid(ink.scale_alpha(0.65)),
 				width: 2.0,
 				..Stroke::default()
 			},
@@ -1129,7 +1149,7 @@ impl DayCanvas {
 	}
 
 	/// Draws the block being dragged at its preview position, in its own
-	/// color with the same black outline as a hover.
+	/// color with a black outline.
 	pub(super) fn draw_drag(&self, frame: &mut Frame, drag: &Drag) {
 		let Some(block) = self.blocks.iter().find(|block| block.id == drag.id) else {
 			return;
@@ -1387,12 +1407,49 @@ impl DayCanvas {
 		bounds: Rectangle,
 		cursor: mouse::Cursor,
 	) -> Option<canvas::Action<Message>> {
-		let hit = self.hit(cursor.position_in(bounds), bounds.width);
+		let hit = self.hover_at(cursor.position_in(bounds), bounds.width);
 		if state.hovered.get() == hit {
 			return None;
 		}
 		state.hovered.set(hit);
 		Some(canvas::Action::request_redraw())
+	}
+
+	fn hover_at(&self, local: Option<Point>, width: f32) -> Option<(usize, HoverPart)> {
+		let point = local?;
+		if self.alarm_at(point, width).is_some() || self.travel_at(point, width).is_some() {
+			return None;
+		}
+		let index = self.hit(Some(point), width)?;
+		let block = &self.blocks[index];
+		if block.pending {
+			return None;
+		}
+		let bounds = self.block_rect(block, width);
+		let (label, actions) = if block.time_block {
+			let (label, focus, plan) = block_actions(bounds);
+			(label, [Some(focus), Some(plan)])
+		} else if block.habit.is_some() {
+			let (label, record) = habit_actions(bounds);
+			(label, [Some(record), None])
+		} else if block.sleep_timer.is_some() {
+			let (label, timer) = sleep_actions(bounds);
+			(label, [Some(timer), None])
+		} else {
+			(bounds, [None, None])
+		};
+		for action in actions.into_iter().flatten() {
+			if action.contains(point) {
+				return Some((index, HoverPart::Action(action)));
+			}
+		}
+		if block.completion.is_some() {
+			let checkbox = completion_bounds(label).1;
+			if checkbox.contains(point) {
+				return Some((index, HoverPart::Checkbox(checkbox)));
+			}
+		}
+		Some((index, HoverPart::Body))
 	}
 
 	pub(super) fn hit(&self, local: Option<Point>, width: f32) -> Option<usize> {
@@ -1576,7 +1633,13 @@ pub(super) fn completion_bounds(bounds: Rectangle) -> (Rectangle, Rectangle) {
 	(label, checkbox)
 }
 
-fn draw_completion_checkbox(frame: &mut Frame, bounds: Rectangle, completed: bool, ink: Color) {
+fn draw_completion_checkbox(
+	frame: &mut Frame,
+	bounds: Rectangle,
+	completed: bool,
+	ink: Color,
+	hovered: bool,
+) {
 	let size = 14.0_f32
 		.min((bounds.width - 4.0).max(0.0))
 		.min((bounds.height - 4.0).max(0.0));
@@ -1585,15 +1648,19 @@ fn draw_completion_checkbox(frame: &mut Frame, bounds: Rectangle, completed: boo
 	}
 	let x = bounds.center_x() - size / 2.0;
 	let y = bounds.center_y() - size / 2.0;
+	let shape = Path::rounded_rectangle(Point::new(x, y), Size::new(size, size), 2.0.into());
+	if hovered {
+		frame.fill(&shape, ink.scale_alpha(0.09));
+	}
 	frame.stroke(
-		&Path::rounded_rectangle(Point::new(x, y), Size::new(size, size), 2.0.into()),
+		&shape,
 		Stroke {
 			style: Style::Solid(ink),
-			width: 1.2,
+			width: if hovered { 1.8 } else { 1.2 },
 			..Stroke::default()
 		},
 	);
-	if completed {
+	if completed || hovered {
 		let tick = Path::new(|path| {
 			path.move_to(Point::new(x + size * 0.2, y + size * 0.5));
 			path.line_to(Point::new(x + size * 0.43, y + size * 0.75));
@@ -1602,7 +1669,11 @@ fn draw_completion_checkbox(frame: &mut Frame, bounds: Rectangle, completed: boo
 		frame.stroke(
 			&tick,
 			Stroke {
-				style: Style::Solid(ink),
+				style: Style::Solid(if completed {
+					ink
+				} else {
+					Color::from_rgb8(128, 128, 128)
+				}),
 				width: 1.8,
 				..Stroke::default()
 			},

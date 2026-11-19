@@ -3464,6 +3464,21 @@ textarea {
     opacity: 0.6;
 }
 
+/* Outline the action itself so its target is clear within the event. */
+@media (hover: hover) {
+    .grid-event.block:enabled .block-plan:hover,
+    .grid-event.sleep:not([data-sending="true"]) .sleep-timer:enabled:hover {
+        box-shadow: inset 0 0 0 1.5px currentColor;
+    }
+}
+
+.grid-event.block:enabled:focus-visible .block-plan,
+.grid-event.block:enabled:active .block-plan,
+.grid-event.sleep:not([data-sending="true"]) .sleep-timer:enabled:focus-visible,
+.grid-event.sleep:not([data-sending="true"]) .sleep-timer:enabled:active {
+    box-shadow: inset 0 0 0 1.5px currentColor;
+}
+
 /* While sleep is being timed, under the navigation on every page. */
 .sleep-strip {
     flex: none;
