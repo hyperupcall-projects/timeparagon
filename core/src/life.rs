@@ -1,7 +1,6 @@
 //! What makes goals and objectives trackable: their status, how an
-//! objective's progress is measured, check-ins, milestones, life-area
-//! satisfaction ratings and weekly reviews, and the arithmetic that turns them
-//! into progress and pace.
+//! objective's progress is measured, check-ins, milestones, weekly reviews,
+//! and the arithmetic that turns them into progress and pace.
 //!
 //! A **goal** is aspirational: something wanted that could be reached in more
 //! than one way, so it has no measure or deadline of its own. Its progress is
@@ -102,14 +101,6 @@ pub struct CheckIn {
 	pub value: f64,
 	#[serde(default, skip_serializing_if = "String::is_empty")]
 	pub note: String,
-}
-
-/// How satisfied one was with a life area, from 1 to 10, as of a week (the
-/// date is the first day of that week).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Rating {
-	pub date: NaiveDate,
-	pub score: u8,
 }
 
 /// A weekly review, by the first day of the week it looks back on.

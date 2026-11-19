@@ -796,61 +796,7 @@ fn areas_page<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 		);
 	}
 
-	// Life balance, from the latest satisfaction ratings.
-	page = page.push(gap());
-	page = page.push(heading("Balance", None, metrics));
-	let rated: Vec<_> = projects
-		.areas
-		.iter()
-		.filter_map(|area| area.satisfaction().map(|r| (area, r.score)))
-		.collect();
-	if rated.is_empty() {
-		page = page.push(empty_state(
-			"No ratings yet",
-			"Rate how satisfied you are with each area in the weekly review to see your balance here.",
-			metrics,
-		));
-	} else {
-		let mut wheel = column![].spacing(6);
-		for (area, score) in rated {
-			wheel = wheel.push(
-				row![
-					text(&area.name)
-						.size(size)
-						.width(Length::FillPortion(2))
-						.wrapping(text::Wrapping::WordOrGlyph),
-					container(bar(Some(f64::from(score) / 10.0), area_color(area), 10.0))
-						.width(Length::FillPortion(5)),
-					text(format!("{score}/10"))
-						.size(size - 1.0)
-						.width(Length::Fixed(40.0)),
-				]
-				.spacing(8)
-				.align_y(Alignment::Center),
-			);
-		}
-		page = page.push(
-			container(wheel)
-				.padding([10, 12])
-				.width(Fill)
-				.style(controls::row_surface),
-		);
-	}
-
 	page.into()
-}
-
-/// How satisfaction has moved since the rating before the latest.
-fn trend(area: &LifeArea) -> &'static str {
-	let n = area.ratings.len();
-	if n < 2 {
-		return "";
-	}
-	match area.ratings[n - 1].score.cmp(&area.ratings[n - 2].score) {
-		std::cmp::Ordering::Greater => " ↑",
-		std::cmp::Ordering::Less => " ↓",
-		std::cmp::Ordering::Equal => "",
-	}
 }
 
 fn area_card<'a>(state: &'a State, area: &'a LifeArea, metrics: &Metrics) -> Element<'a, Message> {
@@ -880,7 +826,7 @@ fn area_card<'a>(state: &'a State, area: &'a LifeArea, metrics: &Metrics) -> Ele
 		.filter(|o| o.status.is_open())
 		.count();
 
-	let mut top = row![
+	let top = row![
 		color_circle(area_color(area)),
 		text(&area.name)
 			.wrapping(text::Wrapping::WordOrGlyph)
@@ -889,19 +835,6 @@ fn area_card<'a>(state: &'a State, area: &'a LifeArea, metrics: &Metrics) -> Ele
 	]
 	.spacing(8)
 	.align_y(Alignment::Center);
-	if let Some(rating) = area.satisfaction() {
-		top = top.push(chip(
-			format!("{}/10{}", rating.score, trend(area)),
-			if rating.score >= 7 {
-				Tone::Good
-			} else if rating.score >= 4 {
-				Tone::Warn
-			} else {
-				Tone::Bad
-			},
-			size,
-		));
-	}
 
 	let mut content = column![top].spacing(5).width(Fill);
 	// The vision's first line says what the area is about.
@@ -1203,63 +1136,21 @@ fn review_page<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
 		.spacing(8)
 		.align_y(Alignment::Center),
 		label(
-			"Take ten minutes: rate each area, check in on what you are working towards, pick next week's focus, and write down what you learned.",
+			"Take ten minutes: check in on what you are working towards, pick next week's focus, and write down what you learned.",
 			metrics,
 		),
 	]
 	.spacing(metrics.spacing)
 	.width(Fill);
 
-	// 1. Satisfaction, area by area.
-	page = page.push(gap());
-	page = page.push(heading("1. How is each area going?", None, metrics));
-	for area in &projects.areas {
-		let current = area.rating_for(week);
-		let previous = area
-			.ratings
-			.iter()
-			.rev()
-			.find(|rating| rating.date < week)
-			.map(|rating| format!("Last time {}", rating.score))
-			.unwrap_or_default();
-		let mut scores = row![].spacing(3);
-		for score in 1..=10u8 {
-			scores = scores.push(
-				button(text(score.to_string()).size(size - 1.0).center())
-					.width(Length::Fixed(26.0))
-					.padding([3, 0])
-					.on_press(msg(Action::Rate(area.id, score)))
-					.style(controls::nav(current == Some(score))),
-			);
-		}
-		page = page.push(
-			container(
-				column![
-					row![
-						color_circle(area_color(area)),
-						text(&area.name).size(size).width(Fill),
-						label(previous, metrics),
-					]
-					.spacing(8)
-					.align_y(Alignment::Center),
-					scores.wrap().vertical_spacing(3.0),
-				]
-				.spacing(6),
-			)
-			.padding([8, 10])
-			.width(Fill)
-			.style(controls::row_surface),
-		);
-	}
-
-	// 2. Check in on what is open.
+	// 1. Check in on what is open.
 	let open: Vec<_> = projects
 		.all_objectives()
 		.filter(|(_, o)| o.status.is_open())
 		.collect();
 	page = page.push(gap());
 	page = page.push(heading(
-		"2. Check in on your objectives",
+		"1. Check in on your objectives",
 		Some(open.len()),
 		metrics,
 	));
@@ -1270,9 +1161,9 @@ fn review_page<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
 		page = page.push(review_check_in(state, area, objective, today, metrics));
 	}
 
-	// 3. Next week's focus.
+	// 2. Next week's focus.
 	page = page.push(gap());
-	page = page.push(heading("3. Choose what to focus on", None, metrics));
+	page = page.push(heading("2. Choose what to focus on", None, metrics));
 	page = page.push(label(
 		"Three to five objectives is plenty. They are shown first on the Focus page.",
 		metrics,
@@ -1289,9 +1180,9 @@ fn review_page<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
 	}
 	page = page.push(picks);
 
-	// 4. Reflection.
+	// 3. Reflection.
 	page = page.push(gap());
-	page = page.push(heading("4. Reflect", None, metrics));
+	page = page.push(heading("3. Reflect", None, metrics));
 	page = page.push(
 		controls::text_editor(&state.life.review.reflection)
 			.placeholder("What went well? What didn't? What will you do differently next week?")
@@ -1573,37 +1464,6 @@ fn area_panel<'a>(
 	.spacing(metrics.spacing)
 	.width(Fill);
 
-	// Satisfaction this week.
-	let week = crate::life::review_week(state);
-	let current = area.rating_for(week);
-	let mut scores = row![].spacing(3);
-	for value in 1..=10u8 {
-		scores = scores.push(
-			button(text(value.to_string()).size(size - 1.0).center())
-				.width(Length::Fixed(26.0))
-				.padding([3, 0])
-				.on_press(msg(Action::Rate(area.id, value)))
-				.style(controls::nav(current == Some(value))),
-		);
-	}
-	let history: String = area
-		.ratings
-		.iter()
-		.rev()
-		.take(8)
-		.rev()
-		.map(|r| r.score.to_string())
-		.collect::<Vec<_>>()
-		.join(" · ");
-	let mut satisfaction = column![
-		label("How satisfied are you with this area this week?", metrics),
-		scores.wrap().vertical_spacing(3.0),
-	]
-	.spacing(4);
-	if !history.is_empty() {
-		satisfaction = satisfaction.push(label(format!("Recent weeks: {history}"), metrics));
-	}
-	page = page.push(satisfaction);
 	if let Some(progress) = area.progress(&score) {
 		page = page.push(
 			column![

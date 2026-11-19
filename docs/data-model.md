@@ -668,8 +668,7 @@ erDiagram
                      "start": "2026-11-01", "due": "2026-12-31",
                      "measure": "number", "baseline": 10, "target": 30, "unit": "km",
                      "check_ins": [{"date": "2026-11-12", "value": 22, "note": ""}],
-                     "milestones": [{"id": 1, "name": "First 20 km week", "done": true}]}],
-     "ratings": [{"date": "2026-11-09", "score": 7}]}
+                     "milestones": [{"id": 1, "name": "First 20 km week", "done": true}]}]}
   ],
   "reviews": [{"date": "2026-11-09", "reflection": "Markdown…", "done": true}]
 }
@@ -685,7 +684,6 @@ erDiagram
 | `LifeArea` | `id` | Area `1` is **Personal**. It always exists and cannot be removed, but it can be renamed |
 | | `vision` | Markdown |
 | | `goals`, `objectives` | Owned by the area |
-| | `ratings` | Satisfaction from 1 to 10, one per week (`date` is the week's first day), oldest first |
 | `Goal` | `id`, `name`, `description` | Something you aspire to, which can be reached in more than one way. It has no measure or deadline of its own: its progress is that of its objectives |
 | | `why` | Why it matters |
 | | `status` | `active` (default), `paused`, `done`, `dropped` |

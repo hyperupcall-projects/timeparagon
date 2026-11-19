@@ -5,11 +5,11 @@
 //!
 //! - **Focus**: the objectives pinned for this week, what needs attention, and
 //!   what is due soon.
-//! - **Areas**: each life area with its satisfaction and progress.
+//! - **Areas**: each life area with its vision and progress.
 //! - **Goals**: every goal with its objectives, area by area.
 //! - **Timeline**: objectives by when they are due.
-//! - **Review**: the weekly review: rate each area, check in on objectives,
-//!   choose next week's focus, and reflect.
+//! - **Review**: the weekly review: check in on objectives, choose next
+//!   week's focus, and reflect.
 //!
 //! Anything picked from them opens in the side panel, which steps between an
 //! area, a goal, an objective and a project like pages in a browser.
@@ -313,8 +313,6 @@ pub enum Action {
 	Back,
 	Close,
 	ShiftArea(u64, bool),
-	/// Rate an area's satisfaction for this week.
-	Rate(u64, u8),
 
 	// What is open: an area or a project.
 	Rename(String),
@@ -486,15 +484,6 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 
 		Action::ShiftArea(id, up) => {
 			state.config.projects.shift_area(id, up);
-			queue_save(state)
-		}
-
-		Action::Rate(area, score) => {
-			let week = review_week(state);
-			let Some(area) = state.config.projects.area_mut(area) else {
-				return Task::none();
-			};
-			area.rate(week, score);
 			queue_save(state)
 		}
 
@@ -1682,18 +1671,12 @@ mod tests {
 	}
 
 	#[test]
-	fn the_weekly_review_rates_areas_checks_in_and_reflects() {
+	fn the_weekly_review_checks_in_and_reflects() {
 		let mut state = state();
 		let goal = add_goal(&mut state, PERSONAL_AREA, "Lighter");
 		let id = add_objective(&mut state, goal, "80 kg");
 		let _ = update(&mut state, Action::ShowPage(Page::Review));
 		let week = review_week(&state);
-
-		let _ = update(&mut state, Action::Rate(PERSONAL_AREA, 7));
-		let _ = update(&mut state, Action::Rate(PERSONAL_AREA, 8));
-		let area = state.config.projects.area(PERSONAL_AREA).unwrap();
-		assert_eq!(area.ratings.len(), 1, "one rating a week");
-		assert_eq!(area.rating_for(week), Some(8));
 
 		let _ = update(&mut state, Action::ReviewCheckInValue(id, "84".into()));
 		let _ = update(&mut state, Action::ReviewCheckIn(id));
@@ -1739,7 +1722,6 @@ mod tests {
 			o.focus = true;
 		}
 		config.projects.area_mut(id).unwrap().vision = "# Strong".into();
-		config.projects.area_mut(id).unwrap().rate(today(), 6);
 		config.projects.review_mut(today()).reflection = "Fine".into();
 		config.projects.items[0].area = Some(id);
 
@@ -1749,6 +1731,14 @@ mod tests {
 
 		let json = serde_json::to_string(&config.projects).unwrap();
 		let read: crate::config::ProjectsSettings = serde_json::from_str(&json).unwrap();
+		assert_eq!(read, config.projects);
+
+		// Older data can still contain the removed weekly satisfaction ratings.
+		let mut legacy = serde_json::to_value(&config.projects).unwrap();
+		legacy["areas"][1]["ratings"] = serde_json::json!([
+			{ "date": "2026-11-09", "score": 6 }
+		]);
+		let read: crate::config::ProjectsSettings = serde_json::from_value(legacy).unwrap();
 		assert_eq!(read, config.projects);
 
 		// A file from before life areas still has Personal.

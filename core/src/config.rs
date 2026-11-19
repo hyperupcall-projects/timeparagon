@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::calendar::colors;
 use crate::hex::HexColor;
-pub use crate::life::{CheckIn, Measure, Milestone, Pace, Rating, Review, Status};
+pub use crate::life::{CheckIn, Measure, Milestone, Pace, Review, Status};
 use iced_core::Color;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -223,9 +223,6 @@ pub struct LifeArea {
 	pub goals: Vec<Goal>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub objectives: Vec<Objective>,
-	/// How satisfied one has been with this area, week by week, oldest first.
-	#[serde(default, skip_serializing_if = "Vec::is_empty")]
-	pub ratings: Vec<Rating>,
 }
 
 impl LifeArea {
@@ -237,7 +234,6 @@ impl LifeArea {
 			vision: String::new(),
 			goals: Vec::new(),
 			objectives: Vec::new(),
-			ratings: Vec::new(),
 		}
 	}
 
@@ -273,30 +269,6 @@ impl LifeArea {
 		self.objectives
 			.iter()
 			.filter(move |objective| self.objective_goal(objective) == goal)
-	}
-
-	/// The latest satisfaction rating.
-	pub fn satisfaction(&self) -> Option<&Rating> {
-		self.ratings.last()
-	}
-
-	/// The rating given for the week starting `week`.
-	pub fn rating_for(&self, week: NaiveDate) -> Option<u8> {
-		self.ratings
-			.iter()
-			.find(|rating| rating.date == week)
-			.map(|rating| rating.score)
-	}
-
-	/// Rates the week starting `week`, replacing any rating already given for it.
-	pub fn rate(&mut self, week: NaiveDate, score: u8) {
-		let score = score.clamp(1, 10);
-		crate::life::upsert_by_date(
-			&mut self.ratings,
-			week,
-			Rating { date: week, score },
-			|rating| rating.date,
-		);
 	}
 
 	/// How far a goal has come: the mean progress of its objectives that are

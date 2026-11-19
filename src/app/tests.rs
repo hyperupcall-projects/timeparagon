@@ -2873,7 +2873,6 @@ fn every_life_page_and_panel_renders_with_goals_objectives_and_reviews() {
 	life(&mut state, Action::AddMilestone);
 	life(&mut state, Action::Due(ids[1], "2020-01-01".into()));
 	life(&mut state, Action::Measure(ids[2], config::Measure::Habits));
-	life(&mut state, Action::Rate(health, 6));
 	let size = Size::new(560.0, 900.0);
 	for page in Page::ALL {
 		life(&mut state, Action::ShowPage(page));
@@ -2882,7 +2881,9 @@ fn every_life_page_and_panel_renders_with_goals_objectives_and_reviews() {
 	}
 	{
 		let mut view = Simulator::with_size(Settings::default(), size, ui::view(&state));
-		assert!(view.find("1. How is each area going?").is_ok());
+		assert!(view.find("1. Check in on your objectives").is_ok());
+		assert!(view.find("2. Choose what to focus on").is_ok());
+		assert!(view.find("3. Reflect").is_ok());
 	}
 	life(&mut state, Action::ShowPage(Page::Focus));
 	{
