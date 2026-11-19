@@ -1317,6 +1317,14 @@ fn patch_event_changes(
 ) -> Result<(), GoogleError> {
 	let address = format!("{url}{}", super::meeting::write_query(changes, notify));
 	let (address, changes) = super::event_color::prepare(&address, access_token, changes)?;
+	#[cfg(test)]
+	if let Some(answer) = faked_google("PATCH", &address, Some(&changes.to_string())) {
+		let response = serde_json::from_str(&answer?).map_err(|error| error.to_string())?;
+		return match super::meeting::conference_failure(&response) {
+			Some(reason) => Err(reason.to_owned().into()),
+			None => Ok(()),
+		};
+	}
 	let result = agent()
 		.request("PATCH", &address)
 		.set("Authorization", &format!("Bearer {access_token}"))
@@ -1502,6 +1510,55 @@ pub fn save_event_scope(
 		&draft.labels,
 		Some(&draft.options),
 	)?;
+	// A time edit must not publish an occurrence's unrelated overrides to its
+	// whole series, or restore stale metadata over a newer remote edit.
+	let fields = changes.as_object_mut().expect("event patch object");
+	for (key, unchanged) in [
+		("summary", draft.title == original.title),
+		("description", description == original.details.description),
+		(
+			"reminders",
+			draft.options.reminders == original.details.options.reminders,
+		),
+		(
+			"transparency",
+			draft.options.transparency == original.details.options.transparency,
+		),
+		(
+			"visibility",
+			draft.options.visibility == original.details.options.visibility,
+		),
+	] {
+		if unchanged {
+			fields.remove(key);
+		}
+	}
+	let private = changes["extendedProperties"]["private"]
+		.as_object_mut()
+		.expect("event private properties");
+	if draft.projects.ids == original.details.projects {
+		private.remove("ttProjects");
+	}
+	if draft.labels == original.details.labels {
+		private.remove("ttLabels");
+	}
+	if draft.habit_changed {
+		let habit = draft.habit_id.clone();
+		if series_id.is_some() && scope == SaveScope::Current {
+			private.insert(
+				crate::habits::OCCURRENCE_LINK_PROPERTY.into(),
+				habit.unwrap_or_default().into(),
+			);
+		} else {
+			private.insert(
+				crate::habits::LINK_PROPERTY.into(),
+				habit.map_or(serde_json::Value::Null, Into::into),
+			);
+		}
+	}
+	if let Some(place) = &draft.place {
+		changes["location"] = place.location.clone().into();
+	}
 	if original.is_calendar_task() {
 		let mut data = original
 			.details
@@ -1620,6 +1677,22 @@ pub fn save_event_scope(
 	let notify = notifies_guests(original, draft, description, written);
 	if all {
 		patch_event_changes(&master_url, access_token, &changes, notify)?;
+		// The habit picked for all events replaces one this occurrence was
+		// given on its own, which the series' link would not override.
+		if draft.habit_changed
+			&& instance["extendedProperties"]["private"][crate::habits::OCCURRENCE_LINK_PROPERTY]
+				.is_string()
+		{
+			let cleared = serde_json::json!({"extendedProperties": {"private": {
+				crate::habits::OCCURRENCE_LINK_PROPERTY: null
+			}}});
+			patch(
+				&instance_url,
+				access_token,
+				&cleared.to_string(),
+				"Google Calendar habit",
+			)?;
+		}
 		let mut link = master["htmlLink"].as_str().unwrap_or_default().to_owned();
 		if moving {
 			move_event(access_token, source, series_id, destination)?;
@@ -1655,6 +1728,13 @@ pub fn save_event_scope(
 	}
 	for (key, value) in changes.as_object().unwrap() {
 		replacement[key] = value.clone();
+	}
+	// A null removes a property from an event that exists; a new one simply
+	// goes without.
+	for visibility in ["private", "shared"] {
+		if let Some(properties) = replacement["extendedProperties"][visibility].as_object_mut() {
+			properties.retain(|_, value| !value.is_null());
+		}
 	}
 	// Tasks repeating with the old series must find the new one.
 	let mut ancestry = split_from(&replacement["extendedProperties"]);
@@ -2334,6 +2414,10 @@ fn details_of(entry: &EventEntry) -> crate::calendar::Details {
 		habit_id: entry.extended_properties["private"][crate::habits::LINK_PROPERTY]
 			.as_str()
 			.map(str::to_owned),
+		habit_override: entry.extended_properties["private"]
+			[crate::habits::OCCURRENCE_LINK_PROPERTY]
+			.as_str()
+			.map(str::to_owned),
 		recurring_event_id: entry.recurring_event_id.clone(),
 		original_start: entry.original_start_time.as_ref().and_then(event_time),
 		recurrence: entry.recurrence.clone(),
@@ -2638,6 +2722,261 @@ pub(super) fn parse_sleep(value: serde_json::Value, calendar_id: &str) -> Result
 
 #[cfg(test)]
 mod tests {
+	#[test]
+	fn time_edits_only_write_times() {
+		use super::*;
+		let event = super::super::sample_snapshot().events.remove(0);
+		let start = event.start + chrono::Duration::minutes(20);
+		let end = event.end + chrono::Duration::minutes(50);
+		with_transport(
+			Box::new(move |method, _, body| {
+				assert_eq!(method, "PATCH");
+				let body: serde_json::Value = serde_json::from_str(body.unwrap()).unwrap();
+				assert_eq!(body.as_object().unwrap().len(), 2);
+				assert_eq!(json_event_start(&body["start"]).unwrap(), start);
+				assert_eq!(json_event_start(&body["end"]).unwrap(), end);
+				Ok("{}".into())
+			}),
+			|| patch_event_time("token", "app", &event.id, start, end, false).unwrap(),
+		);
+	}
+
+	#[test]
+	fn scoped_time_edits_preserve_unedited_metadata_and_explicit_edits_still_apply() {
+		use super::super::{EditDraft, SaveScope, at_clock};
+		use super::*;
+		use serde_json::json;
+		use std::sync::{Arc, Mutex};
+		let day = NaiveDate::from_ymd_opt(2026, 11, 10).unwrap();
+		let mut original = super::super::sample_snapshot().events.remove(0);
+		original.id = "instance".into();
+		original.calendar_id = "app".into();
+		original.all_day = false;
+		original.start = at_clock(day, 9, 0);
+		original.end = at_clock(day, 10, 0);
+		original.details = Default::default();
+		original.details.recurring_event_id = Some("series".into());
+		original.details.description = "Only this occurrence's description".into();
+		original.details.projects = vec![7];
+		original.details.labels = vec!["occurrence".into()];
+		for scope in [
+			SaveScope::Current,
+			SaveScope::All,
+			SaveScope::CurrentAndFuture,
+		] {
+			for edit_metadata in [false, true] {
+				let mut draft = EditDraft::from_event(&original);
+				draft.start += chrono::Duration::minutes(30);
+				draft.end += chrono::Duration::hours(1);
+				if edit_metadata {
+					draft.description.clear();
+					draft.projects.ids.clear();
+					draft.labels.clear();
+					draft.options.visibility = super::super::event_options::Visibility::Private;
+				}
+				let writes = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+				let capture = writes.clone();
+				let instance_start = original.start.to_rfc3339();
+				with_transport(
+					Box::new(move |method, url, body| {
+						match method {
+						"GET" if url.contains("/events/instance") => Ok(json!({
+							"recurringEventId":"series", "originalStartTime":{"dateTime":instance_start},
+							"description":"Newer remote description"
+						}).to_string()),
+						"GET" => Ok(json!({
+							"start":{"dateTime":at_clock(day.pred_opt().unwrap(),9,0).to_rfc3339()},
+							"recurrence":["RRULE:FREQ=DAILY"],
+							"description":"Series description", "summary":"Series title", "location":"Office",
+							"reminders":{"useDefault":false,"overrides":[{"method":"popup","minutes":15}]},
+							"visibility":"public", "transparency":"transparent",
+							"extendedProperties":{"private":{"ttProjects":"[3]","ttLabels":"[\"series\"]","other":"keep"},"shared":{"integration":"keep"}}
+						}).to_string()),
+						"PATCH" | "POST" => {
+							let body: serde_json::Value = serde_json::from_str(body.unwrap()).unwrap();
+							capture.lock().unwrap().push(body);
+							Ok(json!({"id":"replacement"}).to_string())
+						},
+						_ => panic!("Unexpected {method} {url}"),
+					}
+					}),
+					|| {
+						save_event_scope(
+							"token",
+							&original,
+							&draft,
+							scope,
+							&draft.description,
+							None,
+						)
+						.unwrap()
+					},
+				);
+				let writes = writes.lock().unwrap();
+				let body = &writes[0];
+				if scope == SaveScope::CurrentAndFuture {
+					assert_eq!(body["location"], "Office");
+					assert_eq!(body["summary"], "Series title");
+					assert_eq!(body["reminders"]["overrides"][0]["minutes"], 15);
+				} else {
+					for key in ["summary", "reminders", "transparency", "location"] {
+						assert!(body.get(key).is_none(), "{scope:?}: {key}: {body}");
+					}
+				}
+				if edit_metadata {
+					assert_eq!(body["description"], "");
+					assert_eq!(body["extendedProperties"]["private"]["ttProjects"], "[]");
+					assert_eq!(body["extendedProperties"]["private"]["ttLabels"], "[]");
+					assert_eq!(body["visibility"], "private");
+				} else if scope == SaveScope::CurrentAndFuture {
+					assert_eq!(body["description"], "Series description");
+					assert_eq!(body["visibility"], "public");
+				} else {
+					assert!(body.get("description").is_none(), "{scope:?}: {body}");
+					assert!(body.get("visibility").is_none());
+				}
+				if scope != SaveScope::Current {
+					let properties = &body["extendedProperties"];
+					assert_eq!(properties["private"]["other"], "keep");
+					assert_eq!(properties["shared"]["integration"], "keep");
+					if !edit_metadata {
+						assert_eq!(properties["private"]["ttProjects"], "[3]");
+						assert_eq!(properties["private"]["ttLabels"], "[\"series\"]");
+					}
+				}
+			}
+		}
+	}
+
+	#[test]
+	fn a_picked_place_and_habit_follow_the_save_scope() {
+		use super::super::{EditDraft, PlacePick, SaveScope, at_clock};
+		use super::*;
+		use crate::habits::{LINK_PROPERTY, OCCURRENCE_LINK_PROPERTY};
+		use serde_json::json;
+		use std::sync::{Arc, Mutex};
+		let day = NaiveDate::from_ymd_opt(2026, 11, 10).unwrap();
+		let mut original = super::super::sample_snapshot().events.remove(0);
+		original.id = "instance".into();
+		original.calendar_id = "app".into();
+		original.all_day = false;
+		original.start = at_clock(day, 9, 0);
+		original.end = at_clock(day, 10, 0);
+		original.details = Default::default();
+		original.details.habit = true;
+		original.details.recurring_event_id = Some("series".into());
+		for scope in [
+			SaveScope::Current,
+			SaveScope::CurrentAndFuture,
+			SaveScope::All,
+		] {
+			for unlink in [false, true] {
+				let mut draft = EditDraft::from_event(&original);
+				draft.place = Some(PlacePick {
+					id: Some(1),
+					location: "Gym, 1 Main St".into(),
+				});
+				draft.habit_changed = true;
+				draft.habit_id = (!unlink).then(|| "run".to_owned());
+				let writes =
+					Arc::new(Mutex::new(Vec::<(String, String, serde_json::Value)>::new()));
+				let capture = writes.clone();
+				let instance_start = original.start.to_rfc3339();
+				with_transport(
+					Box::new(move |method, url, body| match method {
+						"GET" if url.contains("/events/instance") => Ok(json!({
+							"recurringEventId": "series",
+							"originalStartTime": {"dateTime": instance_start},
+							"extendedProperties": {"private": {OCCURRENCE_LINK_PROPERTY: "read"}}
+						})
+						.to_string()),
+						"GET" => Ok(json!({
+							"start": {"dateTime": at_clock(day.pred_opt().unwrap(), 9, 0).to_rfc3339()},
+							"recurrence": ["RRULE:FREQ=DAILY"],
+							"location": "Office",
+							"extendedProperties": {"private": {"ttKind": "habit", LINK_PROPERTY: "walk"}}
+						})
+						.to_string()),
+						"PATCH" | "POST" => {
+							let body = serde_json::from_str(body.unwrap()).unwrap();
+							capture
+								.lock()
+								.unwrap()
+								.push((method.to_owned(), url.to_owned(), body));
+							Ok(json!({"id": "replacement"}).to_string())
+						}
+						_ => panic!("Unexpected {method} {url}"),
+					}),
+					|| {
+						save_event_scope("token", &original, &draft, scope, "", None).unwrap();
+					},
+				);
+				let writes = writes.lock().unwrap();
+				let (method, url, body) = &writes[0];
+				let private = &body["extendedProperties"]["private"];
+				assert_eq!(body["location"], "Gym, 1 Main St", "{scope:?}");
+				let habit = if unlink { json!(null) } else { json!("run") };
+				match scope {
+					// Only this occurrence counts towards the habit picked.
+					SaveScope::Current => {
+						assert_eq!(method, "PATCH");
+						assert!(url.contains("/events/instance"), "{url}");
+						let own = if unlink { "" } else { "run" };
+						assert_eq!(private[OCCURRENCE_LINK_PROPERTY], own);
+						assert!(private.get(LINK_PROPERTY).is_none(), "{body}");
+						assert_eq!(writes.len(), 1);
+					}
+					// The new series starts out with them; the old one ends.
+					SaveScope::CurrentAndFuture => {
+						assert_eq!(method, "POST");
+						assert_eq!(private["ttKind"], "habit");
+						assert!(private.get(OCCURRENCE_LINK_PROPERTY).is_none());
+						if unlink {
+							assert!(private.get(LINK_PROPERTY).is_none(), "{body}");
+						} else {
+							assert_eq!(private[LINK_PROPERTY], habit);
+						}
+					}
+					// The whole series, and this occurrence's own choice goes.
+					SaveScope::All => {
+						assert_eq!(method, "PATCH");
+						assert!(url.contains("/events/series"), "{url}");
+						assert_eq!(private[LINK_PROPERTY], habit);
+						let (_, cleared, body) = &writes[1];
+						assert!(cleared.contains("/events/instance"), "{cleared}");
+						assert_eq!(
+							body["extendedProperties"]["private"][OCCURRENCE_LINK_PROPERTY],
+							json!(null)
+						);
+					}
+				}
+			}
+		}
+	}
+
+	/// `calendar::save_event_scope` sends nothing for a draft that does not
+	/// change the event: on a series, "this and following" would split it.
+	#[test]
+	fn a_draft_that_only_connects_notes_changes_nothing_on_google() {
+		use super::super::{EditDraft, PlacePick};
+		let original = super::super::sample_snapshot().events.remove(0);
+		let mut draft = EditDraft::from_event(&original);
+		draft.stage_note("note", true);
+		assert!(!draft.changes(&original));
+		let mut changed = draft.clone();
+		changed.place = Some(PlacePick {
+			id: None,
+			location: String::new(),
+		});
+		assert!(changed.changes(&original));
+		let mut changed = draft.clone();
+		changed.habit_changed = true;
+		assert!(changed.changes(&original));
+		let mut changed = draft.clone();
+		changed.title.push('!');
+		assert!(changed.changes(&original));
+	}
+
 	#[test]
 	fn empty_event_pages_remain_valid_after_color_resolution() {
 		// Google omits items when a calendar has no events or no changes.

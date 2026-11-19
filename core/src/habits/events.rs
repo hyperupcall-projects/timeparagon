@@ -7,9 +7,11 @@ use crate::calendar::Event;
 use crate::timeblocking::{self, TaskStatus};
 
 impl Library {
-	/// Resolves a linked habit. A known series overrides the occurrence's old
-	/// properties, including when the series was explicitly unlinked. Planned
-	/// tasks use their task metadata instead.
+	/// Resolves a linked habit. An occurrence given a habit of its own (see
+	/// [`super::OCCURRENCE_LINK_PROPERTY`]) counts towards that. Otherwise a
+	/// known series overrides the occurrence's old properties, including when
+	/// the series was explicitly unlinked. Planned tasks use their task
+	/// metadata instead.
 	pub fn habit_of<'a>(
 		&self,
 		event: &'a Event,
@@ -17,6 +19,8 @@ impl Library {
 	) -> Option<&'a str> {
 		let link = if event.is_task() {
 			event.linked_habit_id()
+		} else if let Some(own) = event.occurrence_habit() {
+			own
 		} else {
 			let series_id = event
 				.details
@@ -154,6 +158,23 @@ mod tests {
 		);
 		event.details.habit_id = Some("deleted".into());
 		assert_eq!(library.habit_of(&event, []), None);
+	}
+
+	#[test]
+	fn a_habit_saved_for_this_event_only_outranks_its_series() {
+		let library = library();
+		let mut event = event("occurrence", true);
+		event.details.recurring_event_id = Some("series".into());
+		let series = [("series", Some("run"))];
+		event.details.habit_override = Some("read".into());
+		assert_eq!(library.habit_of(&event, series), Some("read"));
+		assert_eq!(event.linked_habit_id(), Some("read"));
+		event.details.habit_override = Some(String::new());
+		assert_eq!(library.habit_of(&event, series), None);
+		assert_eq!(event.linked_habit_id(), None);
+		// Only an occurrence has a series to differ from.
+		event.details.recurring_event_id = None;
+		assert_eq!(library.habit_of(&event, []), Some("run"));
 	}
 
 	#[test]

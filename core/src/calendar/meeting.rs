@@ -430,6 +430,22 @@ impl Form {
 	}
 
 	/// What was just written is now the starting point for the next save.
+	/// Whether guests, their permissions or the call differ from what was
+	/// last saved, so saving has something to write.
+	pub fn edited(&self) -> bool {
+		let flags = |guests: &[Guest]| -> Vec<(String, bool)> {
+			let mut flags: Vec<_> = guests
+				.iter()
+				.map(|guest| (guest.email.to_ascii_lowercase(), guest.optional))
+				.collect();
+			flags.sort();
+			flags
+		};
+		flags(&self.guests) != flags(&self.saved_guests)
+			|| self.permissions != self.saved_permissions
+			|| self.conference != self.saved_conference
+	}
+
 	pub fn mark_saved(&mut self) {
 		self.saved_guests = self.guests.clone();
 		self.saved_permissions = self.permissions;

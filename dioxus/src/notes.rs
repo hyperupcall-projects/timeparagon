@@ -298,6 +298,7 @@ pub fn target_of(event: &Event, settings: &CalendarSettings) -> Option<Link> {
 	let day = event.start.date_naive();
 	Some(Link {
 		kind,
+		occurrence: calendar::identity::Occurrence::of(event),
 		// A task is known by its task ID, as on the desktop, so a note
 		// connected there shows here too.
 		id: task_id(event).unwrap_or_else(|| event.id.clone()),
@@ -660,6 +661,9 @@ fn link_label(link: &Link) -> String {
 	} else {
 		link.title.as_str()
 	};
+	if let Some(reach) = link.reach_text("%b %-d, %Y") {
+		return format!("{} · {title} · {reach}", link.kind.label());
+	}
 	match link.day {
 		Some(day) => format!("{} · {title} · {}", link.kind.label(), short_day(day)),
 		None => format!("{} · {title}", link.kind.label()),
@@ -758,6 +762,11 @@ pub fn LinkedNotes(
 	/// Another connection to the same item whose notes show here too.
 	#[props(default)]
 	former: Option<Link>,
+	/// A note was started here. An event's editor holds it so Save can put
+	/// it on as much of a series as its scope says; it is on the occurrence
+	/// already, so it is never left unconnected.
+	#[props(default)]
+	on_created: Option<EventHandler<String>>,
 ) -> Element {
 	let Some(NoteOpening(mut opening)) = try_use_context::<NoteOpening>() else {
 		return rsx! {};
@@ -807,6 +816,9 @@ pub fn LinkedNotes(
 				onclick: move |_| {
 					let id = library.write().create("", vec![new_target.clone()]);
 					store.touched();
+					if let Some(created) = on_created {
+						created.call(id.clone());
+					}
 					opening.set(Some(id));
 				},
 				"New note"
@@ -852,6 +864,27 @@ mod tests {
 	}
 
 	#[test]
+	fn block_note_identity_survives_a_retimed_and_split_series() {
+		let settings = CalendarSettings {
+			app_calendar: Some("app".into()),
+			..Default::default()
+		};
+		let mut block = event("", "Block");
+		block.calendar_id = "app".into();
+		block.details.recurring_event_id = Some("series".into());
+		block.id = format!("series_{}", block.start.to_utc().format("%Y%m%dT%H%M%SZ"));
+		let original = target_of(&block, &settings).unwrap();
+		block.start += chrono::Duration::hours(1);
+		block.details.original_start = Some(block.start);
+		block.id = format!("split_{}", block.start.to_utc().format("%Y%m%dT%H%M%SZ"));
+		block.details.recurring_event_id = Some("split".into());
+		block.details.split_from = vec!["app/series".into()];
+		let moved = target_of(&block, &settings).unwrap();
+		assert!(original.same_target(&moved));
+		assert!(candidates(&note(vec![original]), &[block], "Block", &settings).is_empty());
+	}
+
+	#[test]
 	fn a_task_is_known_by_its_task_id_as_on_the_desktop() {
 		let settings = CalendarSettings::default();
 		let mut task = event("task:a", "Write report");
@@ -871,6 +904,7 @@ mod tests {
 		let mut library = Library::default();
 		let block = Link {
 			kind: LinkKind::TimeBlock,
+			occurrence: None,
 			id: "b".into(),
 			title: "Deep work".into(),
 			day: None,
@@ -878,6 +912,7 @@ mod tests {
 		library.create("Block plan", vec![block.clone()]);
 		let former = Link {
 			kind: LinkKind::Task,
+			occurrence: None,
 			id: "task:a".into(),
 			title: "Write report".into(),
 			day: None,

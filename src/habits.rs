@@ -1320,9 +1320,9 @@ fn refresh_after_event_change() -> Task<Message> {
 	])
 }
 
-/// The habit picker in the shared event editor. An event being created keeps
-/// the choice until it is saved; one that exists is changed straight away, on
-/// its whole series.
+/// The habit picker in the shared event editor. The choice waits for Save,
+/// like the editor's other fields. For an event that exists, Save's scope
+/// says which occurrences it is for.
 fn event_habit_chosen(state: &mut State, habit_id: Option<String>) -> Task<Message> {
 	if crate::inbox::creation::choose_habit(state, habit_id.clone()) {
 		return Task::none();
@@ -1331,6 +1331,17 @@ fn event_habit_chosen(state: &mut State, habit_id: Option<String>) -> Task<Messa
 		if let Some(event) = &mut state.calendar.detail_event {
 			event.details.habit_id = habit_id;
 		}
+		return Task::none();
+	}
+	let open = state.calendar.open_event.clone();
+	if let Some(draft) = state
+		.calendar
+		.edit_draft
+		.as_mut()
+		.filter(|draft| open.as_ref() == Some(&draft.id))
+	{
+		draft.habit_changed = true;
+		draft.habit_id = habit_id;
 		return Task::none();
 	}
 	let Some(event) = state
@@ -1348,6 +1359,43 @@ fn event_habit_chosen(state: &mut State, habit_id: Option<String>) -> Task<Messa
 		.unwrap_or_else(|| event.id.clone());
 	let calendar_id = event.calendar_id.clone();
 	write_link(state, calendar_id, series_id, habit_id)
+}
+
+/// Shows the habit an event's editor saved before Google's copy comes back:
+/// for "this event", on the one occurrence; otherwise on the event, and for
+/// all events on its whole series.
+pub fn habit_saved(
+	state: &mut State,
+	event: &calendar::Event,
+	habit_id: Option<String>,
+	scope: calendar::SaveScope,
+) {
+	let occurrence = event.is_occurrence();
+	let own = occurrence && scope == calendar::SaveScope::Current;
+	if let Some(shown) = state.calendar.event_mut(&event.id) {
+		if own {
+			shown.details.habit_override = Some(habit_id.clone().unwrap_or_default());
+		} else {
+			shown.details.habit_id.clone_from(&habit_id);
+			shown.details.habit_override = None;
+		}
+	}
+	if own || (occurrence && scope != calendar::SaveScope::All) {
+		return;
+	}
+	let series_id = event
+		.details
+		.recurring_event_id
+		.as_deref()
+		.unwrap_or(&event.id);
+	if let Some(series) = state
+		.habits
+		.series
+		.iter_mut()
+		.find(|series| series.id == series_id)
+	{
+		series.habit_id = habit_id;
+	}
 }
 
 /// Opens a habit event in the shared editor.

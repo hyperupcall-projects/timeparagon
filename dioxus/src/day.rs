@@ -1507,6 +1507,12 @@ pub fn save_event(
 	calendar::colors::selection(&draft.color_input)?;
 	let color_id = None;
 	calendar::save_event_scope(original, draft, scope, &description, color_id)?;
+	// The place picked is kept for this occurrence, as the desktop keeps it;
+	// the rest of the series reads it from the location written to Google.
+	if let Some(pick) = &draft.place {
+		timeparagon_core::config::save_event_place(&original.id, pick.id)
+			.map_err(|error| format!("Could not save the location: {error}"))?;
+	}
 
 	let key = tb::block_key(original);
 	if block_events(&context.events, settings)
@@ -1520,17 +1526,6 @@ pub fn save_event(
 		task_edit::reflow(&moved, &context.events, settings, false)?;
 	}
 	Ok(())
-}
-
-/// Gives a calendar event a place, or takes it away, both on Google and in the
-/// config the iced app reads it from.
-///
-/// Blocking: callers run this on a worker thread.
-pub fn save_event_place(event: &Event, place: Option<&Place>) -> Result<(), String> {
-	let text = place.map(places::location_text).unwrap_or_default();
-	calendar::set_event_location(&event.calendar_id, &event.id, &text)?;
-	timeparagon_core::config::save_event_place(&event.id, place.map(|place| place.id))
-		.map_err(|error| format!("Could not save the location: {error}"))
 }
 
 /// Saves a place Mapbox found, so tasks and events can refer to it.

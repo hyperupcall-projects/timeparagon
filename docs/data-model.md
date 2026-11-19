@@ -257,6 +257,7 @@ characters.
 | `ttCompleted` | Dated tasks, habit occurrences | `"true"` / `"false"` |
 | `ttCompletedAt` | Habit occurrences | RFC 3339 time it was marked done, or `null` |
 | `ttHabit` | Habit occurrences | The [habit](#habits) ID it counts towards |
+| `ttHabitOccurrence` | Habit occurrences | The habit ID this one occurrence counts towards instead of its series', or `""` for none. Set by saving a habit for the current event only. A completed occurrence keeps a stale copy of `ttHabit`, so only this property is read as the occurrence's own choice |
 | `ttProjects` | Any event | JSON array of project IDs, e.g. `"[7,3]"` |
 | `ttLabels` | Any event | JSON array of strings, e.g. `"[\"work\"]"` |
 | `ttSplitFrom` | Recurring events split by this app | JSON array of the `calendar/series` names the series continues, oldest first. See [Time blocks](#time-blocks) |
@@ -628,7 +629,8 @@ earlier repetition), `Partial(n)`, `No`, `Skip`, `Unknown`, `Clean` /
 
 A habit's **calendar event** is a recurring event on the app calendar with
 `ttKind = habit` and `ttHabit = <id>`. Each occurrence carries `ttCompleted` /
-`ttCompletedAt`.
+`ttCompletedAt`. An occurrence counts towards its series' habit unless it has
+a `ttHabitOccurrence` of its own.
 
 ---
 
@@ -888,7 +890,7 @@ The database's `notes` table stores one metadata row per ID:
 | --- | --- |
 | `id` | Stable identity matching the Markdown front matter, preserved across renames |
 | `color` | `butter` (default), `peach`, `rose`, `lilac`, `lavender`, `sky`, `aqua`, `mint` |
-| `links` | JSON connections: `{kind, id, title, day?}`. `kind` is `event`, `time_block`, `task` or `habit`. The title and day keep the link readable when that day is not loaded. A habit link targets the habit itself, not its events |
+| `links` | JSON connections: `{kind, id, occurrence?, title, day?}`. `kind` is `event`, `time_block`, `task` or `habit`. The title and day keep the link readable when that day is not loaded. A habit link targets the habit itself, not its events. `occurrence` identifies an occurrence of a recurring event as `{series, day, reach?, until?, except?}`: the `calendar/series` names it belongs to (see `ttSplitFrom`) and its original day. `reach` is `following` or `all` when the connection was saved for "current and future" or "all" events; `until` and `except` are days disconnected from it later |
 
 Metadata is shared through database sync; text is shared by syncing the folder.
 Existing files have their color and connections imported automatically when

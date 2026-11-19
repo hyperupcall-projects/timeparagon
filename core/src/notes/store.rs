@@ -158,6 +158,7 @@ mod tests {
 			"Plan",
 			vec![Link {
 				kind: LinkKind::Task,
+				occurrence: None,
 				id: "task".into(),
 				title: "Task".into(),
 				day: None,

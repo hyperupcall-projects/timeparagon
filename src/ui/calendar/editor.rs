@@ -312,7 +312,9 @@ pub fn event_editor<'a>(
 	let unsaved = new_habit || creating || event.id == crate::inbox::NEW_EVENT_ID;
 	if !unsaved {
 		if let Some(target) = crate::notes::target_of(state, event) {
-			information = information.push(super::super::notes::section(state, target, metrics));
+			information = information.push(super::super::notes::staged_section(
+				state, target, draft, metrics,
+			));
 		} else {
 			information = information.push(
 				text("Choose a habit above to keep notes on it.")
@@ -382,9 +384,9 @@ pub fn event_editor<'a>(
 	}
 
 	if !unsaved {
-		let place = crate::travel::place_of(&state.config.travel, event)
-			.and_then(|id| state.config.travel.place(id));
-		if place.is_none() && !event.details.location.is_empty() {
+		let place =
+			crate::travel::shown_place(state, event).and_then(|id| state.config.travel.place(id));
+		if place.is_none() && draft.place.is_none() && !event.details.location.is_empty() {
 			organization = organization.push(detail_line(
 				"Location",
 				event.details.location.clone(),
@@ -1131,8 +1133,15 @@ fn event_habit_picker<'a>(
 				name: habit.name.clone(),
 			}),
 	);
+	let staged = state
+		.calendar
+		.edit_draft
+		.as_ref()
+		.filter(|draft| draft.id == event.id && draft.habit_changed);
 	let current = if new {
 		event.details.habit_id.clone()
+	} else if let Some(draft) = staged {
+		draft.habit_id.clone()
 	} else {
 		state.habits.habit_of(event).map(str::to_owned)
 	};

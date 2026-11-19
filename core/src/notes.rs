@@ -16,6 +16,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
+pub use crate::calendar::identity::{Occurrence, Reach};
+
 /// The name a note without a title is stored and shown under.
 pub const UNTITLED: &str = "Untitled";
 
@@ -103,15 +105,111 @@ impl LinkKind {
 pub struct Link {
 	pub kind: LinkKind,
 	pub id: String,
+	/// Retain the occurrence's lineage and original day across series edits.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub occurrence: Option<Occurrence>,
 	#[serde(default)]
 	pub title: String,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub day: Option<NaiveDate>,
 }
 
+/// Events and time blocks are one kind of thing to connect to: an event can
+/// become a time block and back.
+fn calendar_item(kind: LinkKind) -> bool {
+	matches!(kind, LinkKind::Event | LinkKind::TimeBlock)
+}
+
+fn comparable(a: LinkKind, b: LinkKind) -> bool {
+	a == b || (calendar_item(a) && calendar_item(b))
+}
+
 impl Link {
+	/// How far along its series this connection reaches.
+	pub fn reach(&self) -> Reach {
+		self.occurrence
+			.as_ref()
+			.map_or(Reach::One, |occurrence| occurrence.reach)
+	}
+
+	/// How far along its series a connection reaches, to read after its
+	/// title, with days written in `format`. `None` for one occurrence.
+	pub fn reach_text(&self, format: &str) -> Option<String> {
+		let occurrence = self.occurrence.as_ref()?;
+		let mut text = match occurrence.reach {
+			Reach::One => return None,
+			Reach::Following => format!("from {}", occurrence.day.format(format)),
+			Reach::All => "every occurrence".to_owned(),
+		};
+		if let Some(until) = occurrence.until {
+			text.push_str(&format!(" until {}", until.format(format)));
+		}
+		Some(text)
+	}
+
+	/// Whether this connection takes in `target`: the same item, or an
+	/// occurrence this reaches along its series.
+	pub fn covers(&self, target: &Self) -> bool {
+		match &self.occurrence {
+			Some(own) if own.reach != Reach::One && calendar_item(self.kind) => {
+				calendar_item(target.kind)
+					&& match &target.occurrence {
+						Some(other) => own.covers(other),
+						None => own.matches_id(&target.id, target.day),
+					}
+			}
+			_ => self.same_target(target),
+		}
+	}
+
+	/// Whether this connection takes in everything `other` does.
+	fn subsumes(&self, other: &Self) -> bool {
+		if !comparable(self.kind, other.kind) {
+			return false;
+		}
+		match (&self.occurrence, &other.occurrence) {
+			(Some(own), Some(theirs)) if calendar_item(self.kind) => own.subsumes(theirs),
+			(Some(own), None) if calendar_item(self.kind) => {
+				own.matches_id(&other.id, other.day) || self.id == other.id
+			}
+			_ => other.reach() == Reach::One && self.same_target(other),
+		}
+	}
+
+	/// What is left of this connection once `cut`, an occurrence of
+	/// `target` reaching as the save's scope says, is disconnected.
+	fn without(self, target: &Self, cut: &Occurrence) -> Option<Self> {
+		if !calendar_item(self.kind) || !calendar_item(target.kind) {
+			return (!self.same_target(target)).then_some(self);
+		}
+		match self.occurrence.clone() {
+			Some(own) => own.without(cut).map(|occurrence| Self {
+				occurrence: Some(occurrence),
+				..self
+			}),
+			None => {
+				let gone = self.same_target(target) || cut.matches_id(&self.id, self.day);
+				(!gone).then_some(self)
+			}
+		}
+	}
+
 	pub fn same_target(&self, other: &Self) -> bool {
-		self.kind == other.kind && self.id == other.id
+		if !comparable(self.kind, other.kind) {
+			return false;
+		}
+		if self.id == other.id {
+			return true;
+		}
+		if !calendar_item(self.kind) {
+			return false;
+		}
+		match (&self.occurrence, &other.occurrence) {
+			(Some(a), Some(b)) => a.same(b),
+			(Some(a), None) => a.matches_id(&other.id, other.day),
+			(None, Some(b)) => b.matches_id(&self.id, self.day),
+			(None, None) => false,
+		}
 	}
 }
 
@@ -153,7 +251,7 @@ impl Note {
 	}
 
 	pub fn is_linked(&self, link: &Link) -> bool {
-		self.links.iter().any(|own| own.same_target(link))
+		self.links.iter().any(|own| own.covers(link))
 	}
 
 	/// Nothing the user would miss: an abandoned "New note".
@@ -364,6 +462,62 @@ impl Library {
 		}
 	}
 
+	/// Connects a note to `target` and, when it is an occurrence of a series,
+	/// to as much more of the series as `reach` says.
+	pub fn connect_reaching(&mut self, id: &str, target: Link, reach: Reach) {
+		let Some(occurrence) = target.occurrence.as_ref().filter(|_| reach != Reach::One) else {
+			return self.connect(id, target);
+		};
+		let wide = Link {
+			occurrence: Some(occurrence.reaching(reach)),
+			..target
+		};
+		let Some(note) = self.note(id) else {
+			return;
+		};
+		if note.links.iter().any(|own| own.subsumes(&wide)) {
+			return;
+		}
+		self.edit(id, |note| {
+			note.links.retain(|own| !wide.subsumes(own));
+			note.links.push(wide);
+		});
+	}
+
+	/// Disconnects a note from `target` and, when it is an occurrence of a
+	/// series, from as much more of the series as `reach` says. A connection
+	/// reaching further along the series keeps the rest.
+	pub fn disconnect_reaching(&mut self, id: &str, target: &Link, reach: Reach) {
+		let Some(occurrence) = &target.occurrence else {
+			return self.disconnect(id, target);
+		};
+		let cut = occurrence.reaching(reach);
+		let Some(note) = self.note(id) else {
+			return;
+		};
+		let links: Vec<Link> = note
+			.links
+			.iter()
+			.cloned()
+			.filter_map(|link| link.without(target, &cut))
+			.collect();
+		if links != note.links {
+			self.edit(id, |note| note.links = links);
+		}
+	}
+
+	/// Applies the connections an editor held until it was saved, by note ID:
+	/// `true` to connect, `false` to disconnect.
+	pub fn apply_staged(&mut self, staged: &[(String, bool)], target: &Link, reach: Reach) {
+		for (id, connect) in staged {
+			if *connect {
+				self.connect_reaching(id, target.clone(), reach);
+			} else {
+				self.disconnect_reaching(id, target, reach);
+			}
+		}
+	}
+
 	/// The notes connected to something, newest first.
 	pub fn linked(&self, link: &Link) -> Vec<&Note> {
 		let mut notes: Vec<&Note> = self
@@ -422,6 +576,7 @@ mod tests {
 	fn habit() -> Link {
 		Link {
 			kind: LinkKind::Habit,
+			occurrence: None,
 			id: "h1".into(),
 			title: "Read".into(),
 			day: None,
@@ -471,6 +626,215 @@ mod tests {
 		assert_eq!(library.search("sqlite")[0].id, id);
 		library.disconnect(&id, &habit());
 		assert!(library.linked(&habit()).is_empty());
+	}
+
+	#[test]
+	fn occurrence_notes_survive_retiming_splitting_and_restart() {
+		use crate::calendar::{at_clock, identity::Occurrence};
+		use chrono::Duration;
+		let day = NaiveDate::from_ymd_opt(2026, 11, 10).unwrap();
+		let mut block = crate::calendar::sample_snapshot().events.remove(0);
+		block.calendar_id = "app".into();
+		block.all_day = false;
+		block.start = at_clock(day, 9, 0);
+		block.end = at_clock(day, 10, 0);
+		block.details = Default::default();
+		block.details.recurring_event_id = Some("series".into());
+		block.details.original_start = Some(block.start);
+		block.id = format!("series_{}", block.start.to_utc().format("%Y%m%dT%H%M%SZ"));
+		let target = |block: &crate::calendar::Event| Link {
+			kind: LinkKind::TimeBlock,
+			id: block.id.clone(),
+			occurrence: Occurrence::of(block),
+			title: block.title.clone(),
+			day: Some(block.start.date_naive()),
+		};
+		// Notes saved before occurrence identity was added must recover too.
+		let mut legacy = target(&block);
+		legacy.occurrence = None;
+		let mut library = Library::default();
+		let id = library.create("Plan", vec![legacy]);
+		library.edit(&id, |note| {
+			note.body = "Keep this attached".into();
+			note.color = Pastel::Mint;
+		});
+		let directory = tempfile::tempdir().unwrap();
+		save(&mut library, directory.path());
+		let mut library = Library::read(directory.path()).unwrap();
+
+		for series in ["series", "new-series"] {
+			block.start = at_clock(day, 11, 0);
+			block.end = at_clock(day, 12, 30);
+			block.details.original_start = Some(block.start);
+			block.details.recurring_event_id = Some(series.into());
+			block.details.split_from = vec!["app/series".into()];
+			block.id = format!("{series}_{}", block.start.to_utc().format("%Y%m%dT%H%M%SZ"));
+			let link = target(&block);
+			assert_eq!(library.linked(&link).len(), 1, "{series}");
+			library.connect(&id, link.clone());
+			assert_eq!(library.note(&id).unwrap().links.len(), 1);
+			// Moving just this occurrence to another day keeps its original slot.
+			block.start += Duration::days(2);
+			block.end += Duration::days(2);
+			assert_eq!(library.linked(&target(&block)).len(), 1);
+			// The following occurrence must never inherit this one's note.
+			let mut next = block.clone();
+			next.details.original_start = Some(at_clock(day.succ_opt().unwrap(), 11, 0));
+			next.id = format!(
+				"{series}_{}",
+				next.details
+					.original_start
+					.unwrap()
+					.to_utc()
+					.format("%Y%m%dT%H%M%SZ")
+			);
+			assert!(library.linked(&target(&next)).is_empty());
+		}
+		let note = library.note(&id).unwrap();
+		assert_eq!(note.body, "Keep this attached");
+		assert_eq!(note.color, Pastel::Mint);
+		library.disconnect(&id, &target(&block));
+		assert!(library.note(&id).unwrap().links.is_empty());
+	}
+
+	#[test]
+	fn event_notes_survive_a_change_between_event_and_time_block() {
+		let mut link = habit();
+		link.kind = LinkKind::TimeBlock;
+		let mut library = Library::default();
+		let id = library.create("Plan", vec![link.clone()]);
+		link.kind = LinkKind::Event;
+		assert_eq!(library.linked(&link)[0].id, id);
+		link.kind = LinkKind::Task;
+		assert!(library.linked(&link).is_empty());
+	}
+
+	/// The connection target of a block series' occurrence on day `n`.
+	fn block_on(series: &[&str], n: u32) -> Link {
+		let day = NaiveDate::from_ymd_opt(2026, 11, n).unwrap();
+		Link {
+			kind: LinkKind::TimeBlock,
+			id: format!("{}_202611{n:02}T090000Z", series.last().unwrap()),
+			occurrence: Some(Occurrence {
+				series: series.iter().map(|s| format!("app/{s}")).collect(),
+				day,
+				reach: Reach::One,
+				until: None,
+				except: Vec::new(),
+			}),
+			title: "Deep work".into(),
+			day: Some(day),
+		}
+	}
+
+	fn shown_on(library: &Library, days: &[u32]) -> Vec<u32> {
+		days.iter()
+			.copied()
+			.filter(|n| !library.linked(&block_on(&["s"], *n)).is_empty())
+			.collect()
+	}
+
+	#[test]
+	fn a_note_follows_the_scope_it_was_saved_with() {
+		let days = [3, 10, 17, 24];
+		for (reach, expected) in [
+			(Reach::One, vec![10]),
+			(Reach::Following, vec![10, 17, 24]),
+			(Reach::All, vec![3, 10, 17, 24]),
+		] {
+			let mut library = Library::default();
+			let id = library.create("Plan", Vec::new());
+			library.apply_staged(&[(id.clone(), true)], &block_on(&["s"], 10), reach);
+			assert_eq!(shown_on(&library, &days), expected, "{reach:?}");
+			// A series split off later by "this and following" keeps it.
+			if reach != Reach::One {
+				assert!(!library.linked(&block_on(&["s", "t"], 30)).is_empty());
+			}
+			assert!(library.linked(&block_on(&["other"], 10)).is_empty());
+		}
+	}
+
+	#[test]
+	fn a_connection_says_how_far_along_its_series_it_reaches() {
+		let mut library = Library::default();
+		let id = library.create("Plan", Vec::new());
+		library.connect_reaching(&id, block_on(&["s"], 10), Reach::Following);
+		library.disconnect_reaching(&id, &block_on(&["s"], 24), Reach::Following);
+		let link = &library.note(&id).unwrap().links[0];
+		assert_eq!(
+			link.reach_text("%b %-d").as_deref(),
+			Some("from Nov 10 until Nov 23")
+		);
+		assert_eq!(block_on(&["s"], 10).reach_text("%b %-d"), None);
+		library.connect_reaching(&id, block_on(&["s"], 10), Reach::All);
+		let link = &library.note(&id).unwrap().links[0];
+		assert_eq!(
+			link.reach_text("%b %-d").as_deref(),
+			Some("every occurrence")
+		);
+	}
+
+	#[test]
+	fn a_wider_connection_replaces_what_it_takes_in() {
+		let mut library = Library::default();
+		// A new note starts on its one occurrence; saving widens it.
+		let id = library.create("Plan", vec![block_on(&["s"], 10)]);
+		library.connect_reaching(&id, block_on(&["s"], 17), Reach::Following);
+		library.connect_reaching(&id, block_on(&["s"], 10), Reach::Following);
+		assert_eq!(library.note(&id).unwrap().links.len(), 1);
+		library.connect_reaching(&id, block_on(&["s"], 24), Reach::Following);
+		library.connect_reaching(&id, block_on(&["s"], 24), Reach::One);
+		assert_eq!(library.note(&id).unwrap().links.len(), 1);
+		library.connect_reaching(&id, block_on(&["s"], 3), Reach::All);
+		let links = &library.note(&id).unwrap().links;
+		assert_eq!(links.len(), 1);
+		assert_eq!(links[0].reach(), Reach::All);
+	}
+
+	#[test]
+	fn disconnecting_with_a_scope_keeps_the_rest_of_the_series() {
+		let days = [3, 10, 17, 24, 30];
+		let mut library = Library::default();
+		let id = library.create("Plan", Vec::new());
+		library.connect_reaching(&id, block_on(&["s"], 3), Reach::All);
+		library.disconnect_reaching(&id, &block_on(&["s"], 17), Reach::One);
+		assert_eq!(shown_on(&library, &days), [3, 10, 24, 30]);
+		library.disconnect_reaching(&id, &block_on(&["s"], 24), Reach::Following);
+		assert_eq!(shown_on(&library, &days), [3, 10]);
+		// Connecting the one occurrence again puts back just that one.
+		library.connect_reaching(&id, block_on(&["s"], 17), Reach::One);
+		assert_eq!(shown_on(&library, &days), [3, 10, 17]);
+		library.disconnect_reaching(&id, &block_on(&["s"], 10), Reach::All);
+		assert_eq!(shown_on(&library, &days), Vec::<u32>::new());
+		assert!(library.note(&id).unwrap().links.is_empty());
+		// Plain links, and links to other things, are left as they were.
+		library.connect(&id, habit());
+		library.connect_reaching(&id, block_on(&["other"], 10), Reach::All);
+		library.disconnect_reaching(&id, &block_on(&["s"], 10), Reach::All);
+		assert_eq!(library.note(&id).unwrap().links.len(), 2);
+	}
+
+	#[test]
+	fn the_last_staged_choice_for_a_note_wins() {
+		let mut draft = crate::calendar::EditDraft::from_event(
+			&crate::calendar::sample_snapshot().events.remove(0),
+		);
+		draft.stage_note("a", true);
+		draft.stage_note("b", true);
+		draft.stage_note("a", false);
+		assert_eq!(draft.staged_note("a"), Some(false));
+		assert_eq!(draft.staged_note("b"), Some(true));
+		assert_eq!(draft.staged_note("c"), None);
+		let mut library = Library::default();
+		let a = library.create("A", vec![block_on(&["s"], 10)]);
+		let b = library.create("B", Vec::new());
+		library.apply_staged(
+			&[(a.clone(), false), (b.clone(), true)],
+			&block_on(&["s"], 17),
+			Reach::Following,
+		);
+		assert_eq!(library.note(&a).unwrap().links.len(), 1, "before the cut");
+		assert!(library.linked(&block_on(&["s"], 17))[0].id == b);
 	}
 
 	#[test]

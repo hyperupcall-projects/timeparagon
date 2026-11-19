@@ -273,14 +273,21 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
 			let Some(original) = state.calendar.event(&draft.id).cloned() else {
 				return Task::none();
 			};
+			if let Err(error) = draft.deadline() {
+				state.calendar.error = Some(error);
+				return Task::none();
+			}
 			state.calendar.error = None;
+			let local = save_local(state, &original, &draft, scope);
 			if let Some(draft) = &mut state.calendar.edit_draft {
 				draft.saving = true;
 			}
-			blocking::run(move || {
+			// A save that only connects notes leaves Google alone.
+			let write = blocking::run(move || {
 				calendar::save_event_scope(&original, &draft, scope, &description, None)
 			})
-			.map(|v0| Message::EventEdit(EventEditMessage::EventEditSaved(v0)))
+			.map(|v0| Message::EventEdit(EventEditMessage::EventEditSaved(v0)));
+			Task::batch([local, write])
 		}
 		EventEditMessage::EventEditCreated(Ok(event)) => {
 			let new = state
@@ -320,6 +327,10 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
 				if draft.saving {
 					moved = Some((draft.id.clone(), draft.calendar_id.clone()));
 					draft.meeting.mark_saved();
+					// Saved: what the event now has is shown from the event.
+					draft.place = None;
+					draft.habit_changed = false;
+					draft.habit_id = None;
 				}
 				draft.editing_title = false;
 				draft.saving = false;
@@ -351,6 +362,41 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
 			Task::none()
 		}
 	}
+}
+
+/// What an event's editor holds besides the event's own fields, applied
+/// with the save's scope: the notes connected there, and at once, before
+/// Google's copy comes back, the place and habit it was given.
+fn save_local(
+	state: &mut State,
+	original: &calendar::Event,
+	draft: &calendar::EditDraft,
+	scope: calendar::SaveScope,
+) -> Task<Message> {
+	let mut tasks = Vec::new();
+	if let Some(target) = crate::notes::target_of(state, original) {
+		tasks.push(crate::notes::apply_staged(
+			state,
+			&draft.notes,
+			&target,
+			scope.into(),
+		));
+	}
+	if let Some(live) = &mut state.calendar.edit_draft {
+		live.notes.clear();
+	}
+	if let Some(pick) = &draft.place {
+		tasks.push(crate::travel::remember_event_place(
+			state,
+			&original.id,
+			pick.id,
+			&pick.location,
+		));
+	}
+	if draft.habit_changed {
+		crate::habits::habit_saved(state, original, draft.habit_id.clone(), scope);
+	}
+	Task::batch(tasks)
 }
 
 /// Zoom for Google Workspace only runs inside Google Calendar, so the user is

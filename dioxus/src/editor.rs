@@ -851,6 +851,7 @@ fn EventEditor(
 	};
 
 	let save_context = context.clone();
+	let notes_store = try_use_context::<crate::notes::NotesStore>();
 	let save = use_callback(move |scope: SaveScope| {
 		if busy() {
 			return;
@@ -865,6 +866,9 @@ fn EventEditor(
 			current.title.clone_from(&source.title);
 		}
 		let context = save_context.clone();
+		let staged = current.notes.clone();
+		let placed = current.place.is_some();
+		let target = crate::notes::target_of(&source, &context.settings);
 		busy.set(true);
 		error.set(None);
 		spawn(async move {
@@ -872,6 +876,17 @@ fn EventEditor(
 			busy.set(false);
 			match result {
 				Ok(()) => {
+					// The notes connected here go as far as the save's scope.
+					if let (Some(store), Some(target)) = (notes_store, target)
+						&& !staged.is_empty()
+					{
+						let mut library = store.library;
+						library.write().apply_staged(&staged, &target, scope.into());
+						store.touched();
+					}
+					if placed {
+						on_config.call(day::load_config());
+					}
 					on_saved.call(());
 					on_close.call(());
 				}
@@ -915,35 +930,18 @@ fn EventEditor(
 		});
 	});
 
+	// The place waits for Save, like the other fields, and goes as far along
+	// a series as the save's scope.
 	let set_place = use_callback(move |place: Option<Place>| {
 		if busy() {
 			return;
 		}
-		let source = original();
-		busy.set(true);
-		error.set(None);
-		spawn(async move {
-			let chosen = place.clone();
-			let written = source.clone();
-			let result = worker(move || day::save_event_place(&written, chosen.as_ref())).await;
-			busy.set(false);
-			match result {
-				Ok(()) => {
-					original.write().details.location = place
-						.as_ref()
-						.map(places::location_text)
-						.unwrap_or_default();
-					on_config.call(day::load_config());
-					on_saved.call(());
-					if closing() && !completing() {
-						on_close.call(());
-					}
-				}
-				Err(message) => {
-					closing.set(false);
-					error.set(Some(message));
-				}
-			}
+		draft.write().place = Some(calendar::PlacePick {
+			id: place.as_ref().map(|place| place.id),
+			location: place
+				.as_ref()
+				.map(places::location_text)
+				.unwrap_or_default(),
 		});
 	});
 
@@ -1003,11 +1001,14 @@ fn EventEditor(
 	let assigned = tb::is_assigned(&source_event);
 	let source = day::source_label(&source_event, &context);
 	let color = css_color(source_event.display_color(&context.settings, &context.calendars));
-	let place = places::place_of(
-		&context.places.places,
-		&context.places.event_places,
-		&source_event,
-	)
+	let place = match &values.place {
+		Some(pick) => pick.id,
+		None => places::place_of(
+			&context.places.places,
+			&context.places.event_places,
+			&source_event,
+		),
+	}
 	.and_then(|id| context.places.place(id))
 	.cloned();
 	let title = source_event.title.clone();
@@ -1017,7 +1018,10 @@ fn EventEditor(
 	let anchor = values.start.date_naive();
 	let organizer = source_event.details.organizer.clone();
 	let attendees = source_event.details.attendees.clone();
-	let location_text = source_event.details.location.clone();
+	let location_text = match &values.place {
+		Some(pick) => pick.location.clone(),
+		None => source_event.details.location.clone(),
+	};
 	let completed = source_event.completed;
 	// A habit event that is not on Google yet has nothing to delete, complete
 	// or locate until it is created.
@@ -1275,6 +1279,7 @@ fn EventEditor(
 					crate::notes::LinkedNotes {
 						target,
 						former: crate::notes::former_target_of(&source_event, &context.settings),
+						on_created: move |id: String| draft.write().stage_note(&id, true),
 					}
 				}
 				if habit && !new {

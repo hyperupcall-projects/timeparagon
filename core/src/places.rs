@@ -766,6 +766,38 @@ mod tests {
 		place_of(places, &BTreeMap::new(), &event)
 	}
 
+	#[test]
+	fn an_occurrences_saved_place_survives_retiming_and_splitting() {
+		let places = [place(1, "Office", ""), place(2, "Home", "")];
+		let mut event = crate::calendar::sample_snapshot().events.remove(0);
+		event.calendar_id = "app".into();
+		event.all_day = false;
+		event.details = Default::default();
+		event.details.location = location_text(&places[0]);
+		event.details.recurring_event_id = Some("series".into());
+		let day = event.start.date_naive();
+		event.start = crate::calendar::at_clock(day, 9, 0);
+		let old_id = format!("series_{}", event.start.to_utc().format("%Y%m%dT%H%M%SZ"));
+		let mut assigned = BTreeMap::from([(old_id, 1)]);
+		event.start += chrono::Duration::hours(1);
+		event.details.original_start = Some(event.start);
+		event.id = format!("series_{}", event.start.to_utc().format("%Y%m%dT%H%M%SZ"));
+		assert_eq!(place_of(&places, &assigned, &event), Some(1));
+		event.id = format!("split_{}", event.start.to_utc().format("%Y%m%dT%H%M%SZ"));
+		event.details.recurring_event_id = Some("split".into());
+		event.details.split_from = vec!["app/series".into()];
+		assert_eq!(place_of(&places, &assigned, &event), Some(1));
+		assigned.insert(event.id.clone(), 2);
+		assert_eq!(
+			place_of(&places, &assigned, &event),
+			Some(2),
+			"an explicit newer choice wins"
+		);
+		assigned.remove(&event.id);
+		event.details.location.clear();
+		assert_eq!(place_of(&places, &assigned, &event), None);
+	}
+
 	/// What is written to an event's location has to read back as that place,
 	/// or an event whose `event_places` row is missing silently has no place
 	/// and the trips around it never change.

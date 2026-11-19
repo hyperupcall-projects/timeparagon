@@ -386,7 +386,9 @@ fn link_label(state: &State, link: &Link) -> String {
 		link.kind.label(),
 		crate::notes::current_title(state, link)
 	);
-	if let Some(day) = link.day {
+	if let Some(reach) = link.reach_text("%b %-d") {
+		label.push_str(&format!(" · {reach}"));
+	} else if let Some(day) = link.day {
 		label.push_str(&day.format(" · %b %-d").to_string());
 	}
 	label
@@ -525,12 +527,43 @@ impl std::fmt::Display for NoteChoice {
 /// The notes connected to something, for its details: an event's, a time
 /// block's, a task's or a habit's.
 pub fn section<'a>(state: &'a State, target: Link, metrics: &Metrics) -> Element<'a, Message> {
+	notes_section(state, target, None, metrics)
+}
+
+/// The Notes section of an event's editor. Connecting and disconnecting
+/// notes there wait for Save, like the editor's other fields, and its scope
+/// says how much of a series they apply to.
+pub fn staged_section<'a>(
+	state: &'a State,
+	target: Link,
+	draft: &'a timeparagon_core::calendar::EditDraft,
+	metrics: &Metrics,
+) -> Element<'a, Message> {
+	notes_section(state, target, Some(draft), metrics)
+}
+
+fn notes_section<'a>(
+	state: &'a State,
+	target: Link,
+	draft: Option<&'a timeparagon_core::calendar::EditDraft>,
+	metrics: &Metrics,
+) -> Element<'a, Message> {
 	let size = metrics.label();
 	let library = &state.notes.library;
+	let shown = |note: &Note| {
+		draft
+			.and_then(|draft| draft.staged_note(&note.id))
+			.unwrap_or_else(|| note.is_linked(&target))
+	};
 	let mut list = column![crate::ui::controls::field_label("Notes", size)]
 		.spacing(4.0)
 		.width(Fill);
-	for note in library.linked(&target) {
+	for note in library.search("").into_iter().filter(|note| shown(note)) {
+		let remove = if draft.is_some() {
+			Action::Stage(note.id.clone(), false)
+		} else {
+			Action::Disconnect(note.id.clone(), target.clone())
+		};
 		list = list.push(
 			container(
 				row![
@@ -541,7 +574,7 @@ pub fn section<'a>(state: &'a State, target: Link, metrics: &Metrics) -> Element
 						.style(on_note),
 					button(text("×").size(size))
 						.padding([2.0, 6.0])
-						.on_press(msg(Action::Disconnect(note.id.clone(), target.clone())))
+						.on_press(msg(remove))
 						.style(on_note),
 				]
 				.align_y(Center),
@@ -552,25 +585,36 @@ pub fn section<'a>(state: &'a State, target: Link, metrics: &Metrics) -> Element
 	}
 	let new_note = button(text("New note").size(size).center().width(Fill))
 		.width(Fill)
-		.on_press(msg(Action::NewFor(target.clone())))
+		.on_press(msg(if draft.is_some() {
+			Action::NewFromEditor(target.clone())
+		} else {
+			Action::NewFor(target.clone())
+		}))
 		.style(crate::ui::controls::secondary);
 	list = list.push(new_note);
 
 	let others: Vec<NoteChoice> = library
 		.search("")
 		.into_iter()
-		.filter(|note| !note.is_linked(&target))
+		.filter(|note| !shown(note))
 		.map(|note| NoteChoice {
 			id: note.id.clone(),
 			title: note.display_title().to_owned(),
 		})
 		.collect();
 	if !others.is_empty() {
+		let staged = draft.is_some();
 		list = list.push(
 			crate::ui::controls::pick_list(
 				others,
 				None::<NoteChoice>,
-				move |choice: NoteChoice| msg(Action::Connect(choice.id, target.clone())),
+				move |choice: NoteChoice| {
+					msg(if staged {
+						Action::Stage(choice.id, true)
+					} else {
+						Action::Connect(choice.id, target.clone())
+					})
+				},
 			)
 			.placeholder("Connect a note…")
 			.text_size(size)
@@ -684,6 +728,7 @@ mod tests {
 		let (mut state, id) = state_with_note();
 		let target = Link {
 			kind: LinkKind::Task,
+			occurrence: None,
 			id: "task:1".into(),
 			title: "Task".into(),
 			day: None,
@@ -708,5 +753,40 @@ mod tests {
 				|message| matches!(&message, Message::Notes(Action::Open(open)) if *open == id)
 			)
 		);
+	}
+
+	/// In an event's editor, connecting and disconnecting wait for Save.
+	#[test]
+	fn an_editor_shows_and_stages_its_notes_until_saved() {
+		let (state, id) = state_with_note();
+		let mut event = crate::calendar::sample_snapshot().events.remove(0);
+		event.id = "e".into();
+		let target = crate::notes::target_of(&state, &event).unwrap();
+		let mut draft = timeparagon_core::calendar::EditDraft::from_event(&event);
+		draft.stage_note(&id, true);
+		let metrics = metrics(300.0);
+		let mut ui = simulator(
+			staged_section(&state, target.clone(), &draft, &metrics),
+			Size::new(300.0, 300.0),
+		);
+		assert!(ui.find("Reading list").is_ok(), "shown before it is saved");
+		assert!(state.notes.library.linked(&target).is_empty());
+		ui.click("×").unwrap();
+		ui.click("New note").unwrap();
+		let messages: Vec<_> = ui.into_messages().collect();
+		assert!(messages.iter().any(|message| matches!(
+			message,
+			Message::Notes(Action::Stage(note, false)) if *note == id
+		)));
+		assert!(messages.iter().any(|message| matches!(
+			message,
+			Message::Notes(Action::NewFromEditor(link)) if link.same_target(&target)
+		)));
+		draft.stage_note(&id, false);
+		let mut ui = simulator(
+			staged_section(&state, target, &draft, &metrics),
+			Size::new(300.0, 300.0),
+		);
+		assert!(ui.find("Reading list").is_err(), "hidden once disconnected");
 	}
 }

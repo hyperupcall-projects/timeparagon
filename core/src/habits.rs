@@ -27,6 +27,12 @@ use serde::{Deserialize, Serialize};
 /// The Google extended property naming the habit an event belongs to.
 pub const LINK_PROPERTY: &str = "ttHabit";
 
+/// The habit one occurrence counts towards instead of its series', set by
+/// saving the habit for "this event" only. Empty is no habit. It is separate
+/// from [`LINK_PROPERTY`] because a completed occurrence keeps a stale copy
+/// of that, so only this one can be taken as the occurrence's own choice.
+pub const OCCURRENCE_LINK_PROPERTY: &str = "ttHabitOccurrence";
+
 /// What counts as success.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

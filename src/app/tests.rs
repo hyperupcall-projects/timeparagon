@@ -3098,3 +3098,206 @@ fn moving_a_day_puts_the_calendars_tab_away_but_keeps_the_filter_open() {
 	);
 	assert_eq!(state.popup, None);
 }
+
+/// Occurrences of a weekly series on the app calendar, a week apart.
+fn weekly(series: &str, weeks: i64, habit: bool) -> Vec<calendar::Event> {
+	let day = chrono::NaiveDate::from_ymd_opt(2026, 11, 10).unwrap();
+	(0..weeks)
+		.map(|week| {
+			let start = calendar::at_clock(day, 9, 0) + chrono::Duration::weeks(week);
+			calendar::Event {
+				id: format!("{series}_{}", start.to_utc().format("%Y%m%dT%H%M%SZ")),
+				calendar_id: "app".into(),
+				title: "Deep work".into(),
+				start,
+				end: start + chrono::Duration::hours(1),
+				all_day: false,
+				color: iced::Color::BLACK,
+				completed: false,
+				details: calendar::Details {
+					recurring_event_id: Some(series.into()),
+					original_start: Some(start),
+					habit,
+					habit_id: habit.then(|| "run".to_owned()),
+					..Default::default()
+				},
+			}
+		})
+		.collect()
+}
+
+fn save_with(state: &mut State, scope: calendar::SaveScope) {
+	let _ = update(
+		state,
+		Message::EventEdit(match scope {
+			calendar::SaveScope::Current => EventEditMessage::EventEditSaveRequested,
+			scope => EventEditMessage::EventEditSaveScoped(scope),
+		}),
+	);
+}
+
+/// Notes and a place picked in an event's editor wait for Save, then go as
+/// far along the series as Save's scope, like the editor's other fields.
+#[test]
+fn an_editors_notes_and_place_follow_the_save_scope() {
+	use crate::travel::{Action as Travel, PickTarget};
+	for scope in [
+		calendar::SaveScope::Current,
+		calendar::SaveScope::CurrentAndFuture,
+		calendar::SaveScope::All,
+	] {
+		let mut state = State::blank();
+		state.config.calendar.app_calendar = Some("app".into());
+		let occurrences = weekly("series", 3, false);
+		state.calendar.events = occurrences.clone();
+		let gym = state
+			.config
+			.travel
+			.add_place("Gym", "1 Main St", "g-gym", 1.0, 2.0);
+		let note = state.notes.library.create("Plan", Vec::new());
+		let middle = occurrences[1].id.clone();
+		let _ = update(
+			&mut state,
+			Message::Event(EventMessage::EventOpened(middle.clone())),
+		);
+		let _ = update(
+			&mut state,
+			Message::Notes(crate::notes::Action::Stage(note.clone(), true)),
+		);
+		let _ = update(
+			&mut state,
+			Message::Travel(Travel::OpenPicker(PickTarget::Event(middle.clone()))),
+		);
+		let _ = update(&mut state, Message::Travel(Travel::ChooseSaved(gym)));
+		let noted = |state: &State, event: &calendar::Event| {
+			let target = crate::notes::target_of(state, event).unwrap();
+			!state.notes.library.linked(&target).is_empty()
+		};
+		// Nothing is applied before Save.
+		assert!(!noted(&state, &occurrences[1]));
+		assert!(state.config.travel.event_places.is_empty());
+		assert_eq!(state.calendar.event(&middle).unwrap().details.location, "");
+		let draft = state.calendar.edit_draft.as_ref().unwrap();
+		assert_eq!(draft.place.as_ref().unwrap().id, Some(gym));
+		assert_eq!(
+			crate::travel::shown_place(&state, &occurrences[1]),
+			Some(gym)
+		);
+
+		save_with(&mut state, scope);
+		assert_eq!(
+			noted(&state, &occurrences[0]),
+			scope == calendar::SaveScope::All,
+			"{scope:?}"
+		);
+		assert!(noted(&state, &occurrences[1]), "{scope:?}");
+		assert_eq!(
+			noted(&state, &occurrences[2]),
+			scope != calendar::SaveScope::Current,
+			"{scope:?}"
+		);
+		assert_eq!(state.config.travel.event_places.get(&middle), Some(&gym));
+		assert_eq!(
+			state.calendar.event(&middle).unwrap().details.location,
+			"Gym, 1 Main St"
+		);
+		assert!(state.calendar.edit_draft.as_ref().unwrap().notes.is_empty());
+	}
+}
+
+/// "New note" in an editor is on the occurrence at once, and Save widens it.
+#[test]
+fn a_new_note_from_an_editor_is_widened_by_a_scoped_save() {
+	let mut state = State::blank();
+	state.config.calendar.app_calendar = Some("app".into());
+	let occurrences = weekly("series", 2, false);
+	state.calendar.events = occurrences.clone();
+	let _ = update(
+		&mut state,
+		Message::Event(EventMessage::EventOpened(occurrences[0].id.clone())),
+	);
+	let target = crate::notes::target_of(&state, &occurrences[0]).unwrap();
+	let _ = update(
+		&mut state,
+		Message::Notes(crate::notes::Action::NewFromEditor(target)),
+	);
+	let later = crate::notes::target_of(&state, &occurrences[1]).unwrap();
+	assert_eq!(state.notes.library.linked(&later).len(), 0);
+	let id = state.notes.open.clone().unwrap();
+	// Writing the note on the Notes screen and coming back keeps the editor.
+	for screen in [Screen::Notes, Screen::Calendar] {
+		let _ = update(
+			&mut state,
+			Message::Navigation(NavigationMessage::ScreenSelected(screen)),
+		);
+	}
+	assert_eq!(
+		state.calendar.edit_draft.as_ref().unwrap().staged_note(&id),
+		Some(true)
+	);
+	save_with(&mut state, calendar::SaveScope::CurrentAndFuture);
+	assert_eq!(state.notes.library.linked(&later).len(), 1);
+	assert_eq!(state.notes.library.note(&id).unwrap().links.len(), 1);
+}
+
+/// A habit picked in an existing habit event's editor waits for Save: "this
+/// event" gives the one occurrence a habit of its own, "all events" changes
+/// the series.
+#[test]
+fn an_editors_habit_follows_the_save_scope() {
+	for scope in [calendar::SaveScope::Current, calendar::SaveScope::All] {
+		let mut state = State::blank();
+		state.habits.library.habits = vec![
+			timeparagon_core::habits::Habit::new("run", "Run"),
+			timeparagon_core::habits::Habit::new("read", "Read"),
+		];
+		let occurrences = weekly("habit", 2, true);
+		state.habits.series = vec![crate::habits::Series {
+			id: "habit".into(),
+			calendar_id: "app".into(),
+			title: "Run".into(),
+			notes: String::new(),
+			start: occurrences[0].start,
+			end: occurrences[0].end,
+			recurrence: Default::default(),
+			color_id: None,
+			habit_id: Some("run".into()),
+		}];
+		state.calendar.events = occurrences.clone();
+		let first = occurrences[0].id.clone();
+		let _ = update(
+			&mut state,
+			Message::Event(EventMessage::EventOpened(first.clone())),
+		);
+		// A habit event's draft waits for its series to load.
+		state.calendar.edit_draft.as_mut().unwrap().loading = false;
+		let _ = update(
+			&mut state,
+			Message::Habits(crate::habits::Action::EventHabitChosen(Some("read".into()))),
+		);
+		let habit = |state: &State, id: &str| {
+			state
+				.habits
+				.habit_of(state.calendar.event(id).unwrap())
+				.map(str::to_owned)
+		};
+		assert_eq!(
+			habit(&state, &first).as_deref(),
+			Some("run"),
+			"not before Save"
+		);
+		assert!(state.calendar.edit_draft.as_ref().unwrap().habit_changed);
+		save_with(&mut state, scope);
+		assert_eq!(habit(&state, &first).as_deref(), Some("read"), "{scope:?}");
+		let other = if scope == calendar::SaveScope::All {
+			"read"
+		} else {
+			"run"
+		};
+		assert_eq!(
+			habit(&state, &occurrences[1].id).as_deref(),
+			Some(other),
+			"{scope:?}"
+		);
+	}
+}

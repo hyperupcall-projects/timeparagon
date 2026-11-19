@@ -1119,6 +1119,7 @@ fn habit_page(
 	let streaks = computed.best_streaks(10);
 	let target = timeparagon_core::notes::Link {
 		kind: timeparagon_core::notes::LinkKind::Habit,
+		occurrence: None,
 		id: habit.id.clone(),
 		title: habit.name.clone(),
 		day: None,

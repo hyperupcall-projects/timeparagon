@@ -458,27 +458,53 @@ fn assign(state: &mut State, target: &PickTarget, place: Option<u64>) -> Task<Me
 		PickTarget::Task(id) => {
 			crate::timeblocking::update(state, tb::Action::Location(id.clone(), place))
 		}
-		PickTarget::Event(id) => set_event_place(state, id, place),
+		PickTarget::Event(id) => {
+			let text = place
+				.and_then(|id| state.config.travel.place(id))
+				.map(location_text)
+				.unwrap_or_default();
+			// In the event's editor the place waits for Save, like the
+			// editor's other fields, and goes as far as the save's scope.
+			if let Some(draft) = state
+				.calendar
+				.edit_draft
+				.as_mut()
+				.filter(|draft| draft.id == *id)
+			{
+				draft.place = Some(crate::calendar::PlacePick {
+					id: place,
+					location: text,
+				});
+				return Task::none();
+			}
+			set_event_place(state, id, place, text)
+		}
 	}
 }
 
-/// Gives a calendar event a place, or takes it away. The choice is kept here,
-/// so trips are known at once, and the place's name and address are written
-/// to the event's location on Google so it reads the same there.
-fn set_event_place(state: &mut State, id: &str, place: Option<u64>) -> Task<Message> {
-	let Some(calendar_id) = state
+/// The place an event's editor shows: the one picked there and not saved
+/// yet, or else the event's own.
+pub fn shown_place(state: &State, event: &Event) -> Option<u64> {
+	match state
 		.calendar
-		.event(id)
-		.map(|event| event.calendar_id.clone())
-	else {
-		return Task::none();
-	};
+		.edit_draft
+		.as_ref()
+		.filter(|draft| draft.id == event.id)
+		.and_then(|draft| draft.place.as_ref())
+	{
+		Some(pick) => pick.id,
+		None => place_of(&state.config.travel, event),
+	}
+}
 
-	let text = place
-		.and_then(|id| state.config.travel.place(id))
-		.map(location_text)
-		.unwrap_or_default();
-
+/// Keeps an event's place here, so trips are known at once, and shows its
+/// location on the event until Google's copy comes back.
+pub fn remember_event_place(
+	state: &mut State,
+	id: &str,
+	place: Option<u64>,
+	text: &str,
+) -> Task<Message> {
 	match place {
 		Some(place) => {
 			state
@@ -491,8 +517,22 @@ fn set_event_place(state: &mut State, id: &str, place: Option<u64>) -> Task<Mess
 			state.config.travel.event_places.remove(id);
 		}
 	}
-	state.calendar.set_location(id, &text);
-	let save = queue_save(state);
+	state.calendar.set_location(id, text);
+	queue_save(state)
+}
+
+/// Gives a calendar event a place, or takes it away. The choice is kept here,
+/// so trips are known at once, and the place's name and address are written
+/// to the event's location on Google so it reads the same there.
+fn set_event_place(state: &mut State, id: &str, place: Option<u64>, text: String) -> Task<Message> {
+	let Some(calendar_id) = state
+		.calendar
+		.event(id)
+		.map(|event| event.calendar_id.clone())
+	else {
+		return Task::none();
+	};
+	let save = remember_event_place(state, id, place, &text);
 
 	let id = id.to_owned();
 	let write =

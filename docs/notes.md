@@ -65,8 +65,20 @@ Notes connect to events, time blocks, tasks and habits.
   **More → Habits**, not a calendar event, so it shows on every event series
   connected to that habit.
 - A habit event with no habit chosen cannot have notes.
-- A note on a recurring event or time block attaches to the one occurrence it
-  was connected from, not the whole series.
+- In an event's or time block's details pane, connecting and disconnecting
+  notes wait for **Save**, like its other fields. On a recurring one, **Save
+  current event** applies to that occurrence, **Save current and future
+  events** to it and every later one, and **Save all events** to every
+  occurrence. Disconnecting one occurrence, or it and later ones, leaves the
+  rest of the series connected.
+- **New note** puts the note on its occurrence straight away, so it is never
+  left unconnected. Saving with a wider scope extends it.
+- A save that only connects or disconnects notes writes nothing to Google
+  Calendar, so it also works on calendars that can't be edited.
+- Connecting from inside a note connects the one occurrence found.
+- Retiming a series or editing "this and following" keeps its notes on the
+  same occurrences. Existing connections made with earlier versions are
+  recognized too.
 - Searching from inside a note finds all unarchived habits, but only the events,
   time blocks and tasks already loaded within 30 days of the day in view. For
   anything else, connect from its details pane.

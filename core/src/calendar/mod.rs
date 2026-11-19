@@ -10,6 +10,7 @@ mod event_color;
 pub mod event_options;
 pub mod first_day;
 pub mod google;
+pub mod identity;
 pub mod layout;
 pub mod meeting;
 pub mod oauth;
@@ -195,9 +196,30 @@ impl Event {
 				.metadata
 				.habit_id
 				.as_deref()
+		} else if let Some(own) = self.occurrence_habit() {
+			own
 		} else {
 			self.details.habit_id.as_deref()
 		}
+	}
+
+	/// One occurrence of a series, rather than a single event or the series
+	/// itself.
+	pub fn is_occurrence(&self) -> bool {
+		self.details
+			.recurring_event_id
+			.as_ref()
+			.is_some_and(|series| *series != self.id)
+	}
+
+	/// The habit chosen for this one occurrence of a series rather than the
+	/// whole series: `Some(None)` when it was chosen to count towards none.
+	pub fn occurrence_habit(&self) -> Option<Option<&str>> {
+		if !self.is_occurrence() {
+			return None;
+		}
+		let own = self.details.habit_override.as_deref()?;
+		Some((!own.is_empty()).then_some(own))
 	}
 
 	/// Habit identity is independent of the task used to schedule it.
@@ -517,9 +539,76 @@ pub struct EditDraft {
 	/// The `HH:MM` text of a night's actual wake-up; empty when unset.
 	#[serde(default)]
 	pub actual_end_text: String,
+	/// Notes connected (`true`) or disconnected (`false`) in the editor, by
+	/// note ID. Like every other field they wait for Save, whose scope says
+	/// how much of a series they apply to. Notes are local, so this is never
+	/// sent to Google.
+	#[serde(skip)]
+	pub notes: Vec<(String, bool)>,
+	/// The place picked in the editor, written as the event's location when
+	/// it is saved. `None` leaves the location alone.
+	#[serde(default)]
+	pub place: Option<PlacePick>,
+	/// A habit was picked in the editor for a habit event that exists.
+	#[serde(default)]
+	pub habit_changed: bool,
+	/// The habit picked, when `habit_changed`. `None` is no habit.
+	#[serde(default)]
+	pub habit_id: Option<String>,
+}
+
+/// A place picked for an event in its editor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlacePick {
+	/// The saved place, or `None` to clear the location.
+	pub id: Option<u64>,
+	/// The text written to the event's location.
+	pub location: String,
 }
 
 impl EditDraft {
+	/// Holds a note's connection or disconnection until the draft is saved.
+	/// The last choice for a note is the one kept.
+	pub fn stage_note(&mut self, id: &str, connect: bool) {
+		self.notes.retain(|(note, _)| note != id);
+		self.notes.push((id.to_owned(), connect));
+	}
+
+	/// Whether a note is waiting to be connected (`Some(true)`) or
+	/// disconnected (`Some(false)`) when the draft is saved.
+	pub fn staged_note(&self, id: &str) -> Option<bool> {
+		self.notes
+			.iter()
+			.find(|(note, _)| note == id)
+			.map(|(_, connect)| *connect)
+	}
+
+	/// Whether saving this draft of `original` writes anything to Google.
+	/// One that only connects notes must not: on a series, "this and
+	/// following" would split it for nothing, and an event on a calendar the
+	/// user cannot write to would be refused.
+	pub fn changes(&self, original: &Event) -> bool {
+		let saved = Self::from_event(original);
+		let options =
+			|o: &event_options::EventOptions| (o.reminders.clone(), o.transparency, o.visibility);
+		self.title != saved.title
+			|| self.description != saved.description
+			|| self.color_input != saved.color_input
+			|| self.start != saved.start
+			|| self.end != saved.end
+			|| self.all_day != saved.all_day
+			|| self.calendar_id != saved.calendar_id
+			|| self.projects.ids != saved.projects.ids
+			|| self.labels != saved.labels
+			|| options(&self.options) != options(&saved.options)
+			|| self.deadline_text != saved.deadline_text
+			|| self.recurrence_changed
+			|| self.meeting.edited()
+			|| self.sleep != saved.sleep
+			|| self.place.is_some()
+			|| self.habit_changed
+	}
+
 	/// Why this draft cannot be written yet, if there is a reason.
 	pub fn validate(&self) -> Result<(), String> {
 		if self.title.trim().is_empty() {
@@ -602,6 +691,10 @@ impl EditDraft {
 				.and_then(|s| s.actual_end)
 				.map(clock_label)
 				.unwrap_or_default(),
+			notes: Vec::new(),
+			place: None,
+			habit_changed: false,
+			habit_id: None,
 		}
 	}
 
@@ -939,6 +1032,10 @@ pub struct Details {
 	/// The habit this event counts towards, from its `ttHabit` property.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub habit_id: Option<String>,
+	/// The habit this one occurrence counts towards instead of its series',
+	/// from its `ttHabitOccurrence` property. `Some("")` is no habit.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub habit_override: Option<String>,
 	/// Completion instant for this occurrence; older records may not have one.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub habit_completed_at: Option<DateTime<Local>>,
@@ -2517,6 +2614,12 @@ pub fn save_event_scope(
 	description: &str,
 	color_id: Option<&str>,
 ) -> Result<api::Saved, String> {
+	if !draft.changes(original) {
+		return Ok(api::Saved {
+			link: original.details.link.clone(),
+			zoom_needed: false,
+		});
+	}
 	let selected = colors::selection(&draft.color_input)?;
 	let color_id = if selected != original.details.color_id {
 		Some(selected.as_deref().unwrap_or(""))
@@ -2546,6 +2649,17 @@ pub fn save_event_scope(
 	}
 	if draft.recurrence_changed {
 		event.details.recurrence = draft.recurrence_lines()?;
+	}
+	if let Some(place) = &draft.place {
+		event.details.location.clone_from(&place.location);
+	}
+	if draft.habit_changed {
+		if original.is_occurrence() && scope == SaveScope::Current {
+			event.details.habit_override = Some(draft.habit_id.clone().unwrap_or_default());
+		} else {
+			event.details.habit_id.clone_from(&draft.habit_id);
+			event.details.habit_override = None;
+		}
 	}
 	operations::submit(
 		operations::Job::Edit {

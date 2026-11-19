@@ -241,6 +241,13 @@ pub enum Action {
 	New,
 	/// A new note connected to something, from that thing's details.
 	NewFor(Link),
+	/// A new note from an event's editor. It is on the occurrence at once, so
+	/// it is never left unconnected, and is staged too: Save puts it on as
+	/// much of the series as its scope says.
+	NewFromEditor(Link),
+	/// A note connected (`true`) or disconnected (`false`) in an event's
+	/// editor, held until the editor is saved.
+	Stage(String, bool),
 	Open(String),
 	/// Leaves the open note.
 	Back,
@@ -256,7 +263,7 @@ pub enum Action {
 	/// Goes to what a note is connected to.
 	Follow(Link),
 	/// The second half of following a link, once the day has been selected.
-	OpenLoaded(String),
+	OpenLoaded(Link),
 	DeleteRequested,
 	DeleteCancelled,
 	DeleteConfirmed,
@@ -400,6 +407,19 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 		Action::Tick => save_cache(&mut state.notes),
 		Action::New => start_note(state, Vec::new()),
 		Action::NewFor(link) => start_note(state, vec![link]),
+		Action::NewFromEditor(link) => {
+			let task = start_note(state, vec![link]);
+			if let (Some(id), Some(draft)) = (&state.notes.open, &mut state.calendar.edit_draft) {
+				draft.stage_note(id, true);
+			}
+			task
+		}
+		Action::Stage(id, connect) => {
+			if let Some(draft) = &mut state.calendar.edit_draft {
+				draft.stage_note(&id, connect);
+			}
+			Task::none()
+		}
 		Action::Open(id) => open(state, id),
 		Action::Back => {
 			state.notes.close();
@@ -471,8 +491,8 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			Task::none()
 		}
 		Action::Follow(link) => follow(state, link),
-		Action::OpenLoaded(id) => {
-			if let Some(event) = linked_event(state, &id) {
+		Action::OpenLoaded(link) => {
+			if let Some(event) = linked_event(state, &link) {
 				Task::done(Message::Event(EventMessage::EventOpened(event.id.clone())))
 			} else {
 				Task::none()
@@ -501,15 +521,13 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 	}
 }
 
-fn linked_event<'a>(state: &'a State, id: &str) -> Option<&'a Event> {
-	state.calendar.event(id).or_else(|| {
-		state.calendar.events.iter().find(|e| {
-			e.is_task()
-				&& e.details
-					.task_data
-					.as_ref()
-					.is_some_and(|d| d.id.to_string() == id)
-		})
+fn linked_event<'a>(state: &'a State, link: &Link) -> Option<&'a Event> {
+	state.calendar.event(&link.id).or_else(|| {
+		state
+			.calendar
+			.events
+			.iter()
+			.find(|e| target_of(state, e).is_some_and(|target| target.same_target(link)))
 	})
 }
 
@@ -520,14 +538,14 @@ fn follow(state: &mut State, link: Link) -> Task<Message> {
 		return go_to(Screen::Habits);
 	}
 	let mut task = go_to(Screen::Calendar);
-	if linked_event(state, &link.id).is_none()
+	if linked_event(state, &link).is_none()
 		&& let Some(day) = link.day
 	{
 		task = task.chain(Task::done(Message::Calendar(
 			crate::app::CalendarMessage::CalendarDaySelected(day),
 		)));
 	}
-	task.chain(Task::done(Message::Notes(Action::OpenLoaded(link.id))))
+	task.chain(Task::done(Message::Notes(Action::OpenLoaded(link))))
 }
 
 /// What a note connected to this calendar item is really connected to. Every
@@ -551,6 +569,7 @@ pub fn target_of(state: &State, event: &Event) -> Option<Link> {
 	let day = event.start.date_naive();
 	Some(Link {
 		kind,
+		occurrence: crate::calendar::identity::Occurrence::of(event),
 		id: if event.is_task() {
 			event
 				.details
@@ -566,9 +585,26 @@ pub fn target_of(state: &State, event: &Event) -> Option<Link> {
 	})
 }
 
+/// Connects and disconnects the notes an event's editor held until it was
+/// saved, on as much of its series as `reach` says.
+pub fn apply_staged(
+	state: &mut State,
+	staged: &[(String, bool)],
+	target: &Link,
+	reach: notes::Reach,
+) -> Task<Message> {
+	if staged.is_empty() {
+		return Task::none();
+	}
+	state.notes.library.apply_staged(staged, target, reach);
+	state.notes.touched();
+	save_cache(&mut state.notes)
+}
+
 pub fn habit_link(id: &str, name: String) -> Link {
 	Link {
 		kind: LinkKind::Habit,
+		occurrence: None,
 		id: id.to_owned(),
 		title: name,
 		day: None,
@@ -584,7 +620,7 @@ pub fn current_title<'a>(state: &'a State, link: &'a Link) -> &'a str {
 			.library
 			.habit(&link.id)
 			.map(|habit| habit.name.as_str()),
-		_ => linked_event(state, &link.id).map(|event| event.title.as_str()),
+		_ => linked_event(state, link).map(|event| event.title.as_str()),
 	};
 	match live.unwrap_or(&link.title) {
 		"" => "(No title)",
@@ -662,6 +698,37 @@ mod tests {
 			completed: false,
 			details: Default::default(),
 		}
+	}
+
+	#[test]
+	fn a_retimed_block_keeps_its_notes_and_can_be_opened_from_them() {
+		let mut state = state();
+		state.config.calendar.app_calendar = Some("app".into());
+		let mut block = event("", "Block");
+		block.calendar_id = "app".into();
+		let day = block.start.date_naive();
+		block.start = crate::calendar::at_clock(day, 9, 0);
+		block.details.recurring_event_id = Some("series".into());
+		block.id = format!("series_{}", block.start.to_utc().format("%Y%m%dT%H%M%SZ"));
+		let link = target_of(&state, &block).unwrap();
+		state.notes.library.create("Plan", vec![link.clone()]);
+		block.start += chrono::Duration::hours(2);
+		block.details.original_start = Some(block.start);
+		block.id = format!("split_{}", block.start.to_utc().format("%Y%m%dT%H%M%SZ"));
+		block.details.recurring_event_id = Some("split".into());
+		block.details.split_from = vec!["app/series".into()];
+		block.title = "Renamed block".into();
+		assert_eq!(
+			state
+				.notes
+				.library
+				.linked(&target_of(&state, &block).unwrap())
+				.len(),
+			1
+		);
+		state.calendar.events.push(block.clone());
+		assert_eq!(linked_event(&state, &link).unwrap().id, block.id);
+		assert_eq!(current_title(&state, &link), "Renamed block");
 	}
 
 	#[test]
