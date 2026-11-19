@@ -10,7 +10,6 @@ use super::*;
 use crate::{config::CalendarSettings, task_db, task_edit};
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use std::{
-	cell::Cell,
 	collections::HashMap,
 	path::{Path, PathBuf},
 	sync::{
@@ -20,24 +19,8 @@ use std::{
 	},
 };
 
-thread_local! {
-	static REPLAY: Cell<bool> = const { Cell::new(false) };
-	static INSERT_ID: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
-	/// The local ID of the task the write being sent is for.
-	static SENDING_TASK: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
-}
-pub(super) fn insert_id() -> Option<String> {
-	INSERT_ID.with(|id| id.borrow().clone())
-}
-/// The local ID of the task whose write is being sent on this thread, if any.
-pub(crate) fn sending_task() -> Option<String> {
-	SENDING_TASK.with(|id| id.borrow().clone())
-}
-/// This thread is sending a write to Google, so the calls it makes must talk
-/// to Google rather than record another write.
-pub fn replaying() -> bool {
-	REPLAY.with(Cell::get)
-}
+mod resolve;
+
 #[derive(Clone, Serialize, Deserialize)]
 pub enum Job {
 	Edit {
@@ -616,9 +599,20 @@ fn worker(path: &Path) -> &'static Worker {
 								settling.push(entity.clone());
 							}
 							super::series::take_noted();
+							let local_id = write
+								.entity
+								.split_once('\n')
+								.expect("write identity")
+								.1
+								.to_owned();
 							let result = send_in(&path, *write, |job| {
 								let settings = crate::config::Config::load().calendar;
-								execute(&GoogleClient::from_settings(&settings), &settings, job)
+								execute(
+									&GoogleClient::from_settings(&settings),
+									&settings,
+									job,
+									&local_id,
+								)
 							});
 							if let Err(error) = result {
 								log_write(
@@ -727,10 +721,8 @@ fn reconcile_blocks(path: &Path) {
 		}
 	};
 	let mut remote = api::block_sync::GoogleRemote::new(token, &settings, &calendar);
-	REPLAY.with(|r| r.set(true));
 	let result =
 		crate::timeblocking::reconcile::reconcile(&mut remote, &calendar, first, last, hour, today);
-	REPLAY.with(|r| r.set(false));
 	match result {
 		Ok(fixes) if fixes.is_empty() => {}
 		Ok(fixes) => log_write(
@@ -1350,21 +1342,9 @@ fn send_in(
 		done,
 	} = write;
 	let deletes = matches!(job, Job::Delete { .. } | Job::DeleteTask { .. });
-	let task = match &job {
-		Job::TaskEdit { task, .. } | Job::Status { task, .. } => Some(task.id.clone()),
-		Job::CreateTask { task, .. } => Some(task.id.clone()),
-		_ => None,
-	};
 	let outcome = remapped(path, job)
 		.map_err(google::GoogleError::from)
-		.and_then(|job| {
-			REPLAY.with(|r| r.set(true));
-			SENDING_TASK.with(|t| *t.borrow_mut() = task);
-			let result = run(job);
-			SENDING_TASK.with(|t| *t.borrow_mut() = None);
-			REPLAY.with(|r| r.set(false));
-			result
-		});
+		.and_then(run);
 	let last = end(path, &entity);
 	let recorded = finish(path, &entity, &outcome, last, deletes);
 	match &outcome {
@@ -1452,74 +1432,14 @@ fn remapped(path: &Path, job: Job) -> Result<Job, String> {
 		.collect::<Result<Vec<_>, _>>()
 		.map_err(|e| e.to_string())?
 	};
-	if aliases.is_empty() {
-		return Ok(job);
-	}
-	let mut value = serde_json::to_value(&job).map_err(|e| e.to_string())?;
-	remap(&mut value, &aliases);
-	serde_json::from_value(value).map_err(|e| e.to_string())
-}
-/// Rewrites local IDs in a job to the IDs Google gave the items since.
-fn remap(v: &mut serde_json::Value, a: &[(String, String, String)]) {
-	if let Some(obj) = v.as_object_mut() {
-		for _ in 0..a.len() {
-			for (id_key, calendar_key, prefix) in
-				[("id", "calendar_id", "task:"), ("task_id", "list_id", "")]
-			{
-				if let Some(id) = obj.get(id_key).and_then(|v| v.as_str()).map(str::to_owned)
-					&& let Some((_, remote, calendar)) = a.iter().find(|(local, remote, _)| {
-						local != remote && (id == *local || id == ids::event_id(local))
-					}) {
-					let full = calendar.starts_with(ids::TASK_LIST);
-					obj.insert(
-						id_key.into(),
-						if full {
-							ids::event_id(remote)
-						} else {
-							remote.clone()
-						}
-						.into(),
-					);
-					let calendar = if prefix.is_empty() {
-						ids::bare_list(calendar).to_owned()
-					} else {
-						calendar.clone()
-					};
-					if obj.contains_key(calendar_key) {
-						obj.insert(calendar_key.into(), calendar.clone().into());
-					}
-					if obj.contains_key("calendar") {
-						obj.insert("calendar".into(), calendar.into());
-					}
-				}
-			}
-		}
-		for v in obj.values_mut() {
-			remap(v, a);
-		}
-	} else {
-		match v {
-			serde_json::Value::String(s) => {
-				for (l, r, _) in a {
-					if s == l {
-						*s = r.clone();
-					}
-				}
-			}
-			serde_json::Value::Array(v) => {
-				for v in v {
-					remap(v, a)
-				}
-			}
-			_ => {}
-		}
-	}
+	resolve::job(job, &aliases)
 }
 
 fn execute(
 	client: &GoogleClient,
 	s: &CalendarSettings,
 	job: Job,
+	local_id: &str,
 ) -> Result<Mapping, google::GoogleError> {
 	match job {
 		Job::Edit {
@@ -1551,7 +1471,7 @@ fn execute(
 			location,
 		} => send::event_location(client, &calendar, &id, &location)?,
 		Job::Status { task, status } => {
-			send::task_status(client, &task, status)?;
+			send::task_status(client, &task, status, local_id)?;
 		}
 		Job::TaskEdit {
 			task,
@@ -1559,7 +1479,8 @@ fn execute(
 			order,
 		} => {
 			let old = ids::bare_task(&task.id).to_owned();
-			let saved = task_edit::save(task, s, change, order, task_edit::google_access)?;
+			let token = client.access_token()?;
+			let saved = task_edit::send_from(task, s, change, order, &token, local_id)?;
 			if ids::bare_task(&saved.id) != old {
 				return Ok(Some((
 					old,
@@ -1583,7 +1504,7 @@ fn execute(
 		}
 		Job::DeleteTask { mut task, calendar } => {
 			let mut db = task_db::open()?;
-			let data = db.import(&task)?;
+			let data = db.import_remote(&task)?;
 			task.details.task_data = Some(data);
 			send::delete_task(client, &task, calendar.as_deref())?
 		}
@@ -1602,9 +1523,9 @@ fn execute(
 			options,
 			meeting,
 		} => {
-			INSERT_ID.with(|v| *v.borrow_mut() = Some(id.clone()));
 			let result = send::create_event(
 				client,
+				&id,
 				&calendar,
 				&title,
 				&description,
@@ -1618,7 +1539,6 @@ fn execute(
 				options.as_ref(),
 				meeting.as_ref(),
 			);
-			INSERT_ID.with(|v| *v.borrow_mut() = None);
 			let saved = result?;
 			return Ok(Some((id, saved.id, calendar)));
 		}
@@ -1628,9 +1548,7 @@ fn execute(
 			color,
 			habit,
 		} => {
-			INSERT_ID.with(|v| *v.borrow_mut() = Some(id.clone()));
-			let result = send::create_habit(client, &draft, color.as_deref(), &habit);
-			INSERT_ID.with(|v| *v.borrow_mut() = None);
+			let result = send::create_habit(client, &id, &draft, color.as_deref(), &habit);
 			let saved = result?;
 			return Ok(Some((id, saved.id, saved.calendar_id)));
 		}
@@ -1678,8 +1596,15 @@ fn execute(
 				)));
 			}
 			let notes = task_metadata::write(&notes, data)?;
-			let saved =
-				task_edit::create_inbox_task(s, &token, &task.title, &notes, due, metadata)?;
+			let saved = task_edit::send_inbox_task(
+				s,
+				&token,
+				&task.title,
+				&notes,
+				due,
+				metadata,
+				local_id,
+			)?;
 			return Ok(Some((
 				ids::bare_task(&task.id).into(),
 				ids::bare_task(&saved.id).into(),

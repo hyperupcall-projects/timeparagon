@@ -13,17 +13,8 @@ use crate::timeblocking::{BacklogSection, Priority, UNDATED, block_key, metadata
 /// The longest name Google Tasks accepts.
 pub const MAX_TITLE_CHARS: usize = 1024;
 
-/// How a write gets its Google access token. The iced app passes its own, so
-/// its unit tests can refuse to reach a real account.
-pub type Access = fn(&CalendarSettings) -> Result<String, GoogleError>;
-
 /// The token from the stored sign-in, refreshed if it has expired.
 pub fn google_access(settings: &CalendarSettings) -> Result<String, GoogleError> {
-	if !calendar::operations::replaying() {
-		let tokens = calendar::oauth::load_tokens()
-			.ok_or_else(|| GoogleError::auth("Not connected to Google"))?;
-		return Ok(tokens.access_token);
-	}
 	calendar::GoogleClient::from_settings(settings).access_token()
 }
 
@@ -165,12 +156,11 @@ pub fn save_and_reflow(
 	order: i64,
 	blocks: Vec<Event>,
 	mut related: Vec<Event>,
-	access: Access,
 ) -> Result<Vec<Event>, String> {
 	let hour = settings.day_start_hour();
 	let original_id = task.id.clone();
 	let old_block = crate::timeblocking::block_of(&task, &blocks, hour).map(block_key);
-	let saved = save(task, &settings, change, order, access)?;
+	let saved = save(task, &settings, change, order)?;
 	let new_block = crate::timeblocking::block_of(&saved, &blocks, hour).map(block_key);
 	related.retain(|e| e.id != original_id);
 	related.push(saved.clone());
@@ -179,7 +169,7 @@ pub fn save_and_reflow(
 		let key = block_key(b);
 		old_block.as_ref() == Some(&key) || new_block.as_ref() == Some(&key)
 	}) {
-		for event in reflow(block, &related, &settings, true, access)? {
+		for event in reflow(block, &related, &settings, true)? {
 			if let Some(previous) = changed.iter_mut().find(|e| e.id == event.id) {
 				*previous = event;
 			} else {
@@ -204,58 +194,38 @@ pub fn reflow(
 	tasks: &[Event],
 	settings: &CalendarSettings,
 	followers: bool,
-	access: Access,
 ) -> Result<Vec<Event>, String> {
 	let tasks = crate::timeblocking::tasks_in(block, tasks, settings.day_start_hour());
 	let slots = crate::timeblocking::layout(block, &tasks);
 	let mut changed = Vec::new();
-	let mut token = None;
 	for (task, (start, end)) in tasks.into_iter().cloned().zip(slots) {
-		// Completed blocks are history and are never shifted by later planning.
 		if !task.completed
 			&& (followers || !crate::timeblocking::is_follower(&task))
 			&& (task.all_day || task.start != start || task.end != end)
 		{
-			let token = match &token {
-				Some(token) => token,
-				None => token.insert(access(settings)?),
-			};
-			let mut database = crate::task_db::open()?;
 			let mut task = task;
-			let mut data = database.import(&task)?;
-			schedule(
-				&mut task,
-				&mut data,
-				&mut database,
-				settings,
-				token,
-				start,
-				end,
-			)?;
-			changed.push(task);
+			let data = crate::task_db::open()?.import(&task)?;
+			let order = data.metadata.order;
+			task.details.task_data = Some(data);
+			changed.push(save(task, settings, Change::Reflow(start, end), order)?);
 		}
 	}
 	Ok(changed)
 }
 
+/// Record an edit locally. Authentication and HTTP belong to the write worker.
 pub fn save(
 	task: Event,
 	settings: &CalendarSettings,
 	change: Change,
 	order: i64,
-	access: Access,
 ) -> Result<Event, GoogleError> {
-	if !calendar::operations::replaying() {
-		return Ok(calendar::operations::edit_task(
-			task, settings, change, order,
-		)?);
-	}
-	let token = access(settings)?;
-	send(task, settings, change, order, &token)
+	Ok(calendar::operations::edit_task(
+		task, settings, change, order,
+	)?)
 }
 
-/// Sends one change to Google with `token`, and records what Google then
-/// holds. What [`save`] does once the write is on its way.
+/// Sends one change directly to Google and records its confirmed state.
 pub fn send(
 	task: Event,
 	settings: &CalendarSettings,
@@ -263,8 +233,21 @@ pub fn send(
 	order: i64,
 	token: &str,
 ) -> Result<Event, GoogleError> {
+	let local_id = task.id.clone();
+	send_from(task, settings, change, order, token, &local_id)
+}
+
+/// Sends a recorded edit, retaining the local identity from before resolution.
+pub(crate) fn send_from(
+	task: Event,
+	settings: &CalendarSettings,
+	change: Change,
+	order: i64,
+	token: &str,
+	local_id: &str,
+) -> Result<Event, GoogleError> {
 	let mut database = crate::task_db::open()?;
-	let data = database.import(&task)?;
+	let data = database.import_remote(&task)?;
 	let mut original = task;
 	original.details.task_data = Some(data);
 	let mut saved = calendar::calendar_tasks::apply(original.clone(), settings, &change, order)?;
@@ -279,13 +262,14 @@ pub fn send(
 			calendar::api::series_recurrence_from(token, calendar, series, *from)?;
 	}
 	calendar::calendar_tasks::persist(token, &original, &mut saved, settings)?;
-	database.save(
+	database.record_remote(
 		&saved,
 		saved
 			.details
 			.task_data
 			.as_ref()
 			.ok_or("Missing task data")?,
+		local_id,
 	)?;
 	Ok(saved)
 }
@@ -300,42 +284,27 @@ pub fn task_url(task: &Event) -> Result<String, String> {
 	))
 }
 
-pub fn schedule(
-	task: &mut Event,
-	data: &mut crate::task_db::TaskData,
-	_database: &mut crate::task_db::Database,
+/// Records a new task locally and sends it through the Google worker.
+pub fn create_inbox_task(
 	settings: &CalendarSettings,
-	_token: &str,
-	start: DateTime<Local>,
-	end: DateTime<Local>,
-) -> Result<(), String> {
-	task.details.task_data = Some(data.clone());
-	*task = save(
-		task.clone(),
-		settings,
-		Change::Reflow(start, end),
-		data.metadata.order,
-		google_access,
-	)
-	.map_err(String::from)?;
-	*data = task.details.task_data.clone().ok_or("Missing task data")?;
-	Ok(())
+	title: &str,
+	notes: &str,
+	due: Option<chrono::NaiveDate>,
+	metadata: Option<crate::timeblocking::Metadata>,
+) -> Result<Event, String> {
+	calendar::operations::create_task(settings, title, notes, due, metadata)
 }
 
-/// Writes a new task to the inbox list and builds the local [`Event`] for it.
-///
-/// Blocking: callers run this on a worker thread.
-pub fn create_inbox_task(
+/// Creates an inbox task directly on Google, using the recorded task identity.
+pub(crate) fn send_inbox_task(
 	settings: &CalendarSettings,
 	token: &str,
 	title: &str,
 	notes: &str,
 	due: Option<chrono::NaiveDate>,
 	metadata: Option<crate::timeblocking::Metadata>,
+	local_id: &str,
 ) -> Result<Event, String> {
-	if !calendar::operations::replaying() {
-		return calendar::operations::create_task(settings, title, notes, due, metadata);
-	}
 	let list = calendar::scheduled::inbox_destination(token, settings.inbox_list.as_deref())?;
 	let created_at = crate::clock::utc_now();
 	let created = calendar::api::insert_task_with(
@@ -366,13 +335,13 @@ pub fn create_inbox_task(
 	};
 	// Allocate a stable ID and publish its metadata immediately.
 	let mut database = crate::task_db::open()?;
-	let mut data = database.import(&event)?;
+	let mut data = database.import_remote(&event)?;
 	if let Some(metadata) = metadata {
 		data.metadata = metadata;
 	}
 	data.metadata.created_at = Some(created_at);
 	// Keep the creation instant retryable if the metadata upload fails.
-	database.save(&event, &data)?;
+	database.record_remote(&event, &data, local_id)?;
 	calendar::task_metadata::save(token, &event, &data)?;
 	event.details.task_data = Some(data);
 	Ok(event)
@@ -381,6 +350,45 @@ pub fn create_inbox_task(
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn recording_and_sending_have_separate_execution_paths() {
+		use std::{cell::Cell, rc::Rc};
+		let settings = CalendarSettings {
+			app_calendar: Some("app".into()),
+			..Default::default()
+		};
+		let mut task = calendar::sample_snapshot().events.remove(0);
+		task.id = "explicit-task-write".into();
+		task.calendar_id = "app".into();
+		task.details = Default::default();
+		task.details.task_data = Some(crate::task_db::open().unwrap().import(&task).unwrap());
+		let saved = calendar::api::with_transport(
+			Box::new(|_, _, _| panic!("recording must not send HTTP")),
+			|| save(task, &settings, Change::Title("wanted".into()), 0).unwrap(),
+		);
+		assert_eq!(saved.title, "wanted");
+		let calls = Rc::new(Cell::new(0));
+		let sent = calls.clone();
+		let confirmed = calendar::api::with_transport(
+			Box::new(move |method, url, body| {
+				assert_eq!(method, "PATCH");
+				assert!(url.ends_with("/app/events/explicit-task-write"));
+				let body: serde_json::Value = serde_json::from_str(body.unwrap()).unwrap();
+				assert_eq!(body["summary"], "sent");
+				sent.set(sent.get() + 1);
+				Ok("{}".into())
+			}),
+			|| send(saved, &settings, Change::Title("sent".into()), 0, "token").unwrap(),
+		);
+		assert_eq!(calls.get(), 1);
+		assert_eq!(confirmed.title, "sent");
+		// Sending does not record another desired edit over the first one.
+		let wanted = calendar::operations::cached_event("app", &confirmed.id)
+			.unwrap()
+			.unwrap();
+		assert_eq!(wanted.title, "wanted");
+	}
 
 	#[test]
 	fn recurring_source_is_cleared_on_detach_or_another_block_but_not_reordering() {
@@ -425,9 +433,6 @@ mod tests {
 	/// of their occurrences here would race Google renaming it.
 	#[test]
 	fn moving_a_block_leaves_the_tasks_repeating_with_it_to_the_reconciler() {
-		fn no_google(_: &CalendarSettings) -> Result<String, GoogleError> {
-			panic!("nothing should be written")
-		}
 		let mut block = crate::calendar::sample_snapshot().events.remove(0);
 		block.id = "block_20261113T044500Z".into();
 		block.calendar_id = "app".into();
@@ -451,13 +456,7 @@ mod tests {
 		let settings = CalendarSettings::default();
 		assert!(crate::timeblocking::is_follower(&task));
 		assert!(crate::timeblocking::in_block(&task, &block, 0));
-		let moved = reflow(
-			&block,
-			std::slice::from_ref(&task),
-			&settings,
-			false,
-			no_google,
-		);
+		let moved = reflow(&block, std::slice::from_ref(&task), &settings, false);
 		assert_eq!(moved.unwrap(), []);
 	}
 }

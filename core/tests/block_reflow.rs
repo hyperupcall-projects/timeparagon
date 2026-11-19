@@ -31,7 +31,6 @@ fn adding_four_tasks_keeps_all_four_assigned_after_automatic_layout() {
 			order as i64,
 			vec![block.clone()],
 			tasks.clone(),
-			|_| Ok("unused offline token".into()),
 		)
 		.unwrap();
 		for task in changed {
@@ -68,7 +67,6 @@ fn adding_four_tasks_keeps_all_four_assigned_after_automatic_layout() {
 		&settings,
 		task_edit::Change::Time(block.end, block.end + Duration::minutes(30)),
 		0,
-		|_| panic!("local edits must not access Google"),
 	)
 	.unwrap();
 	assert!(timeblocking::metadata(&moved).block.is_none());
@@ -85,7 +83,6 @@ fn planned_task_survives_reload_moves_with_its_block_and_is_released_on_delete()
 	// These are the same shared calls used by the Planned Tasks plus button.
 	let task = task_edit::create_inbox_task(
 		&settings,
-		"",
 		"Lifecycle task",
 		"",
 		Some(block.start.date_naive()),
@@ -100,7 +97,6 @@ fn planned_task_survives_reload_moves_with_its_block_and_is_released_on_delete()
 		1,
 		vec![block.clone()],
 		vec![],
-		|_| Ok("offline".into()),
 	)
 	.unwrap();
 
@@ -124,10 +120,7 @@ fn planned_task_survives_reload_moves_with_its_block_and_is_released_on_delete()
 
 	block.start += Duration::hours(2);
 	block.end += Duration::hours(2);
-	task_edit::reflow(&block, &[restored], &settings, true, |_| {
-		Ok("offline".into())
-	})
-	.unwrap();
+	task_edit::reflow(&block, &[restored], &settings, true).unwrap();
 	let moved = reload().unwrap();
 	assert_eq!(moved.start, block.start);
 	assert_eq!(
@@ -157,7 +150,6 @@ fn planned_habit_keeps_its_link_through_duration_edits_reload_and_unassign() {
 	block.all_day = false;
 	let task = task_edit::create_inbox_task(
 		&settings,
-		"",
 		"Read",
 		"Read a chapter",
 		Some(block.start.date_naive()),
@@ -176,7 +168,6 @@ fn planned_habit_keeps_its_link_through_duration_edits_reload_and_unassign() {
 		1,
 		vec![block.clone()],
 		vec![],
-		|_| panic!("local edit must not access Google"),
 	)
 	.unwrap();
 	let task = changed.into_iter().find(|task| task.id == id).unwrap();
@@ -187,7 +178,6 @@ fn planned_habit_keeps_its_link_through_duration_edits_reload_and_unassign() {
 		1,
 		vec![block],
 		vec![],
-		|_| panic!("local edit must not access Google"),
 	)
 	.unwrap();
 	let task = changed.into_iter().find(|task| task.id == id).unwrap();
@@ -209,10 +199,7 @@ fn planned_habit_keeps_its_link_through_duration_edits_reload_and_unassign() {
 		timeblocking::metadata(&restored),
 		timeblocking::metadata(&task)
 	);
-	let released = task_edit::save(restored, &settings, task_edit::Change::Unassign, 0, |_| {
-		panic!("local edit must not access Google")
-	})
-	.unwrap();
+	let released = task_edit::save(restored, &settings, task_edit::Change::Unassign, 0).unwrap();
 	assert!(timeblocking::metadata(&released).block.is_none());
 	assert_eq!(
 		timeblocking::metadata(&released).habit_id.as_deref(),

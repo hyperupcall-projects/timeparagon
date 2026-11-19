@@ -2710,14 +2710,13 @@ fn describe_event_write_error(error: GoogleError) -> GoogleError {
 	}
 }
 
-/// Sending writes to Google. Only `operations` calls these, with the thread
-/// marked as replaying so the layers below talk to Google rather than record
-/// another write.
+/// Sending recorded writes directly to Google. Called by `operations`.
 pub(crate) mod send {
 	use super::*;
 
 	pub fn create_habit(
 		client: &GoogleClient,
+		insert_id: &str,
 		draft: &EditDraft,
 		color_id: Option<&str>,
 		habit_id: &str,
@@ -2739,6 +2738,7 @@ pub(crate) mod send {
 			.into();
 		Ok(api::insert_habit(
 			&token,
+			Some(insert_id),
 			(!draft.calendar_id.is_empty()).then_some(draft.calendar_id.as_str()),
 			&body,
 		)?)
@@ -2748,10 +2748,11 @@ pub(crate) mod send {
 		client: &GoogleClient,
 		task: &Event,
 		status: crate::timeblocking::TaskStatus,
+		local_id: &str,
 	) -> Result<Event, GoogleError> {
 		let token = client.access_token()?;
 		let mut database = crate::task_db::open()?;
-		save_task_status(&mut database, task, status, |updated| {
+		save_task_status(&mut database, task, status, local_id, |updated| {
 			write_task_status(&token, updated)
 		})
 	}
@@ -2762,15 +2763,20 @@ pub(crate) mod send {
 		database: &mut crate::task_db::Database,
 		task: &Event,
 		status: crate::timeblocking::TaskStatus,
+		local_id: &str,
 		mut write: impl FnMut(&Event) -> Result<(), GoogleError>,
 	) -> Result<Event, GoogleError> {
 		let mut previous = task.clone();
-		previous.details.task_data = Some(database.import(task)?);
+		previous.details.task_data = Some(database.import_remote(task)?);
 		let mut updated = previous.clone();
 		crate::timeblocking::apply_status(&mut updated, status);
 		if let Err(error) = write(&updated).and_then(|()| {
 			database
-				.save(&updated, updated.details.task_data.as_ref().unwrap())
+				.record_remote(
+					&updated,
+					updated.details.task_data.as_ref().unwrap(),
+					local_id,
+				)
 				.map_err(GoogleError::from)
 		}) {
 			// The message changes, but the failure keeps the original kind.
@@ -2863,6 +2869,7 @@ pub(crate) mod send {
 	#[allow(clippy::too_many_arguments)]
 	pub fn create_event(
 		client: &GoogleClient,
+		insert_id: &str,
 		calendar_id: &str,
 		title: &str,
 		description: &str,
@@ -2879,6 +2886,7 @@ pub(crate) mod send {
 		let token = client.access_token()?;
 		api::insert_event(
 			&token,
+			Some(insert_id),
 			calendar_id,
 			title,
 			description,

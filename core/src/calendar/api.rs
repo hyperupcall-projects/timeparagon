@@ -311,7 +311,7 @@ fn reconcile_task_metadata(
 			if !event.is_calendar_task() {
 				publish(event, data)?;
 			}
-			database.save(event, data)?;
+			database.save_desired(event, data)?;
 		}
 	}
 	Ok(())
@@ -599,6 +599,7 @@ fn app_calendar_id(access_token: &str, calendar: Option<&str>) -> Result<Option<
 /// is the first one. Returns the master event Google assigned an id to.
 pub fn insert_habit(
 	access_token: &str,
+	insert_id: Option<&str>,
 	calendar: Option<&str>,
 	body: &serde_json::Value,
 ) -> Result<HabitEvent, String> {
@@ -608,7 +609,7 @@ pub fn insert_habit(
 	};
 	let url = format!("{EVENTS}/{}/events", urlencoding::encode(&calendar_id));
 	let mut body = body.clone();
-	if let Some(id) = super::operations::insert_id() {
+	if let Some(id) = insert_id {
 		body["id"] = id.into();
 	}
 	let response = match post(
@@ -869,7 +870,6 @@ fn task_events(
 					},
 					crate::task_edit::Change::Day(due),
 					0,
-					crate::task_edit::google_access,
 				)?;
 			}
 			events.push(event);
@@ -1849,6 +1849,7 @@ fn split_recurrence(
 #[allow(clippy::too_many_arguments)]
 pub fn insert_event(
 	access_token: &str,
+	insert_id: Option<&str>,
 	calendar_id: &str,
 	title: &str,
 	description: &str,
@@ -1865,7 +1866,7 @@ pub fn insert_event(
 	let url = format!("{EVENTS}/{}/events", urlencoding::encode(calendar_id));
 	let mut body = serde_json::json!({ "summary": title });
 	write_times(&mut body, start, end, all_day);
-	if let Some(id) = super::operations::insert_id() {
+	if let Some(id) = insert_id {
 		body["id"] = id.into();
 	}
 	if let Some(options) = options {
@@ -3410,6 +3411,7 @@ mod tests {
 		let insert = |recurrence: &[String]| {
 			super::insert_event(
 				"token",
+				None,
 				"cal",
 				"Title",
 				"",
@@ -3446,9 +3448,44 @@ mod tests {
 		);
 		assert_eq!(
 			noted_by(created("habit"), || {
-				super::insert_habit("token", Some("cal"), &body).unwrap();
+				super::insert_habit("token", None, Some("cal"), &body).unwrap();
 			}),
 			[("cal".to_owned(), "habit".to_owned())]
+		);
+	}
+
+	#[test]
+	fn requested_creation_ids_apply_only_to_the_explicit_insert() {
+		let start = chrono::Local::now();
+		let body = super::habit_body(
+			"Stretch",
+			"",
+			start,
+			start + chrono::Duration::minutes(10),
+			&[],
+			None,
+		);
+		let mut calls = 0;
+		super::with_transport(
+			Box::new(move |method, _, body| {
+				assert_eq!(method, "POST");
+				let mut body: serde_json::Value = serde_json::from_str(body.unwrap()).unwrap();
+				if calls == 0 {
+					assert_eq!(body["id"], "requested-id");
+				} else {
+					assert!(body.get("id").is_none());
+					body["id"] = "server-id".into();
+				}
+				calls += 1;
+				Ok(body.to_string())
+			}),
+			|| {
+				let first =
+					super::insert_habit("token", Some("requested-id"), Some("cal"), &body).unwrap();
+				assert_eq!(first.id, "requested-id");
+				let second = super::insert_habit("token", None, Some("cal"), &body).unwrap();
+				assert_eq!(second.id, "server-id");
+			},
 		);
 	}
 

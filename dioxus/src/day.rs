@@ -1449,15 +1449,7 @@ pub fn save_task(task: Event, change: Change, context: &EditContext) -> Result<E
 		.filter(|event| event.is_task())
 		.cloned()
 		.collect();
-	let mut changed = task_edit::save_and_reflow(
-		task,
-		settings,
-		change,
-		order,
-		blocks,
-		related,
-		task_edit::google_access,
-	)?;
+	let mut changed = task_edit::save_and_reflow(task, settings, change, order, blocks, related)?;
 	// The task itself always comes first.
 	Ok(changed.swap_remove(0))
 }
@@ -1525,13 +1517,7 @@ pub fn save_event(
 		moved.start = draft.start;
 		moved.end = draft.end;
 		// Tasks repeating with the block are moved after it by the reconciler.
-		task_edit::reflow(
-			&moved,
-			&context.events,
-			settings,
-			false,
-			task_edit::google_access,
-		)?;
+		task_edit::reflow(&moved, &context.events, settings, false)?;
 	}
 	Ok(())
 }

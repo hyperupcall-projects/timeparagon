@@ -800,7 +800,7 @@ mod tests {
 	#[test]
 	fn nothing_else_reads_the_stored_block_key() {
 		// Each allowed file, and why it may.
-		const ALLOWED: [&str; 3] = [
+		const ALLOWED: [&str; 4] = [
 			// The rule itself.
 			"core/src/timeblocking/membership.rs",
 			// Reports tasks that break the rule, and checks a deleted
@@ -809,6 +809,9 @@ mod tests {
 			// Whether a change moves a task to another block than the one
 			// it names.
 			"core/src/task_edit.rs",
+			// Translate a stored Google reference before sending a write;
+			// this never decides which block a task belongs to.
+			"core/src/calendar/operations/resolve.rs",
 		];
 		let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
 		let mut found = Vec::new();

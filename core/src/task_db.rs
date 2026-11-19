@@ -374,7 +374,7 @@ impl Database {
 
 	/// Adopt authoritative remote data even on a fresh installation.
 	pub fn cache_remote(&mut self, event: &Event, data: &TaskData) -> Result<(), String> {
-		self.save(event, data)
+		self.save_desired(event, data)
 	}
 
 	/// Allocate and record the mapping in one transaction. No ID escapes until commit.
@@ -445,27 +445,42 @@ impl Database {
 			.map_err(|e| e.to_string())
 	}
 
-	/// Keep both old and new Google identifiers when a move changes the task ID.
-	pub fn save(&mut self, event: &Event, data: &TaskData) -> Result<(), String> {
-		// While a write is being sent, what it saves is what Google now
-		// holds. The tasks table keeps the user's wanted state, which a later
-		// edit may already have moved on from.
-		if crate::calendar::operations::replaying() {
-			let json = serde_json::to_string(data).map_err(|e| e.to_string())?;
-			let tx = self
-				.0
-				.transaction_with_behavior(TransactionBehavior::Immediate)
-				.map_err(|e| e.to_string())?;
-			tx.execute("INSERT INTO google_task_backend_state(task_id,data) VALUES(?1,?2) ON CONFLICT(task_id) DO UPDATE SET data=excluded.data",params![data.id,json]).map_err(|e|e.to_string())?;
-			if event.is_task()
-				&& let Some(local) = crate::calendar::operations::sending_task()
-				&& ids::bare_task(&local) != ids::bare_task(&event.id)
-			{
-				tx.execute("INSERT INTO google_id_map(local,remote,calendar) VALUES(?1,?2,?3) ON CONFLICT(local) DO UPDATE SET remote=excluded.remote,calendar=excluded.calendar",params![ids::bare_task(&local),ids::bare_task(&event.id),event.calendar_id]).map_err(|e|e.to_string())?;
-			}
-			tx.commit().map_err(|e| e.to_string())?;
-			return Ok(());
+	/// Record confirmed Google state without overwriting a newer local edit.
+	/// `local_id` is the identity the caller is sending, before ID resolution.
+	pub fn record_remote(
+		&mut self,
+		event: &Event,
+		data: &TaskData,
+		local_id: &str,
+	) -> Result<(), String> {
+		let json = serde_json::to_string(data).map_err(|e| e.to_string())?;
+		let tx = self
+			.0
+			.transaction_with_behavior(TransactionBehavior::Immediate)
+			.map_err(|e| e.to_string())?;
+		tx.execute("INSERT INTO google_task_backend_state(task_id,data) VALUES(?1,?2) ON CONFLICT(task_id) DO UPDATE SET data=excluded.data", params![data.id,json]).map_err(|e| e.to_string())?;
+		// A self-mapping also matters: moving back to the original identity
+		// must replace its previous destination, rather than leave a cycle.
+		if event.is_task() {
+			tx.execute("INSERT INTO google_id_map(local,remote,calendar) VALUES(?1,?2,?3) ON CONFLICT(local) DO UPDATE SET remote=excluded.remote,calendar=excluded.calendar", params![ids::bare_task(local_id),ids::bare_task(&event.id),event.calendar_id]).map_err(|e| e.to_string())?;
 		}
+		tx.commit().map_err(|e| e.to_string())
+	}
+
+	/// Read metadata for a remote write without adopting its older snapshot as
+	/// the user's desired state. Allocate only if it has never had metadata.
+	pub fn import_remote(&mut self, event: &Event) -> Result<TaskData, String> {
+		if let Some(data) = &event.details.task_data {
+			return Ok(data.clone());
+		}
+		if let Some(data) = crate::calendar::task_metadata::read(&event.details.description)? {
+			return Ok(data);
+		}
+		self.import_inner(event).map_err(|e| e.to_string())
+	}
+
+	/// Save the user's desired metadata and its Google identity locally.
+	pub fn save_desired(&mut self, event: &Event, data: &TaskData) -> Result<(), String> {
 		(|| -> rusqlite::Result<()> {
             let tx = self.0.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let json = serde_json::to_string(&data.metadata).expect("metadata serializes");
@@ -579,6 +594,53 @@ mod tests {
 		event.details = Default::default();
 		event
 	}
+
+	#[test]
+	fn remote_confirmation_keeps_newer_desired_metadata_and_maps_the_local_identity() {
+		let mut db = Database::open(Path::new(":memory:")).unwrap();
+		let local = event("original-local");
+		let mut wanted = TaskData {
+			id: 123,
+			metadata: Metadata::default(),
+		};
+		wanted.metadata.minutes = 45;
+		db.save_desired(&local, &wanted).unwrap();
+		let mut confirmed = wanted.clone();
+		confirmed.metadata.minutes = 15;
+		let mut remote = event("latest-remote");
+		remote.details.description = crate::calendar::task_metadata::write("", &confirmed).unwrap();
+		// Reading an older write's metadata must not adopt it as a new edit.
+		assert_eq!(db.import_remote(&remote).unwrap(), confirmed);
+		db.record_remote(&remote, &confirmed, &local.id).unwrap();
+		assert_eq!(db.lookup(&local).unwrap(), Some(wanted));
+		let json: String =
+			db.0.query_row(
+				"SELECT data FROM google_task_backend_state WHERE task_id=123",
+				[],
+				|r| r.get(0),
+			)
+			.unwrap();
+		assert_eq!(serde_json::from_str::<TaskData>(&json).unwrap(), confirmed);
+		let mapping: (String, String) =
+			db.0.query_row(
+				"SELECT remote,calendar FROM google_id_map WHERE local='original-local'",
+				[],
+				|r| Ok((r.get(0)?, r.get(1)?)),
+			)
+			.unwrap();
+		assert_eq!(mapping, ("latest-remote".into(), "tasks:test".into()));
+		// Returning to the original ID retires the earlier mapping.
+		db.record_remote(&local, &confirmed, &local.id).unwrap();
+		let remote: String =
+			db.0.query_row(
+				"SELECT remote FROM google_id_map WHERE local='original-local'",
+				[],
+				|r| r.get(0),
+			)
+			.unwrap();
+		assert_eq!(remote, "original-local");
+	}
+
 	#[test]
 	fn schema_6_adds_notes_metadata_and_sync_triggers() {
 		let directory = tempfile::tempdir().unwrap();

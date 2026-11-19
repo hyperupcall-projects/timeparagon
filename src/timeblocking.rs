@@ -2131,7 +2131,6 @@ fn create_and_assign(
 ) -> Result<Vec<Event>, String> {
 	let task = timeparagon_core::task_edit::create_inbox_task(
 		&settings,
-		"",
 		&title,
 		&notes,
 		Some(start.date_naive()),
@@ -2217,15 +2216,14 @@ fn refresh_block(state: &mut State, id: &str) -> Task<Message> {
 		.map(move |result| Message::TimeBlocking(Action::SavedMany(first.clone().into(), result)))
 }
 
-/// Every write below stays behind this module's [`access`], so unit tests can
-/// never reach a real Google account.
+/// Record task edits locally; only the operations worker sends them to Google.
 fn save(
 	task: Event,
 	settings: &CalendarSettings,
 	change: Change,
 	order: i64,
 ) -> Result<Event, String> {
-	Ok(task_edit::save(task, settings, change, order, access)?)
+	Ok(task_edit::save(task, settings, change, order)?)
 }
 
 fn save_and_reflow(
@@ -2236,7 +2234,7 @@ fn save_and_reflow(
 	blocks: Vec<Event>,
 	related: Vec<Event>,
 ) -> Result<Vec<Event>, String> {
-	task_edit::save_and_reflow(task, settings, change, order, blocks, related, access)
+	task_edit::save_and_reflow(task, settings, change, order, blocks, related)
 }
 
 /// Has the task saved first in `changed` repeat with its block's series.
@@ -2496,7 +2494,7 @@ fn reflow(
 	tasks: &[Event],
 	settings: &CalendarSettings,
 ) -> Result<Vec<Event>, String> {
-	task_edit::reflow(block, tasks, settings, false, access)
+	task_edit::reflow(block, tasks, settings, false)
 }
 
 #[cfg(test)]

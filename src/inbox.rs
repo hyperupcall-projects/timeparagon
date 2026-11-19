@@ -792,13 +792,12 @@ fn prepare_create(state: &mut State) -> Option<(crate::config::CalendarSettings,
 	Some((settings, task))
 }
 
-/// Creates the task on Google. A link whose title was never read gets one more
+/// Records the task for Google. A link whose title was never read gets one more
 /// try here, so a task made quickly still arrives with a proper name.
 pub(crate) fn write(
 	settings: &crate::config::CalendarSettings,
 	task: NewTask,
 ) -> Result<Event, String> {
-	let token = tb::access(settings)?;
 	let mut title = task.title;
 	if let Some(source) = task.source.as_ref().filter(|source| source.url == title) {
 		let auth = Auth {
@@ -823,8 +822,7 @@ pub(crate) fn write(
 	}
 	let mut metadata = task.event.as_ref().map(tb::metadata).unwrap_or_default();
 	metadata.deadline = task.deadline;
-	let mut event =
-		create_event_with_metadata(settings, &token, &title, &prose, task.due, Some(metadata))?;
+	let mut event = create_event_with_metadata(settings, &title, &prose, task.due, Some(metadata))?;
 	if let Some(draft) = task.event
 		&& !draft.all_day
 	{
@@ -843,10 +841,8 @@ pub fn add(
 	due: Option<NaiveDate>,
 	deadline: Option<Deadline>,
 ) -> Result<Event, String> {
-	let token = tb::access(settings)?;
 	create_event_with_metadata(
 		settings,
-		&token,
 		title,
 		notes,
 		due,
@@ -857,16 +853,15 @@ pub fn add(
 	)
 }
 
-/// Writes one task to the inbox list and builds the local [`Event`] for it.
+/// Records a task and returns the local [`Event`] shown while it is sent.
 fn create_event_with_metadata(
 	settings: &crate::config::CalendarSettings,
-	token: &str,
 	title: &str,
 	notes: &str,
 	due: Option<NaiveDate>,
 	metadata: Option<tb::Metadata>,
 ) -> Result<Event, String> {
-	timeparagon_core::task_edit::create_inbox_task(settings, token, title, notes, due, metadata)
+	timeparagon_core::task_edit::create_inbox_task(settings, title, notes, due, metadata)
 }
 
 fn created(state: &mut State, result: Result<Event, String>) -> Task<Message> {

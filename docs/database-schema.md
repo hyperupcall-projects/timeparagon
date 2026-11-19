@@ -383,7 +383,18 @@ sequenceDiagram
 **Order.** One worker thread per process sends that process's writes one at a
 time, in the order they were made, so an edit cannot overtake its item's
 creation. Before a job is sent, local IDs in it are rewritten to the IDs Google
-has since given those items (`google_id_map`).
+has since given those items (`google_id_map`). Resolution matches each typed
+`Job` variant and changes only Google identities and references; user text and
+explicit destination calendars are preserved. Mapping chains are followed to
+their final identity, and cycles fail the write with an error.
+
+**Execution.** `task_edit::save` and `create_inbox_task` always record local
+operations. The worker calls `send_from` and `send_inbox_task` to send them;
+the block reconciler calls `send` directly. Creation IDs and original local
+task IDs are explicit arguments. Database writes likewise distinguish desired
+metadata (`save_desired`) from confirmed remote metadata (`record_remote`),
+so confirming an older write cannot overwrite a newer desired edit. No
+thread-local replay mode selects these paths.
 
 **Locking.** An item is locked while its `google_entities.sending_since` is
 set. `Overlay::apply` marks such items with `Details::sending` (never stored),

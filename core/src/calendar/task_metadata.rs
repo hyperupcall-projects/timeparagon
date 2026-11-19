@@ -101,9 +101,7 @@ pub fn load(
 	event: &super::Event,
 	mut publish: impl FnMut(&TaskData) -> Result<(), String>,
 ) -> Result<TaskData, String> {
-	if !super::operations::replaying()
-		&& let Some(data) = database.pending_task_data(event)?
-	{
+	if let Some(data) = database.pending_task_data(event)? {
 		return Ok(read(&event.details.description)?.unwrap_or(TaskData {
 			id: data.id,
 			metadata: Default::default(),
