@@ -5,14 +5,14 @@
 //! from Google is written here too. Between syncs, cached days read their
 //! nights from here, so a night planned weeks ahead shows without a fetch.
 //!
-//! Database sync replicates the rows (see `settings::schema::SLEEP_NIGHTS`),
-//! so a night timed on one device shows on the others before they next ask
-//! Google. Every change is journaled for them, so a row is only written when
-//! it actually differs: an unchanged sync costs no sync traffic.
+//! The rows stay on this device: database sync does not replicate them, so a
+//! night timed on another device shows here once this one next asks Google.
+//! A row is only written when it actually differs, so an unchanged sync
+//! does not wake the apps' readers.
 //!
-//! The versioned database setup creates the table and its change and sync
-//! triggers. Like the event cache, a failure here costs a re-sync, never the
-//! night itself.
+//! The versioned database setup creates the table and its change triggers.
+//! Like the event cache, a failure here costs a re-sync, never the night
+//! itself.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -261,34 +261,30 @@ mod tests {
 	}
 
 	#[test]
-	fn only_real_changes_reach_the_sync_journal() {
+	fn only_real_changes_wake_the_readers_and_none_are_synced() {
 		let temporary = tempfile::tempdir().unwrap();
 		let database_path = temporary.path().join("calendar.sqlite3");
 		let path = database_path.as_path();
 		// Opening a database file sets it up, and enrolls it for sync.
 		Database::open(path).unwrap();
-		let journaled = || {
-			crate::database_sync::history(path)
-				.unwrap()
-				.iter()
-				.filter(|edit| edit.document.starts_with("sleep_nights:"))
-				.count()
-		};
+		let start = crate::local_changes::read(path).unwrap().sleep;
+		let changes = || crate::local_changes::read(path).unwrap().sleep - start;
 		let (from, to) = ever();
 		let listed = [night("app", "a", 5, 8), night("app", "b", 6, 8)];
 		replace(path, "app", from, to, &listed).unwrap();
-		assert_eq!(journaled(), 2);
+		assert_eq!(changes(), 2);
 		// The same listing again, and a write Google echoed unchanged: nothing.
 		replace(path, "app", from, to, &listed).unwrap();
 		put(path, &listed[0]).unwrap();
-		assert_eq!(journaled(), 2);
-		// One night moved and one gone on Google: one edit each.
+		assert_eq!(changes(), 2);
+		// One night moved and one gone on Google: one change each.
 		replace(path, "app", from, to, &[night("app", "a", 5, 9)]).unwrap();
-		assert_eq!(journaled(), 4);
+		assert_eq!(changes(), 4);
+		assert!(crate::database_sync::history(path).unwrap().is_empty());
 	}
 
 	#[test]
-	fn a_night_stored_by_another_device_shows_on_the_days_in_memory() {
+	fn a_night_stored_by_another_process_shows_on_the_days_in_memory() {
 		let temporary = tempfile::tempdir().unwrap();
 		let database_path = temporary.path().join("calendar.sqlite3");
 		let path = database_path.as_path();
@@ -299,7 +295,8 @@ mod tests {
 		store.set_day(day(6), day(5));
 		store.events = vec![night("app", "old", 6, 8)];
 
-		// As database sync would write it: a new copy of the same night.
+		// As another process's Google refresh would write it: a new copy of
+		// the same night.
 		put(path, &night("app", "new", 6, 9)).unwrap();
 		store.select_range(&[day(5), day(6)]);
 		assert_eq!(store.events_on(day(6)), [&night("app", "new", 6, 9)]);

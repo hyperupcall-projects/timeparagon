@@ -336,7 +336,7 @@ clean tree, because the manifest names the widget's resources.
   workspace defaults to the iced package (`default-members = ["."]`).
 - **View → Calendars** which switches Google calendars,
   task lists and TimeParagon event kinds on or off. It saves to the shared
-  `calendar_sources` settings. Tasks inside a time block's popup stay visible.
+  `calendar.sources` settings. Tasks inside a time block's popup stay visible.
 - **Settings** edits the theme, first day of the week, database sync,
   reminders and the Google client ID and secret. Other settings are edited
   in the iced application; this crate reloads the settings when they change.

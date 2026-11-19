@@ -35,10 +35,10 @@ pub struct TaskData {
 /// The schema this build sets up, kept in SQLite's `user_version`.
 ///
 /// Schema changes are applied transactionally by [`Database::set_up`].
-pub const SCHEMA_VERSION: i64 = 9;
+pub const SCHEMA_VERSION: i64 = 10;
 
 /// Older schemas [`Database::set_up`] can bring up to date.
-const UPGRADABLE: std::ops::RangeInclusive<i64> = 2..=8;
+const UPGRADABLE: std::ops::RangeInclusive<i64> = 2..=9;
 
 fn schema_version(db: &Connection) -> Result<i64, String> {
 	db.query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -126,6 +126,8 @@ impl Database {
 		tx.commit().map_err(|e| e.to_string())?;
 
 		if !memory {
+			// Schema 10 is applied here: the retired settings tables move
+			// into `settings`, with their sync history.
 			crate::database_sync::enroll(path).map_err(|e| e.to_string())?;
 			crate::database_sync::install_snapshots(db).map_err(|e| e.to_string())?;
 			// After enrolling, so the imported settings are journaled for sync.
@@ -234,7 +236,7 @@ impl Database {
 	}
 
 	/// Schema 9: source rows replace rendered month snapshots. Keep local edits,
-	/// stable IDs and replicated sleep; convert their old source-row codec once.
+	/// stable IDs and stored sleep; convert their old source-row codec once.
 	fn migrate_calendar(tx: &Connection) -> Result<(), String> {
 		for table in ["google_sync_events", "sleep_nights"] {
 			let rows = tx
@@ -707,12 +709,12 @@ mod tests {
 		assert_eq!(crate::local_changes::read_from(db).unwrap().sleep, 1);
 		let edits: i64 = db
 			.query_row(
-				"SELECT count(*) FROM timeparagon_sync_edits WHERE document='sleep_nights:[\"app\",\"n\"]'",
+				"SELECT count(*) FROM timeparagon_sync_edits WHERE document GLOB 'sleep_nights:*'",
 				[],
 				|row| row.get(0),
 			)
 			.unwrap();
-		assert_eq!(edits, 1);
+		assert_eq!(edits, 0, "nights stay on the device");
 	}
 
 	#[test]

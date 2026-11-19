@@ -1,10 +1,6 @@
-//! The tables that hold the settings, described once for the code that reads
-//! and writes them and for database sync, which replicates their rows.
-//!
-//! References between these tables (a route's places, an event's place, the
-//! `travel.home` setting) are not enforced by SQLite. Two devices can delete a
-//! place and refer to it at the same moment, and the merged result must still
-//! be storable, so readers skip a reference to a row that is gone instead.
+//! The tables that hold the settings and the other synced rows, described once
+//! for the code that reads and writes them and for database sync, which
+//! replicates their rows.
 
 use rusqlite::types::{Value as Sql, ValueRef};
 use rusqlite::{Connection, OptionalExtension, params_from_iter};
@@ -14,10 +10,6 @@ use serde_json::{Map, Value};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Kind {
 	Text,
-	Integer,
-	Real,
-	/// An INTEGER that is 0 or 1; `true` or `false` in a row.
-	Bool,
 	/// Text holding JSON. Sync merges inside it field by field, as it does
 	/// for documents.
 	Json,
@@ -38,7 +30,7 @@ pub(crate) struct Table {
 	pub columns: &'static [Column],
 	/// Rows are shared between devices by database sync.
 	pub synced: bool,
-	/// What one row is called in the sync log, as in "3 place edits".
+	/// What one row is called in the sync log, as in "3 setting edits".
 	pub noun: &'static str,
 }
 
@@ -46,10 +38,11 @@ const fn column(name: &'static str, kind: Kind) -> Column {
 	Column { name, kind }
 }
 
-use Kind::{Bool, Integer, Json, Real, Text};
+use Kind::{Json, Text};
 
-/// Preferences that are one value each, named `section.field`. Only values
-/// that differ from the built-in default are stored.
+/// Preferences, named `section.field`, and the items of collections, named
+/// `section.field/item` (see `settings::mapping`). Only values that differ
+/// from the built-in default are stored.
 pub(crate) const SETTINGS: Table = Table {
 	name: "settings",
 	key: &["key"],
@@ -67,165 +60,13 @@ pub(crate) const DEVICE_SETTINGS: Table = Table {
 	noun: "device setting",
 };
 
-/// What the user chose for each calendar, task list or TimeParagon source.
-pub(crate) const CALENDAR_SOURCES: Table = Table {
-	name: "calendar_sources",
-	key: &["id"],
-	columns: &[
-		column("id", Text),
-		column("hidden", Bool),
-		column("position", Integer),
-		column("color", Text),
-	],
-	synced: true,
-	noun: "calendar",
-};
-
-pub(crate) const SLEEP_SCHEDULE: Table = Table {
-	name: "sleep_schedule",
-	key: &["weekday"],
-	columns: &[
-		column("weekday", Integer),
-		column("bedtime", Text),
-		column("wakeup", Text),
-	],
-	synced: true,
-	noun: "sleep schedule",
-};
-
-pub(crate) const SLEEP_SCHEDULE_CHANGES: Table = Table {
-	name: "sleep_schedule_changes",
-	key: &["from_date"],
-	columns: &[
-		column("from_date", Text),
-		column("previous_bedtime", Text),
-		column("previous_wakeup", Text),
-		column("bedtime", Text),
-		column("wakeup", Text),
-	],
-	synced: true,
-	noun: "sleep schedule",
-};
-
-pub(crate) const WEEKLY_TASK_ORDER: Table = Table {
-	name: "weekly_task_order",
-	key: &["day"],
-	columns: &[column("day", Text), column("cards", Json)],
-	synced: true,
-	noun: "week board",
-};
-
-pub(crate) const PLACES: Table = Table {
-	name: "places",
-	key: &["id"],
-	columns: &[
-		column("id", Integer),
-		column("name", Text),
-		column("address", Text),
-		column("provider_id", Text),
-		column("lat", Real),
-		column("lng", Real),
-		column("favorite", Bool),
-	],
-	synced: true,
-	noun: "place",
-};
-
-pub(crate) const EVENT_PLACES: Table = Table {
-	name: "event_places",
-	key: &["event_id"],
-	columns: &[column("event_id", Text), column("place_id", Integer)],
-	synced: true,
-	noun: "event place",
-};
-
-pub(crate) const TRAVEL_MODES: Table = Table {
-	name: "travel_modes",
-	key: &["from_place", "to_place"],
-	columns: &[
-		column("from_place", Integer),
-		column("to_place", Integer),
-		column("mode", Text),
-	],
-	synced: true,
-	noun: "travel",
-};
-
-pub(crate) const TRAVEL_ROUTES: Table = Table {
-	name: "travel_routes",
-	key: &["from_place", "to_place", "mode"],
-	columns: &[
-		column("from_place", Integer),
-		column("to_place", Integer),
-		column("mode", Text),
-		column("seconds", Integer),
-		column("meters", Integer),
-	],
-	synced: true,
-	noun: "travel",
-};
-
-pub(crate) const REMINDERS: Table = Table {
-	name: "reminders",
-	key: &["category"],
-	columns: &[
-		column("category", Text),
-		column("enabled", Bool),
-		column("minutes_before", Integer),
-		column("sound", Json),
-	],
-	synced: true,
-	noun: "reminder",
-};
-
 /// Every settings table.
-pub(crate) const TABLES: [&Table; 11] = [
-	&SETTINGS,
-	&DEVICE_SETTINGS,
-	&CALENDAR_SOURCES,
-	&SLEEP_SCHEDULE,
-	&SLEEP_SCHEDULE_CHANGES,
-	&WEEKLY_TASK_ORDER,
-	&PLACES,
-	&EVENT_PLACES,
-	&TRAVEL_MODES,
-	&TRAVEL_ROUTES,
-	&REMINDERS,
-];
+pub(crate) const TABLES: [&Table; 2] = [&SETTINGS, &DEVICE_SETTINGS];
 
-/// Creates the tables. Idempotent. A column added later needs a `DEFAULT`,
-/// because rows synced from an older build do not have it.
+/// Creates the tables. Idempotent.
 pub(crate) const CREATE: &str = "
     CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS device_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS calendar_sources (id TEXT PRIMARY KEY, hidden INTEGER NOT NULL DEFAULT 0, position INTEGER, color TEXT);
-    CREATE TABLE IF NOT EXISTS sleep_schedule (weekday INTEGER PRIMARY KEY CHECK (weekday BETWEEN 0 AND 6), bedtime TEXT NOT NULL, wakeup TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS sleep_schedule_changes (from_date TEXT PRIMARY KEY, previous_bedtime TEXT NOT NULL, previous_wakeup TEXT NOT NULL, bedtime TEXT NOT NULL, wakeup TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS weekly_task_order (day TEXT PRIMARY KEY, cards TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS places (id INTEGER PRIMARY KEY, name TEXT NOT NULL, address TEXT NOT NULL DEFAULT '', provider_id TEXT NOT NULL DEFAULT '', lat REAL NOT NULL, lng REAL NOT NULL, favorite INTEGER NOT NULL DEFAULT 0);
-    CREATE TABLE IF NOT EXISTS event_places (event_id TEXT PRIMARY KEY, place_id INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS travel_modes (from_place INTEGER NOT NULL, to_place INTEGER NOT NULL, mode TEXT NOT NULL, PRIMARY KEY (from_place, to_place));
-    CREATE TABLE IF NOT EXISTS travel_routes (from_place INTEGER NOT NULL, to_place INTEGER NOT NULL, mode TEXT NOT NULL, seconds INTEGER NOT NULL, meters INTEGER NOT NULL, PRIMARY KEY (from_place, to_place, mode));
-    CREATE TABLE IF NOT EXISTS reminders (category TEXT PRIMARY KEY, enabled INTEGER NOT NULL, minutes_before INTEGER NOT NULL, sound TEXT NOT NULL);";
-
-/// Nights of sleep as Google Calendar last had them (see
-/// `calendar::sleep::store`). Replicated so another device shows them before
-/// its own Google sync. `event` is plain text, not merged field by field:
-/// each copy is a whole Google event, and the newest one wins.
-pub(crate) const SLEEP_NIGHTS: Table = Table {
-	name: "sleep_nights",
-	key: &["calendar_id", "id"],
-	columns: &[
-		column("calendar_id", Text),
-		column("id", Text),
-		column("wake_date", Text),
-		column("start_at", Text),
-		column("end_at", Text),
-		column("event", Text),
-	],
-	synced: true,
-	noun: "sleep",
-};
+    CREATE TABLE IF NOT EXISTS device_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);";
 
 /// Metadata for Markdown notes, keyed by the ID in their front matter.
 pub(crate) const NOTES: Table = Table {
@@ -241,18 +82,21 @@ pub(crate) const NOTES: Table = Table {
 };
 
 /// Synced tables of app data rather than preferences: database sync
-/// replicates their rows like the settings tables', but they are not part of
+/// replicates their rows like the settings', but they are not part of
 /// `Config`, so nothing that reads or saves settings looks at them.
-pub(crate) const DATA_TABLES: [&Table; 2] = [&SLEEP_NIGHTS, &NOTES];
+pub(crate) const DATA_TABLES: [&Table; 1] = [&NOTES];
 
-/// Creates [`DATA_TABLES`]. Installed during versioned database setup and
-/// sync enrollment. Idempotent to preserve rows from earlier lazy setup.
+/// Creates [`DATA_TABLES`], and `sleep_nights`, the nights of sleep as Google
+/// Calendar last had them (see `calendar::sleep::store`). Those stay on the
+/// device: each one gets them from Google. Installed during versioned database
+/// setup and sync enrollment. Idempotent to preserve rows from earlier lazy
+/// setup.
 pub(crate) const CREATE_DATA: &str = "
     CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY, color TEXT NOT NULL DEFAULT 'butter', links TEXT NOT NULL DEFAULT '[]');
     CREATE TABLE IF NOT EXISTS sleep_nights (calendar_id TEXT NOT NULL, id TEXT NOT NULL, wake_date TEXT NOT NULL, start_at TEXT NOT NULL, end_at TEXT NOT NULL, event TEXT NOT NULL, PRIMARY KEY (calendar_id, id));";
 
-/// Creates [`DATA_TABLES`] and the change counters' triggers on them.
-/// Idempotent and cheap once done.
+/// Creates [`CREATE_DATA`]'s tables and the change counters' triggers on
+/// them. Idempotent and cheap once done.
 pub(crate) fn create_data(db: &Connection) -> rusqlite::Result<()> {
 	db.execute_batch(CREATE_DATA)?;
 	crate::local_changes::install_data(db)
@@ -280,19 +124,7 @@ fn to_sql(kind: Kind, value: &Value) -> rusqlite::Result<Sql> {
 		(_, Value::Null) => Sql::Null,
 		(Json, value) => Sql::Text(value.to_string()),
 		(Text, Value::String(text)) => Sql::Text(text.clone()),
-		(Integer | Bool, Value::Bool(flag)) => Sql::Integer(i64::from(*flag)),
-		(Bool, Value::Number(number)) => Sql::Integer(i64::from(number.as_f64() != Some(0.0))),
-		(Integer, Value::Number(number)) => Sql::Integer(
-			number
-				.as_i64()
-				.ok_or_else(|| invalid(format!("{number} is not a whole number")))?,
-		),
-		(Real, Value::Number(number)) => Sql::Real(
-			number
-				.as_f64()
-				.ok_or_else(|| invalid(format!("{number} is not a number")))?,
-		),
-		(kind, value) => return Err(invalid(format!("{value} cannot be stored as {kind:?}"))),
+		(Text, value) => return Err(invalid(format!("{value} cannot be stored as text"))),
 	})
 }
 
@@ -303,7 +135,6 @@ fn to_sql(kind: Kind, value: &Value) -> rusqlite::Result<Sql> {
 fn from_sql(kind: Kind, value: ValueRef<'_>) -> rusqlite::Result<Value> {
 	Ok(match (kind, value) {
 		(_, ValueRef::Null) => Value::Null,
-		(Bool, ValueRef::Integer(number)) => Value::Bool(number != 0),
 		(Json, ValueRef::Text(text)) => serde_json::from_slice(text).unwrap_or_else(|error| {
 			log::warn!("ignoring a setting that is not JSON: {error}");
 			Value::Null
@@ -318,12 +149,11 @@ fn from_sql(kind: Kind, value: ValueRef<'_>) -> rusqlite::Result<Value> {
 }
 
 impl Table {
-	pub(crate) fn column(&self, name: &str) -> Option<&Column> {
-		self.columns.iter().find(|column| column.name == name)
-	}
-
 	fn kind(&self, name: &str) -> Kind {
-		self.column(name).map_or(Text, |column| column.kind)
+		self.columns
+			.iter()
+			.find(|column| column.name == name)
+			.map_or(Text, |column| column.kind)
 	}
 
 	/// The row as JSON, the way the sync journal holds it: `json_object(…)`
@@ -334,7 +164,7 @@ impl Table {
 			.iter()
 			.map(|column| match column.kind {
 				Json => format!("'{0}',json({prefix}{0})", column.name),
-				_ => format!("'{0}',{prefix}{0}", column.name),
+				Text => format!("'{0}',{prefix}{0}", column.name),
 			})
 			.collect();
 		format!("json_object({})", fields.join(","))
@@ -374,14 +204,6 @@ impl Table {
 			.collect()
 	}
 
-	/// The primary key of a row given as JSON.
-	pub(crate) fn key_of(&self, row: &Map<String, Value>) -> Vec<Value> {
-		self.key
-			.iter()
-			.map(|column| row.get(*column).cloned().unwrap_or(Value::Null))
-			.collect()
-	}
-
 	/// Stores a row given as JSON, replacing the columns it has. Columns it
 	/// lacks keep the table's defaults (or their values, for a row already
 	/// there); fields that are not columns are ignored.
@@ -418,54 +240,6 @@ impl Table {
 			params_from_iter(values),
 		)?;
 		Ok(())
-	}
-
-	/// Sets `columns` of an existing row from `row`, leaving its other
-	/// columns as they are. Returns whether the row was there.
-	pub(crate) fn update(
-		&self,
-		db: &Connection,
-		row: &Map<String, Value>,
-		columns: &[&str],
-	) -> rusqlite::Result<bool> {
-		let key = self.key_params(&self.key_of(row))?;
-		let columns: Vec<&Column> = columns
-			.iter()
-			.filter_map(|name| self.column(name))
-			.collect();
-		if columns.is_empty() {
-			return Ok(db
-				.query_row(
-					&format!("SELECT 1 FROM {} WHERE {}", self.name, self.where_key()),
-					params_from_iter(key),
-					|_| Ok(()),
-				)
-				.optional()?
-				.is_some());
-		}
-		let offset = key.len();
-		let assignments: Vec<String> = columns
-			.iter()
-			.enumerate()
-			.map(|(index, column)| format!("{}=?{}", column.name, offset + index + 1))
-			.collect();
-		let mut values = key;
-		for column in &columns {
-			values.push(to_sql(
-				column.kind,
-				row.get(column.name).unwrap_or(&Value::Null),
-			)?);
-		}
-		let changed = db.execute(
-			&format!(
-				"UPDATE {} SET {} WHERE {}",
-				self.name,
-				assignments.join(","),
-				self.where_key()
-			),
-			params_from_iter(values),
-		)?;
-		Ok(changed > 0)
 	}
 
 	pub(crate) fn delete(&self, db: &Connection, key: &[Value]) -> rusqlite::Result<()> {
@@ -550,7 +324,6 @@ mod tests {
 			key.sort();
 			let key: Vec<&str> = key.into_iter().map(|(_, name)| name).collect();
 			assert_eq!(key, table.key, "{}", table.name);
-			assert!(table.key.iter().all(|name| table.column(name).is_some()));
 			assert_eq!(
 				&described[..table.key.len()],
 				table.key,
@@ -561,30 +334,31 @@ mod tests {
 	}
 
 	#[test]
-	fn rows_round_trip_and_partial_updates_keep_other_columns() {
+	fn rows_round_trip_and_upserts_keep_the_columns_they_lack() {
 		let db = Connection::open_in_memory().unwrap();
-		db.execute_batch(CREATE).unwrap();
-		let place = serde_json::json!({"id": 7, "name": "Library", "address": "1 Main St",
-            "provider_id": "mapbox-1", "lat": 1.5, "lng": 2.5, "favorite": true});
-		let place = place.as_object().unwrap();
-		PLACES.upsert(&db, place).unwrap();
-		assert_eq!(PLACES.select_all(&db).unwrap(), vec![place.clone()]);
+		db.execute_batch(CREATE_DATA).unwrap();
+		let note = serde_json::json!({"id": "n1", "color": "rose", "links": [{"id": "h1"}]});
+		let note = note.as_object().unwrap();
+		NOTES.upsert(&db, note).unwrap();
+		assert_eq!(NOTES.select_all(&db).unwrap(), vec![note.clone()]);
 
-		let mut renamed = place.clone();
-		renamed.insert("name".into(), "Campus".into());
-		renamed.insert("favorite".into(), false.into());
-		assert!(PLACES.update(&db, &renamed, &["name"]).unwrap());
-		let stored = &PLACES.select_all(&db).unwrap()[0];
-		assert_eq!(stored["name"], "Campus");
-		assert_eq!(stored["favorite"], true, "only the named columns change");
+		let recolored = serde_json::json!({"id": "n1", "color": "mint"});
+		NOTES.upsert(&db, recolored.as_object().unwrap()).unwrap();
+		let stored = &NOTES.select_all(&db).unwrap()[0];
+		assert_eq!(stored["color"], "mint");
+		assert_eq!(
+			stored["links"], note["links"],
+			"only the given columns change"
+		);
 
 		let journal: Value =
-			serde_json::from_str(&PLACES.journal_row(&db, &[7.into()]).unwrap().unwrap()).unwrap();
-		assert_eq!(journal["favorite"], 1);
-		PLACES.delete(&db, &[7.into()]).unwrap();
-		assert!(!PLACES.update(&db, &renamed, &["name"]).unwrap());
-		assert!(PLACES.journal_row(&db, &[7.into()]).unwrap().is_none());
+			serde_json::from_str(&NOTES.journal_row(&db, &["n1".into()]).unwrap().unwrap())
+				.unwrap();
+		assert_eq!(journal["links"][0]["id"], "h1");
+		NOTES.delete(&db, &["n1".into()]).unwrap();
+		assert!(NOTES.journal_row(&db, &["n1".into()]).unwrap().is_none());
 
+		db.execute_batch(CREATE).unwrap();
 		let setting = serde_json::json!({"key": "alarm.sound", "value": {"volume": 25}});
 		SETTINGS.upsert(&db, setting.as_object().unwrap()).unwrap();
 		assert_eq!(SETTINGS.select_all(&db).unwrap()[0]["value"]["volume"], 25);

@@ -1,9 +1,6 @@
 //! A UI can keep a document open while remote edits arrive. Its next save
 //! applies only the changes from what it last read, preserving unseen fields.
-use super::{
-	model::{self, Edit},
-	other, shared,
-};
+use super::{model, other, shared};
 use rusqlite::{Connection, OptionalExtension};
 use std::{
 	collections::BTreeMap,
@@ -47,25 +44,7 @@ pub(crate) fn prepare(
 	if current == baseline {
 		return Ok(desired.clone());
 	}
-	let edits = [
-		Edit {
-			id: "seed".into(),
-			document: key.into(),
-			before: None,
-			after: current,
-			clock: 1,
-			..Default::default()
-		},
-		Edit {
-			id: "save".into(),
-			document: key.into(),
-			before: baseline,
-			after: desired.clone(),
-			clock: 2,
-			..Default::default()
-		},
-	];
-	Ok(model::project(&edits).map_err(other)?.remove(key).flatten())
+	model::rebase(current, baseline, desired.clone()).map_err(other)
 }
 #[cfg(test)]
 mod tests {

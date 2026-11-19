@@ -15,6 +15,7 @@
 //! [`model`]'s `lineage`), then deleted here and on the server. Their IDs stay
 //! behind as tombstones for [`TOMBSTONE_LIFETIME`], so a stale copy arriving
 //! late is recognized.
+mod legacy;
 pub mod model;
 pub(crate) mod projection;
 mod rows;
@@ -32,8 +33,8 @@ use std::{
 };
 
 const TABLE: &str = "timeparagon_revisions_v1";
-/// The documents shared between devices. The rows of the synced settings
-/// tables are too (see [`rows`]); everything else stays local.
+/// The documents shared between devices. The rows of the synced tables are
+/// too (see [`rows`]); everything else stays local.
 const SHARED_KEYS: [&str; 7] = [
 	"habits",
 	"alarms",
@@ -248,6 +249,8 @@ pub fn enroll(path: &Path) -> io::Result<()> {
         CREATE TABLE IF NOT EXISTS timeparagon_sync_edits(id TEXT PRIMARY KEY, document TEXT NOT NULL, before_json TEXT, after_json TEXT, clock INTEGER NOT NULL, uploaded INTEGER NOT NULL DEFAULT 0);
         CREATE INDEX IF NOT EXISTS timeparagon_sync_edits_clock ON timeparagon_sync_edits(clock);").map_err(other)?;
 	install_snapshots(&tx).map_err(other)?;
+	// Here rather than in schema setup, since the worker may enroll first.
+	legacy::migrate(&tx, now())?;
 	let shared = shared_sql();
 	let enrolled = tx
 		.query_row(
@@ -469,6 +472,25 @@ fn apply(
 		if edit.document == "shared.todos" {
 			continue;
 		}
+		// Each device now gets its nights of sleep from Google. Those older
+		// devices still send are forgotten, here and on the server.
+		if legacy::is_sleep(&edit.document) {
+			let collision: bool = tx.query_row(
+				"SELECT EXISTS(
+				 SELECT 1 FROM timeparagon_sync_edits WHERE id=?1 AND document NOT GLOB 'sleep_nights:*'
+				 UNION ALL SELECT 1 FROM timeparagon_sync_snapshots WHERE id=?1 AND document NOT GLOB 'sleep_nights:*')",
+				[&edit.id],
+				|row| row.get(0),
+			).map_err(other)?;
+			if collision {
+				return Err(other("replication ID collision; original data retained"));
+			}
+			delete_row(&tx, &edit.id, false, at)?;
+			continue;
+		}
+		// Rows of the retired settings tables, from history or an old build.
+		let translated = legacy::translate(edit);
+		let edit = translated.as_ref().unwrap_or(edit);
 		if !shared(&edit.document) || edit.clock < 1 {
 			return Err(other("unsupported replicated record"));
 		}
@@ -1159,7 +1181,7 @@ mod tests {
 		(dir, path)
 	}
 	/// Plays the server: everything uploaded so far, as a sync cycle sends it.
-	fn send(path: &Path, server: &mut HashMap<String, Edit>) {
+	pub(super) fn send(path: &Path, server: &mut HashMap<String, Edit>) {
 		let applied = apply(path, &[], Some(&server.keys().cloned().collect()), now()).unwrap();
 		let pending = edits(&open(path).unwrap(), true).unwrap();
 		for edit in &pending {
@@ -1342,51 +1364,22 @@ mod tests {
 	}
 
 	#[test]
-	fn sleep_nights_replicate_between_devices_without_touching_settings() {
+	fn sleep_nights_stay_on_the_device() {
 		let (_a, desktop) = db();
 		let (_b, phone) = db();
 		let mut server = HashMap::new();
-		let night = |path: &Path| -> Option<(String, String)> {
-			open(path)
-				.unwrap()
-				.query_row(
-					"SELECT end_at,event FROM sleep_nights WHERE calendar_id='app' AND id='n1'",
-					[],
-					|r| Ok((r.get(0)?, r.get(1)?)),
-				)
-				.optional()
-				.unwrap()
-		};
-		let write = |path: &Path, sql: &str| open(path).unwrap().execute_batch(sql).unwrap();
-		write(
-			&desktop,
-			"INSERT INTO sleep_nights VALUES('app','n1','2030-11-04','2030-11-04T00:00:00Z','2030-11-04T08:00:00Z','{\"id\":\"n1\"}');",
-		);
+		open(&desktop)
+			.unwrap()
+			.execute_batch(
+				"INSERT INTO sleep_nights VALUES('app','n1','2030-11-04','2030-11-04T00:00:00Z','2030-11-04T08:00:00Z','{\"id\":\"n1\"}');
+				 UPDATE sleep_nights SET end_at='2030-11-04T09:00:00Z' WHERE id='n1';
+				 DELETE FROM sleep_nights WHERE id='n1';",
+			)
+			.unwrap();
 		send(&desktop, &mut server);
-		let remote: Vec<Edit> = server.values().cloned().collect();
-		assert!(apply(&phone, &remote, None, now()).unwrap().changed);
-		assert_eq!(
-			night(&phone),
-			Some(("2030-11-04T08:00:00Z".into(), "{\"id\":\"n1\"}".into()))
-		);
-		assert!(edits(&open(&phone).unwrap(), true).unwrap().is_empty());
-		// Nights are app data, not preferences: settings still load as before.
-		crate::settings::load::<crate::config::Config>(&phone, |_| {}).unwrap();
-
-		// A later change and a deletion follow.
-		write(
-			&phone,
-			"UPDATE sleep_nights SET end_at='2030-11-04T09:00:00Z' WHERE id='n1';",
-		);
-		send(&phone, &mut server);
-		let remote: Vec<Edit> = server.values().cloned().collect();
-		apply(&desktop, &remote, None, now()).unwrap();
-		assert_eq!(night(&desktop).unwrap().0, "2030-11-04T09:00:00Z");
-		write(&desktop, "DELETE FROM sleep_nights WHERE id='n1';");
-		send(&desktop, &mut server);
-		let remote: Vec<Edit> = server.values().cloned().collect();
-		apply(&phone, &remote, None, now()).unwrap();
-		assert_eq!(night(&phone), None);
+		assert!(server.is_empty());
+		assert!(history(&desktop).unwrap().is_empty());
+		assert!(!apply(&phone, &[], None, now()).unwrap().changed);
 	}
 	#[test]
 	fn note_metadata_replicates_updates_and_deletions() {
@@ -1531,10 +1524,10 @@ mod tests {
 				&history(&desktop)
 					.unwrap()
 					.iter()
-					.filter(|e| e.document.starts_with("places"))
+					.filter(|e| e.document.contains("travel.places/"))
 					.collect::<Vec<_>>()
 			),
-			"5 place edits"
+			"5 setting edits"
 		);
 	}
 

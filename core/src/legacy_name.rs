@@ -65,17 +65,16 @@ const SOURCE_IDS: [(&str, &str); 4] = [
 /// new ID. Runs after sync enrollment, so other devices receive the change.
 /// Idempotent.
 pub(crate) fn rename_source_ids(db: &Connection) -> rusqlite::Result<()> {
+	use crate::settings::mapping::SOURCES;
 	let tx = rusqlite::Transaction::new_unchecked(db, rusqlite::TransactionBehavior::Immediate)?;
 	for (old, new) in SOURCE_IDS {
+		let (old, new) = (format!("{SOURCES}/{old}"), format!("{SOURCES}/{new}"));
 		// Settings already made under the new ID win.
 		tx.execute(
-			"DELETE FROM calendar_sources WHERE id=?1 AND EXISTS (SELECT 1 FROM calendar_sources WHERE id=?2)",
+			"DELETE FROM settings WHERE key=?1 AND EXISTS (SELECT 1 FROM settings WHERE key=?2)",
 			params![old, new],
 		)?;
-		tx.execute(
-			"UPDATE calendar_sources SET id=?2 WHERE id=?1",
-			params![old, new],
-		)?;
+		tx.execute("UPDATE settings SET key=?2 WHERE key=?1", params![old, new])?;
 	}
 	tx.commit()
 }
@@ -124,27 +123,36 @@ mod tests {
 	fn moves_source_settings_to_the_new_ids() {
 		let db = Connection::open_in_memory().unwrap();
 		db.execute_batch(
-			"CREATE TABLE calendar_sources (id TEXT PRIMARY KEY, hidden INTEGER NOT NULL DEFAULT 0, position INTEGER, color TEXT);
-			 INSERT INTO calendar_sources VALUES('timeslay:habits', 1, 2, '#123456');
-			 INSERT INTO calendar_sources VALUES('timeslay:sleep', 1, 3, NULL);
-			 INSERT INTO calendar_sources VALUES('timeparagon:sleep', 0, 4, NULL);
-			 INSERT INTO calendar_sources VALUES('work', 0, 1, NULL);",
+			"CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+			 INSERT INTO settings VALUES('calendar.sources/timeslay:habits', '{\"hidden\":true,\"position\":2}');
+			 INSERT INTO settings VALUES('calendar.sources/timeslay:sleep', '{\"hidden\":true,\"position\":3}');
+			 INSERT INTO settings VALUES('calendar.sources/timeparagon:sleep', '{\"hidden\":false,\"position\":4}');
+			 INSERT INTO settings VALUES('calendar.sources/work', '{\"hidden\":false,\"position\":1}');",
 		)
 		.unwrap();
 		rename_source_ids(&db).unwrap();
-		let rows: Vec<(String, i64, i64)> = db
-			.prepare("SELECT id, hidden, position FROM calendar_sources ORDER BY position")
+		let rows: Vec<(String, String)> = db
+			.prepare("SELECT key, value FROM settings ORDER BY json_extract(value,'$.position')")
 			.unwrap()
-			.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+			.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
 			.unwrap()
 			.collect::<Result<_, _>>()
 			.unwrap();
 		assert_eq!(
 			rows,
 			[
-				("work".to_owned(), 0, 1),
-				("timeparagon:habits".to_owned(), 1, 2),
-				("timeparagon:sleep".to_owned(), 0, 4),
+				(
+					"calendar.sources/work".to_owned(),
+					r#"{"hidden":false,"position":1}"#.to_owned()
+				),
+				(
+					"calendar.sources/timeparagon:habits".to_owned(),
+					r#"{"hidden":true,"position":2}"#.to_owned()
+				),
+				(
+					"calendar.sources/timeparagon:sleep".to_owned(),
+					r#"{"hidden":false,"position":4}"#.to_owned()
+				),
 			]
 		);
 	}

@@ -1,11 +1,10 @@
 //! Settings: every preference both apps keep, in the local database.
 //!
 //! They used to be `config.toml`, one file per device. Now they are rows of
-//! the tables in [`schema`], most of them shared between devices by
-//! [`crate::database_sync`] like any other synced data. Those in
-//! `device_settings` describe this device (see [`mapping::DEVICE_SECTIONS`])
-//! and stay on it. The first start of this version imports `config.toml`
-//! (see [`import`]).
+//! the `settings` table, shared between devices by [`crate::database_sync`]
+//! like any other synced data. Those in `device_settings` describe this device
+//! (see [`mapping::DEVICE_SECTIONS`]) and stay on it. The first start of this
+//! version imports `config.toml` (see [`import`]).
 //!
 //! The apps keep working with their `Config` types. This module turns one
 //! into rows and back, through the JSON tree serde gives it, so the desktop's
@@ -14,14 +13,14 @@
 //! # Saving only what changed
 //!
 //! A save is given what was loaded as well as what is wanted, and writes only
-//! the rows (and, within a row, only the columns) that differ between the two.
-//! Settings another device or process changed in the meantime are left as
-//! they are, rather than put back to what this process last saw. A value
-//! at its default is not stored at all, so a device that never touched a
-//! setting cannot override another device's choice.
+//! the rows that differ between the two, and of those only what changed
+//! within the value. Settings another device or process changed in the
+//! meantime are left as they are, rather than put back to what this process
+//! last saw. A value at its default is not stored at all, so a device that
+//! never touched a setting cannot override another device's choice.
 
 mod import;
-mod mapping;
+pub(crate) mod mapping;
 pub(crate) mod schema;
 
 use std::collections::BTreeSet;
@@ -154,28 +153,58 @@ fn stored_rows(tree: &Value, defaults: &Rows) -> Rows {
 	mapping::without_defaults(mapping::rows(tree), defaults)
 }
 
-/// Writes the rows that differ between `before` and `after`. Of a row that
-/// is in both, only the columns that differ are written.
-fn write_rows(tx: &Connection, before: &Rows, after: &Rows) -> rusqlite::Result<()> {
+/// Stores the row `key` of the settings table `table`.
+pub(super) fn put(tx: &Connection, table: &str, key: &str, value: &Value) -> io::Result<()> {
+	let mut row = Map::new();
+	row.insert("key".into(), key.into());
+	row.insert("value".into(), value.clone());
+	mapping::table(table).upsert(tx, &row).map_err(other)
+}
+
+/// The stored value of the row `key` of the settings table `table`.
+fn stored(tx: &Connection, table: &str, key: &str) -> io::Result<Option<Value>> {
+	let text: Option<String> = tx
+		.query_row(
+			&format!("SELECT value FROM {table} WHERE key=?1"),
+			[key],
+			|row| row.get(0),
+		)
+		.optional()
+		.map_err(other)?;
+	Ok(text.and_then(|text| serde_json::from_str(&text).ok()))
+}
+
+/// Writes the rows that differ between `before` and `after`. A row in both
+/// gets only what changed between the two, merged into what is stored now
+/// the way sync merges, so another process's change to a different field of
+/// the same item (a place, say) is kept.
+fn write_rows(tx: &Connection, before: &Rows, after: &Rows) -> io::Result<()> {
 	let keys: BTreeSet<_> = before.keys().chain(after.keys()).collect();
 	for key in keys {
-		let table = schema::table(key.0).expect("rows are only made for settings tables");
+		let (table, name) = (key.0, key.1.as_str());
 		match (before.get(key), after.get(key)) {
 			(before, after) if before == after => {}
 			(Some(before), Some(after)) => {
-				let columns: Vec<&str> = table
-					.columns
-					.iter()
-					.filter(|column| before.get(column.name) != after.get(column.name))
-					.map(|column| column.name)
-					.collect();
-				// Gone meanwhile, deleted elsewhere: what was wanted wins.
-				if !table.update(tx, after, &columns)? {
-					table.upsert(tx, after)?;
-				}
+				let value = match stored(tx, table, name)? {
+					Some(current) => crate::database_sync::model::rebase(
+						Some(current.to_string()),
+						Some(before.to_string()),
+						Some(after.to_string()),
+					)
+					.map_err(invalid)?
+					.map(|text| serde_json::from_str(&text))
+					.transpose()
+					.map_err(invalid)?
+					.unwrap_or_else(|| after.clone()),
+					// Gone meanwhile, deleted elsewhere: what was wanted wins.
+					None => after.clone(),
+				};
+				put(tx, table, name, &value)?;
 			}
-			(_, Some(after)) => table.upsert(tx, after)?,
-			(Some(before), None) => table.delete(tx, &table.key_of(before))?,
+			(_, Some(after)) => put(tx, table, name, after)?,
+			(Some(_), None) => mapping::table(table)
+				.delete(tx, &[name.into()])
+				.map_err(other)?,
 			(None, None) => unreachable!("the key came from one of the two"),
 		}
 	}
@@ -195,8 +224,7 @@ fn write_tree(
 		tx,
 		&stored_rows(before, &defaults),
 		&stored_rows(after, &defaults),
-	)
-	.map_err(other)?;
+	)?;
 	let empty = Map::new();
 	let before = before.as_object().unwrap_or(&empty);
 	let after = after.as_object().unwrap_or(&empty);
@@ -388,7 +416,7 @@ mod tests {
 	}
 
 	#[test]
-	fn settings_round_trip_through_their_tables() {
+	fn settings_round_trip_through_their_rows() {
 		use crate::calendar::sleep;
 		let (_directory, path) = database();
 		let from = chrono::NaiveDate::from_ymd_opt(2030, 11, 4).unwrap();
@@ -422,10 +450,20 @@ mod tests {
 		let loaded: Loaded<Config> = load(&path, |_| {}).unwrap();
 		assert!(loaded.problems.is_empty(), "{:?}", loaded.problems);
 		assert_eq!(loaded.value, wanted);
-		assert_eq!(count(&path, "sleep_schedule"), 1);
-		assert_eq!(count(&path, "sleep_schedule_changes"), 1);
-		assert_eq!(count(&path, "calendar_sources"), 4);
-		assert_eq!(count(&path, "reminders"), 1);
+		let items = |path_prefix: &str| {
+			let mut db = Database::open(&path).unwrap();
+			db.connection()
+				.query_row(
+					"SELECT count(*) FROM settings WHERE key GLOB ?1",
+					[format!("{path_prefix}/*")],
+					|row| row.get::<_, i64>(0),
+				)
+				.unwrap()
+		};
+		assert_eq!(items("calendar.sleep_schedule"), 1, "only the changed day");
+		assert_eq!(items("calendar.sleep_schedule_changes"), 1);
+		assert_eq!(items("calendar.sources"), 4);
+		assert_eq!(items("travel.modes"), 1);
 		assert_eq!(count(&path, "device_settings"), 1);
 		assert_eq!(
 			device_value(&path, "notes.directory").unwrap(),

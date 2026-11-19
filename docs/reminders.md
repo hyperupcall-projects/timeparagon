@@ -64,16 +64,16 @@ Reminder settings are shared between devices (see
 | `reminders.enabled` | `false` | The master switch |
 | `reminders.use_calendar_reminders` | `true` | Use each event's Google reminders instead of the `events` lead time |
 
-Each kind of reminder is a row of the `reminders` table. A kind with no row
-uses its defaults (enabled, with 10 minutes for events, 30 for sleep, 5 for
-travel and 0 for the rest, and the device's default sound):
+Each kind of reminder is a setting too, `reminders.<category>`. A kind with
+no row uses its defaults (enabled, with 10 minutes for events, 30 for sleep,
+5 for travel and 0 for the rest, and the device's default sound):
 
-| `category` | `enabled` | `minutes_before` | `sound` (JSON) |
-| --- | --- | --- | --- |
-| `events` | 1 | 10 | `{"kind":"default"}` |
-| `tasks` | 1 | 0 | `{"kind":"tone","tone":"kalimba"}` |
-| `sleep` | 1 | 30 | `{"kind":"device","name":"Ocean · Bell","uri":"/usr/share/sounds/ocean/stereo/bell.oga"}` |
-| `habits` | 1 | 0 | `{"kind":"silent"}` |
+| Key | Value |
+| --- | --- |
+| `reminders.events` | `{"enabled":true,"minutes_before":10,"sound":{"kind":"default"}}` |
+| `reminders.tasks` | `{"enabled":true,"minutes_before":0,"sound":{"kind":"tone","tone":"kalimba"}}` |
+| `reminders.sleep` | `{"enabled":true,"minutes_before":30,"sound":{"kind":"device","name":"Ocean · Bell","uri":"/usr/share/sounds/ocean/stereo/bell.oga"}}` |
+| `reminders.habits` | `{"enabled":true,"minutes_before":0,"sound":{"kind":"silent"}}` |
 
 `category` is one of `events`, `tasks`, `time_blocks`, `habits`, `sleep` and
 `travel`.

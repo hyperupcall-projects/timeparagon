@@ -38,12 +38,13 @@ The schema version is stored in `PRAGMA user_version`.
 | `user_version` | Meaning |
 | --- | --- |
 | `0` | New file. `Database::open` creates the schema. |
-| `2` through `8` | Upgraded to 9 on open: see below. |
+| `2` through `9` | Upgraded to 10 on open: see below. |
 | `6` | Like 5, with the app's tables, indexes and triggers prefixed `timeparagon_` instead of `timeslay_`, and the built-in calendar sources' IDs prefixed `timeparagon:` instead of `timeslay:`. |
 | `7` | Adds the synced `notes` metadata table. |
 | `8` | Creates the incremental Google sync cache during upgrade and reinstalls synced data tables and triggers. |
-| `9` | Current (`task_db::SCHEMA_VERSION`). Removes monthly view snapshots, separates confirmed tasks from desired edits, and tracks changes to all calendar inputs. |
-| anything else | Refused: `Unsupported database schema N; expected 9`. |
+| `9` | Removes monthly view snapshots, separates confirmed tasks from desired edits, and tracks changes to all calendar inputs. |
+| `10` | Current (`task_db::SCHEMA_VERSION`). Keeps every shared setting in `settings`, and no longer replicates `sleep_nights`. |
+| anything else | Refused: `Unsupported database schema N; expected 10`. |
 
 Builds from before version 5 refuse a version 5 file, so every TimeParagon
 process on a device (panel, dock, shortcut daemon, browser host) has to be
@@ -55,6 +56,31 @@ Every statement in setup is idempotent (`CREATE … IF NOT EXISTS`,
 processes setting up at once, or a crash halfway through, cause no harm. Once a
 file is stamped with the current version, setup is skipped, because the apps
 open the database many times a minute.
+
+**9 → 10** (`database_sync::legacy`, run by sync enrollment, so also when
+the sync worker opens the file first) retires the nine tables that each held
+one kind of setting (`calendar_sources`, `sleep_schedule`,
+`sleep_schedule_changes`, `weekly_task_order`, `places`, `event_places`,
+`travel_modes`, `travel_routes`, `reminders`). Each row becomes a `settings`
+row named as in [Settings](#settings) (`places` row 17 becomes
+`travel.places/17`), and the tables and their triggers are dropped. The
+journal's edits to those rows are renamed and reshaped the same way, keeping
+their IDs, clocks and upload state, so no history is lost and nothing is sent
+again. Edits in the old form that arrive later, from the server's history or
+from a device still on an older build, are translated as they arrive. The
+moved rows are not journaled again: their history already produces them.
+If a legacy JSON cell is damaged, this migration rolls back and retains the
+original tables and history so the cell can be repaired before retrying.
+
+It also stops replicating `sleep_nights`: their journal triggers are dropped
+and their history is deleted, here and (through tombstones) on the server.
+Nights still arriving from older devices are dropped the same way. Each
+device keeps the nights it has and refreshes them from Google.
+
+Builds expecting schema 9 refuse schema 10, so upgrade the device's app
+processes together, and upgrade every syncing device. Incoming edits from an
+older device are translated, but older builds cannot reliably consume the new
+settings history or snapshots.
 
 **8 → 9** drops `calendar_months` and the `calendar_task_snapshot` marker.
 Confirmed Google Tasks are rebuilt from `google_sync_tasks`; pending edits,
@@ -102,7 +128,7 @@ erDiagram
     documents ||--o{ timeparagon_sync_edits : "journaled by trigger"
     timeparagon_sync_snapshots ||--o{ timeparagon_sync_edits : "folds (JSON list)"
     timeparagon_sync_folded }o--|| timeparagon_sync_edits : "tombstone of"
-    settings_tables ||--o{ timeparagon_sync_edits : "journaled by trigger"
+    settings ||--o{ timeparagon_sync_edits : "journaled by trigger"
 
     tasks {
         INTEGER id PK
@@ -167,8 +193,9 @@ erDiagram
         INTEGER remote_deleted
         INTEGER folded_at
     }
-    settings_tables {
-        TEXT see_Settings "settings, places, reminders, …"
+    settings {
+        TEXT key PK "section.field or section.field/item"
+        TEXT value "JSON"
     }
 ```
 
@@ -184,12 +211,12 @@ The tables fall into six groups:
 | [Documents](#documents) | `documents` | `task_db::Database::set_up` |
 | [Google cache](#google-cache) | `google_sync_events`, `google_task_records`, `google_sync_windows` | `task_db::Database::set_up` |
 | [Google writes](#google-writes) | `google_entities`, `google_id_map`, `google_task_backend_state` | `task_db::Database::set_up` |
-| [Settings](#settings) | `settings`, `device_settings`, `calendar_sources`, `sleep_schedule`, `sleep_schedule_changes`, `weekly_task_order`, `places`, `event_places`, `travel_modes`, `travel_routes`, `reminders` | `settings::schema::CREATE`, from `task_db::Database::set_up` |
+| [Settings](#settings) | `settings`, `device_settings` | `settings::schema::CREATE`, from `task_db::Database::set_up` |
 | [Change detection](#change-detection) | `timeparagon_change_counters` + triggers | `local_changes::install` |
 | [Device sync](#device-sync-turso) | `timeparagon_sync_control`, `timeparagon_sync_edits`, `timeparagon_sync_snapshots`, `timeparagon_sync_folded` + triggers | `database_sync::enroll`, `database_sync::install_snapshots` |
 
-None of the Google tables are replicated between devices. Six `documents`
-rows and the rows of every settings table but `device_settings` are. See
+None of the Google tables, nor `sleep_nights`, are replicated between
+devices. Seven `documents` rows and the rows of `settings` and `notes` are. See
 [What is shared between devices](./data-model.md#what-is-shared-between-devices).
 
 ---
@@ -504,79 +531,46 @@ described once in `settings::schema`, which the settings code and sync both
 use; a test checks the description against the tables created.
 
 ```sql
--- One value each, named "section.field". Only values that differ from the
--- built-in default are stored. Shared.
+-- Named "section.field", or "section.field/item" for an item of a
+-- collection. Only values that differ from the built-in default are stored.
+-- Shared.
 CREATE TABLE settings (
-  key   TEXT PRIMARY KEY,        -- "calendar.weekly_day_width"
+  key   TEXT PRIMARY KEY,        -- "calendar.weekly_day_width", "travel.places/1730000000000"
   value TEXT NOT NULL            -- JSON: 200, "Ocean", {"volume":70,…}
 );
 -- The same, for what describes this device. Never leaves it.
 CREATE TABLE device_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-
-CREATE TABLE calendar_sources (
-  id       TEXT PRIMARY KEY,           -- Google calendar ID, "tasks:<list>", "tasks:", "timeparagon:habits", …
-  hidden   INTEGER NOT NULL DEFAULT 0, -- switched off in the calendar menu
-  position INTEGER,                    -- left-to-right order of overlapping events; NULL = unordered
-  color    TEXT                        -- "#RRGGBB" instead of the source's own; NULL = its own
-);
-CREATE TABLE sleep_schedule (
-  weekday INTEGER PRIMARY KEY CHECK (weekday BETWEEN 0 AND 6), -- 0 = Monday: the night ending that day
-  bedtime TEXT NOT NULL,         -- "HH:MM:SS"
-  wakeup  TEXT NOT NULL
-);
-CREATE TABLE sleep_schedule_changes (
-  from_date        TEXT PRIMARY KEY, -- "YYYY-MM-DD": the first night it applies to; its weekday is the one changed
-  previous_bedtime TEXT NOT NULL,    -- the times before it, for earlier nights
-  previous_wakeup  TEXT NOT NULL,
-  bedtime          TEXT NOT NULL,
-  wakeup           TEXT NOT NULL
-);
-CREATE TABLE weekly_task_order (
-  day   TEXT PRIMARY KEY,        -- a column of the week board
-  cards TEXT NOT NULL            -- JSON array of card IDs, in order
-);
-CREATE TABLE places (
-  id          INTEGER PRIMARY KEY,  -- ms since the epoch when saved; what tasks refer to
-  name        TEXT NOT NULL,
-  address     TEXT NOT NULL DEFAULT '',
-  provider_id TEXT NOT NULL DEFAULT '', -- Mapbox's ID (older: Google's)
-  lat         REAL NOT NULL,
-  lng         REAL NOT NULL,
-  favorite    INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE event_places (event_id TEXT PRIMARY KEY, place_id INTEGER NOT NULL);
-CREATE TABLE travel_modes (
-  from_place INTEGER NOT NULL, to_place INTEGER NOT NULL,
-  mode       TEXT NOT NULL,      -- "walk" / "bike" / "car"
-  PRIMARY KEY (from_place, to_place)
-);
-CREATE TABLE travel_routes (
-  from_place INTEGER NOT NULL, to_place INTEGER NOT NULL, mode TEXT NOT NULL,
-  seconds    INTEGER NOT NULL, meters INTEGER NOT NULL,
-  PRIMARY KEY (from_place, to_place, mode)
-);
-CREATE TABLE reminders (
-  category       TEXT PRIMARY KEY, -- events, tasks, time_blocks, habits, sleep, travel
-  enabled        INTEGER NOT NULL,
-  minutes_before INTEGER NOT NULL,
-  sound          TEXT NOT NULL     -- JSON: reminders::Sound
-);
 ```
 
-- **Absent means default.** Neither a setting nor a `sleep_schedule` or
-  `reminders` row is stored while it holds the default.
-- **References are not enforced.** `place_id`, `from_place`, `to_place` and
-  the `travel.home` setting name `places.id`, but nothing stops the place
-  going: sync must be able to store whatever two devices did at once.
-  Readers skip a place that is gone.
-- **No `CHECK` on values** other than the weekday's range, so a value a newer
-  build adds (a reminder kind, say) syncs to an older one instead of
-  stopping its sync. Code ignores what it does not know.
-- **A column added later needs a `DEFAULT`**, since rows synced from an
-  older build do not have it.
+A collection whose items have an identity is stored one row per item, so
+devices merge it item by item (`settings::mapping::COLLECTIONS`). The item's
+name is what identifies it, its parts joined by `/`, and the value is the
+item as the apps' `Config` holds it:
+
+| Key | Value |
+| --- | --- |
+| `calendar.sources/<id>` | `{"hidden":true,"position":2,"color":"#RRGGBB"}` for a Google calendar, `tasks:<list>`, `tasks:` or `timeparagon:habits`, …: whether it is switched off in the calendar menu, its left-to-right order for overlapping events (`null` = unordered) and its color (`null` = its own). The apps' `calendar.disabled`, `source_order`, `task_colors` and `calendar_colors` |
+| `calendar.sleep_schedule/<weekday>` | `{"bedtime":"23:00:00","wakeup":"07:00:00"}`. `0` is Monday: the night ending that day. A weekday at the default has no row |
+| `calendar.sleep_schedule_changes/<from>` | `{"from":"YYYY-MM-DD","previous":{…},"times":{…}}`: from the night `from` on, its weekday has `times` instead of `previous` |
+| `calendar.weekly_task_order/<day>` | The card IDs in a column of the week board, in order |
+| `travel.places/<id>` | `{"id","name","address","place_id","lat","lng","favorite"}`. `id` is ms since the epoch when saved, and what tasks refer to; `place_id` is Mapbox's ID (older: Google's) |
+| `travel.event_places/<event id>` | The ID of the event's place |
+| `travel.modes/<from>/<to>` | `{"from","to","mode"}`, `mode` being `walk`, `bike` or `car` |
+| `travel.routes/<from>/<to>/<mode>` | `{"from","to","mode","seconds","meters"}` |
+
+Each kind of reminder is an ordinary setting, `reminders.<kind>`.
+
+- **Absent means default.** No row is stored for a value, or an item, that
+  holds the default.
+- **References are not enforced.** Travel items and the `travel.home`
+  setting name places by ID, but nothing stops the place going: sync must be
+  able to store whatever two devices did at once. Readers skip a place that
+  is gone.
 - **Write through `settings`** (`save` with a baseline, or `update`). It
-  writes only what changed, in one `IMMEDIATE` transaction. JSON that does not
-  parse cannot be written by the apps at all: the journal triggers refuse it.
+  writes only what changed, in one `IMMEDIATE` transaction, and merges a
+  change into the stored value as sync would, so another process's edit to a
+  different field of the same item is kept. JSON that does not parse cannot
+  be written by the apps at all: the journal triggers refuse it.
 
 ## Change detection
 
@@ -598,7 +592,7 @@ CREATE TABLE timeparagon_change_counters (
 | --- | --- |
 | `doc:<key>` | Any `INSERT`/`UPDATE`/`DELETE` on `documents` for that key |
 | `google.overlay` | Any change to `google_entities` or `google_id_map` (so a write being answered unlocks its item everywhere) |
-| `settings` | Any change to a [settings table](#settings), by an app or by sync |
+| `settings` | Any change to `settings` or `device_settings`, by an app or by sync |
 
 `Counters::config` is `settings` plus the `doc:` counters of the four
 `shared.*` documents: it moves whenever anything the apps' `Config` holds
@@ -628,7 +622,7 @@ knows nothing about them still increments the counters.
 
 ## Device sync (Turso)
 
-Six documents and the rows of the synced settings tables are shared between
+Seven documents and the rows of `settings` and `notes` are shared between
 devices through a Turso sync server (the `database_sync.url` device setting).
 Sync works as an append-only **journal of whole-document edits**, a settings
 row counting as a document of its own (see [Settings rows](#settings-rows)). Each device merges the journal
@@ -710,22 +704,25 @@ keeps the local data.
 
 ### Settings rows
 
-Each row of a synced settings table is a document of its own in the journal,
-named after its table and primary key as a JSON array:
+Each row of a synced table (`settings`, `notes`) is a document of its own in
+the journal, named after its table and primary key as a JSON array:
 
 | Document | Row |
 | --- | --- |
 | `settings:["calendar.weekly_day_width"]` | `{"key":"calendar.weekly_day_width","value":200}` |
-| `places:[1730000000000]` | `{"id":1730000000000,"name":"Home",…,"favorite":0}` |
-| `travel_modes:[1,2]` | `{"from_place":1,"to_place":2,"mode":"car"}` |
+| `settings:["travel.places/1730000000000"]` | `{"key":"travel.places/1730000000000","value":{"id":1730000000000,"name":"Home",…}}` |
+| `notes:["n1"]` | `{"id":"n1","color":"rose","links":[…]}` |
 
 The value is the row as `json_object(…)` of its columns, with JSON columns
-(`settings.value`, `weekly_task_order.cards`, `reminders.sound`) embedded as
-JSON rather than as text. So the [merge rules](#merge-rules) apply unchanged:
-concurrent edits to different columns of one row both survive (and to
-different fields inside a JSON value), a deleted row stays deleted whatever
-was edited in it meanwhile, and each row is snapshotted and compacted on its
-own.
+(`settings.value`, `notes.links`) embedded as JSON rather than as text. So the
+[merge rules](#merge-rules) apply unchanged: concurrent edits to different
+fields of one value both survive (a place renamed on one device and starred
+on another), a deleted row stays deleted whatever was edited in it
+meanwhile, and each row is snapshotted and compacted on its own.
+
+Builds before schema 10 named the rows of their settings tables the same way
+(`places:[1730000000000]`). Those edits are translated to `settings` rows
+when they are found or arrive (see the [upgrade to 10](#versioning)).
 
 Four triggers per table journal what the apps do (`database_sync::rows`):
 `timeparagon_sync_<table>_insert`, `_update` (when the row changed),

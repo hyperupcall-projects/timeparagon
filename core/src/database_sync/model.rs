@@ -289,6 +289,32 @@ pub fn project(edits: &[Edit]) -> Result<BTreeMap<String, Option<String>>, serde
 		.collect())
 }
 
+/// `current` with the changes from `before` to `after` applied, merged the way
+/// sync merges concurrent edits. For a save made from a view that may since
+/// have changed: what the save did not touch stays as `current` has it.
+pub fn rebase(
+	current: Option<String>,
+	before: Option<String>,
+	after: Option<String>,
+) -> Result<Option<String>, serde_json::Error> {
+	let edits = [
+		Edit {
+			id: "current".into(),
+			after: current,
+			clock: 1,
+			..Default::default()
+		},
+		Edit {
+			id: "save".into(),
+			before,
+			after,
+			clock: 2,
+			..Default::default()
+		},
+	];
+	Ok(project(&edits)?.remove("").flatten())
+}
+
 /// Plans a snapshot of `document` that folds its oldest edits, leaving the
 /// newest `keep` as they are. Only a run of edits from the oldest on that all
 /// satisfy `foldable` is folded, so an edit not yet on the server is never

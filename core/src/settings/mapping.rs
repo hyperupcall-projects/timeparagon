@@ -7,10 +7,10 @@
 //!
 //! A field of the tree is kept in one of three places:
 //!
-//! * a table of its own, for collections whose items have an identity
-//!   (places, reminders, the sleep schedule, …), so that devices merge them
-//!   item by item;
 //! * a [`SETTINGS`] or [`DEVICE_SETTINGS`] row named `section.field`;
+//! * for a collection whose items have an identity (places, the sleep
+//!   schedule, …), one [`SETTINGS`] row per item, named `section.field/item`
+//!   (see [`COLLECTIONS`]), so that devices merge them item by item;
 //! * a shared document ([`DOCUMENT_SECTIONS`], and the notepad's text), as
 //!   before this module existed. See [`crate::shared_data`].
 
@@ -19,13 +19,10 @@ use std::collections::BTreeMap;
 use rusqlite::Connection;
 use serde_json::{Map, Value, json};
 
-use super::schema::{
-	self, CALENDAR_SOURCES, DEVICE_SETTINGS, EVENT_PLACES, PLACES, REMINDERS, SETTINGS,
-	SLEEP_SCHEDULE, SLEEP_SCHEDULE_CHANGES, TRAVEL_MODES, TRAVEL_ROUTES, Table, WEEKLY_TASK_ORDER,
-};
+use super::schema::{DEVICE_SETTINGS, SETTINGS, TABLES, Table};
 
-/// Rows of the settings tables, by table and primary key (as JSON text).
-pub(crate) type Rows = BTreeMap<(&'static str, String), Map<String, Value>>;
+/// Rows of the settings tables: their values, by table and key.
+pub(crate) type Rows = BTreeMap<(&'static str, String), Value>;
 
 /// Whole sections kept as shared documents rather than in these tables.
 pub(crate) const DOCUMENT_SECTIONS: [&str; 4] = ["brain_dump", "projects", "task_work", "routines"];
@@ -50,16 +47,76 @@ pub(crate) fn device_local(section: &str, field: &str) -> bool {
 	DEVICE_SECTIONS.contains(&section) || (section, field) == ("notepad", "font_size")
 }
 
-fn insert(rows: &mut Rows, table: &'static Table, row: Map<String, Value>) {
-	let key = Value::Array(table.key_of(&row)).to_string();
-	rows.insert((table.name, key), row);
+/// How the items of a collection are named.
+enum Items {
+	/// A list whose items are named by these fields.
+	Keyed(&'static [&'static str]),
+	/// An object, whose entries are named by their keys.
+	Entries,
+	/// The sleep schedule: seven items named by position, Monday first. A
+	/// day without a row has the default times.
+	Weekdays,
 }
 
-fn row(fields: Value) -> Map<String, Value> {
-	match fields {
-		Value::Object(fields) => fields,
-		_ => Map::new(),
-	}
+struct Collection {
+	path: &'static str,
+	items: Items,
+}
+
+/// Fields stored one row per item.
+const COLLECTIONS: [Collection; 7] = [
+	Collection {
+		path: "calendar.sleep_schedule",
+		items: Items::Weekdays,
+	},
+	Collection {
+		path: "calendar.sleep_schedule_changes",
+		items: Items::Keyed(&["from"]),
+	},
+	Collection {
+		path: "calendar.weekly_task_order",
+		items: Items::Entries,
+	},
+	Collection {
+		path: "travel.places",
+		items: Items::Keyed(&["id"]),
+	},
+	Collection {
+		path: "travel.event_places",
+		items: Items::Entries,
+	},
+	Collection {
+		path: "travel.modes",
+		items: Items::Keyed(&["from", "to"]),
+	},
+	Collection {
+		path: "travel.routes",
+		items: Items::Keyed(&["from", "to", "mode"]),
+	},
+];
+
+/// One row per calendar, task list or TimeParagon source that the user hid,
+/// ordered or colored, named `calendar.sources/<id>`: see
+/// [`calendar_sources`].
+pub(crate) const SOURCES: &str = "calendar.sources";
+
+/// The fields of the tree that [`SOURCES`] holds.
+const SOURCE_FIELDS: [&str; 4] = [
+	"calendar.disabled",
+	"calendar.source_order",
+	"calendar.task_colors",
+	"calendar.calendar_colors",
+];
+
+/// An item's name from the values that identify it, joined by `/`.
+pub(crate) fn item_name(key: &[Value]) -> String {
+	key.iter()
+		.map(|part| {
+			part.as_str()
+				.map_or_else(|| part.to_string(), str::to_owned)
+		})
+		.collect::<Vec<_>>()
+		.join("/")
 }
 
 /// A field that is present and not null.
@@ -67,7 +124,83 @@ fn field<'a>(value: &'a Value, name: &str) -> Option<&'a Value> {
 	value.get(name).filter(|value| !value.is_null())
 }
 
-/// The rows that hold `tree`. Fields of the tree in no table and in no
+impl Collection {
+	fn rows(&self, value: &Value, rows: &mut Rows) {
+		let mut add = |name: String, item: &Value| {
+			if !item.is_null() {
+				rows.insert(
+					(SETTINGS.name, format!("{}/{name}", self.path)),
+					item.clone(),
+				);
+			}
+		};
+		match self.items {
+			Items::Keyed(fields) => {
+				for item in value.as_array().into_iter().flatten() {
+					let key: Option<Vec<Value>> = fields
+						.iter()
+						.map(|name| field(item, name).cloned())
+						.collect();
+					if let Some(key) = key {
+						add(item_name(&key), item);
+					}
+				}
+			}
+			Items::Entries => {
+				for (name, item) in value.as_object().into_iter().flatten() {
+					add(name.clone(), item);
+				}
+			}
+			Items::Weekdays => {
+				for (day, item) in value.as_array().into_iter().flatten().enumerate().take(7) {
+					add(day.to_string(), item);
+				}
+			}
+		}
+	}
+
+	/// The field, from its items by name.
+	fn tree(&self, items: &[(&str, &Value)]) -> Value {
+		match self.items {
+			Items::Keyed(fields) => {
+				// Numbers in numeric order, and text in text order.
+				let order = |item: &Value| -> Vec<(Option<u64>, Option<String>)> {
+					fields
+						.iter()
+						.map(|name| {
+							let part = item.get(*name);
+							(
+								part.and_then(Value::as_u64),
+								part.and_then(Value::as_str).map(str::to_owned),
+							)
+						})
+						.collect()
+				};
+				let mut list: Vec<Value> = items.iter().map(|(_, item)| (*item).clone()).collect();
+				list.sort_by_cached_key(order);
+				Value::Array(list)
+			}
+			Items::Entries => Value::Object(
+				items
+					.iter()
+					.map(|(name, item)| ((*name).to_owned(), (*item).clone()))
+					.collect(),
+			),
+			Items::Weekdays => {
+				let default = json!(crate::calendar::sleep::Times::default());
+				let days = (0..7).map(|day| {
+					items
+						.iter()
+						.find(|(name, _)| name.parse() == Ok(day))
+						.map_or_else(|| default.clone(), |(_, item)| (*item).clone())
+				});
+				Value::Array(days.collect())
+			}
+		}
+	}
+}
+
+/// The rows that hold `tree`. Fields of the tree in no collection and in no
 /// document become settings, so nothing in it is lost.
 pub(crate) fn rows(tree: &Value) -> Rows {
 	let mut rows = Rows::new();
@@ -83,7 +216,11 @@ pub(crate) fn rows(tree: &Value) -> Rows {
 			continue;
 		};
 		for (name, value) in fields {
-			if !table_field(&mut rows, section, name, value) {
+			let path = format!("{section}.{name}");
+			if let Some(collection) = COLLECTIONS.iter().find(|c| c.path == path) {
+				collection.rows(value, &mut rows);
+			// The notepad's text is a shared document; see `shared_data`.
+			} else if path != "notepad.text" && !SOURCE_FIELDS.contains(&path.as_str()) {
 				setting(&mut rows, section, Some(name), value);
 			}
 		}
@@ -109,124 +246,11 @@ fn setting(rows: &mut Rows, section: &str, name: Option<&str>, value: &Value) {
 	} else {
 		&SETTINGS
 	};
-	insert(rows, table, row(json!({"key": key, "value": value})));
+	rows.insert((table.name, key), value.clone());
 }
 
-/// Adds the rows of a field that has a table of its own, and says whether it
-/// had one.
-fn table_field(rows: &mut Rows, section: &str, name: &str, value: &Value) -> bool {
-	let empty = Vec::new();
-	let items = value.as_array().unwrap_or(&empty);
-	match (section, name) {
-		// A shared document; see `shared_data`.
-		("notepad", "text") => {}
-		// See `calendar_sources`.
-		("calendar", "disabled" | "source_order" | "task_colors" | "calendar_colors") => {}
-		("calendar", "sleep_schedule") => {
-			for (weekday, times) in items.iter().enumerate() {
-				if let (Some(bedtime), Some(wakeup)) =
-					(field(times, "bedtime"), field(times, "wakeup"))
-				{
-					let fields = json!({"weekday": weekday, "bedtime": bedtime, "wakeup": wakeup});
-					insert(rows, &SLEEP_SCHEDULE, row(fields));
-				}
-			}
-		}
-		("calendar", "sleep_schedule_changes") => {
-			for change in items {
-				let times = |part: &str, which: &str| {
-					change
-						.get(part)
-						.and_then(|times| field(times, which))
-						.cloned()
-				};
-				if let (Some(from), Some(pb), Some(pw), Some(b), Some(w)) = (
-					field(change, "from"),
-					times("previous", "bedtime"),
-					times("previous", "wakeup"),
-					times("times", "bedtime"),
-					times("times", "wakeup"),
-				) {
-					let fields = json!({"from_date": from, "previous_bedtime": pb,
-                        "previous_wakeup": pw, "bedtime": b, "wakeup": w});
-					insert(rows, &SLEEP_SCHEDULE_CHANGES, row(fields));
-				}
-			}
-		}
-		("calendar", "weekly_task_order") => {
-			for (day, cards) in value.as_object().into_iter().flatten() {
-				insert(
-					rows,
-					&WEEKLY_TASK_ORDER,
-					row(json!({"day": day, "cards": cards})),
-				);
-			}
-		}
-		("travel", "places") => {
-			for place in items {
-				if let (Some(id), Some(name), Some(lat), Some(lng)) = (
-					field(place, "id"),
-					field(place, "name"),
-					field(place, "lat"),
-					field(place, "lng"),
-				) {
-					let text =
-						|name: &str| field(place, name).cloned().unwrap_or_else(|| "".into());
-					let fields = json!({"id": id, "name": name, "address": text("address"),
-                        "provider_id": text("place_id"), "lat": lat, "lng": lng,
-                        "favorite": field(place, "favorite").and_then(Value::as_bool).unwrap_or(false)});
-					insert(rows, &PLACES, row(fields));
-				}
-			}
-		}
-		("travel", "event_places") => {
-			for (event, place) in value.as_object().into_iter().flatten() {
-				let fields = json!({"event_id": event, "place_id": place});
-				insert(rows, &EVENT_PLACES, row(fields));
-			}
-		}
-		("travel", "modes") => {
-			for trip in items {
-				if let (Some(from), Some(to), Some(mode)) =
-					(field(trip, "from"), field(trip, "to"), field(trip, "mode"))
-				{
-					let fields = json!({"from_place": from, "to_place": to, "mode": mode});
-					insert(rows, &TRAVEL_MODES, row(fields));
-				}
-			}
-		}
-		("travel", "routes") => {
-			for trip in items {
-				if let (Some(from), Some(to), Some(mode), Some(seconds), Some(meters)) = (
-					field(trip, "from"),
-					field(trip, "to"),
-					field(trip, "mode"),
-					field(trip, "seconds"),
-					field(trip, "meters"),
-				) {
-					let fields = json!({"from_place": from, "to_place": to, "mode": mode,
-                        "seconds": seconds, "meters": meters});
-					insert(rows, &TRAVEL_ROUTES, row(fields));
-				}
-			}
-		}
-		("reminders", category) if crate::reminders::Category::from_id(category).is_some() => {
-			let default = crate::reminders::CategorySettings::default();
-			let fields = json!({
-				"category": category,
-				"enabled": field(value, "enabled").cloned().unwrap_or(default.enabled.into()),
-				"minutes_before": field(value, "minutes_before").cloned().unwrap_or(default.minutes_before.into()),
-				"sound": field(value, "sound").cloned().unwrap_or_else(|| json!(default.sound)),
-			});
-			insert(rows, &REMINDERS, row(fields));
-		}
-		_ => return false,
-	}
-	true
-}
-
-/// One row per calendar, task list or TimeParagon source that the user hid,
-/// ordered or colored.
+/// One row per source that the user hid, ordered or colored, holding all
+/// three, so a source's choices merge as one item.
 fn calendar_sources(rows: &mut Rows, calendar: &Map<String, Value>) {
 	#[derive(Default)]
 	struct Source {
@@ -267,25 +291,60 @@ fn calendar_sources(rows: &mut Rows, calendar: &Map<String, Value>) {
 		}
 	}
 	for (id, source) in sources {
-		let fields = json!({"id": id, "hidden": source.hidden, "position": source.position,
+		let value = json!({"hidden": source.hidden, "position": source.position,
             "color": source.color});
-		insert(rows, &CALENDAR_SOURCES, row(fields));
+		rows.insert((SETTINGS.name, format!("{SOURCES}/{id}")), value);
 	}
+}
+
+/// The fields [`calendar_sources`] made the rows from.
+fn calendar_source_fields(calendar: &mut Map<String, Value>, sources: &[(&str, &Value)]) {
+	let mut disabled = Vec::new();
+	let mut order = Vec::new();
+	let mut task_colors = Map::new();
+	let mut calendar_colors = Map::new();
+	for (id, source) in sources {
+		if source.get("hidden").and_then(Value::as_bool) == Some(true) {
+			disabled.push(Value::from(*id));
+		}
+		if let Some(position) = source.get("position").and_then(Value::as_i64) {
+			order.push((position, *id));
+		}
+		if let Some(color) = field(source, "color") {
+			// Task lists are named `tasks:<list>`; everything else that can
+			// be colored is a Google calendar.
+			let colors = if id.starts_with(crate::config::CalendarSettings::GOOGLE_TASKS_ID) {
+				&mut task_colors
+			} else {
+				&mut calendar_colors
+			};
+			colors.insert((*id).to_owned(), color.clone());
+		}
+	}
+	order.sort();
+	calendar.insert("disabled".into(), disabled.into());
+	let order: Vec<Value> = order.into_iter().map(|(_, id)| id.into()).collect();
+	calendar.insert("source_order".into(), order.into());
+	calendar.insert("task_colors".into(), task_colors.into());
+	calendar.insert("calendar_colors".into(), calendar_colors.into());
 }
 
 /// `rows` without those holding the same as `defaults`: a value left at its
 /// default is not stored, so it cannot override another device's choice.
 pub(crate) fn without_defaults(mut rows: Rows, defaults: &Rows) -> Rows {
-	rows.retain(|key, row| defaults.get(key) != Some(row));
+	rows.retain(|key, value| defaults.get(key) != Some(value));
 	rows
 }
 
 /// Every row of every settings table.
 pub(crate) fn read(db: &Connection) -> rusqlite::Result<Rows> {
 	let mut rows = Rows::new();
-	for table in schema::TABLES {
-		for row in table.select_all(db)? {
-			insert(&mut rows, table, row);
+	for table in TABLES {
+		for mut row in table.select_all(db)? {
+			if let Some(Value::String(key)) = row.remove("key") {
+				let value = row.remove("value").unwrap_or_default();
+				rows.insert((table.name, key), value);
+			}
 		}
 	}
 	Ok(rows)
@@ -301,27 +360,22 @@ fn section<'a>(tree: &'a mut Map<String, Value>, name: &str) -> &'a mut Map<Stri
 	entry.as_object_mut().expect("just made an object")
 }
 
-fn number(row: &Map<String, Value>, name: &str) -> i64 {
-	row.get(name).and_then(Value::as_i64).unwrap_or_default()
-}
-
 /// The tree `rows` hold: the reverse of [`rows`], apart from the order of
 /// lists that storage keeps as sets.
 pub(crate) fn tree(rows: &Rows) -> Value {
 	let mut tree = Map::new();
-	let of = |table: &'static Table| {
-		rows.iter()
-			.filter(move |((name, _), _)| *name == table.name)
-			.map(|(_, row)| row)
-	};
-
+	let mut items = BTreeMap::<&str, Vec<(&str, &Value)>>::new();
 	// Shared settings first, so that a device setting of the same name wins.
 	for table in [&SETTINGS, &DEVICE_SETTINGS] {
-		for row in of(table) {
-			let (Some(Value::String(key)), Some(value)) = (row.get("key"), row.get("value")) else {
-				continue;
-			};
+		let of_table = rows.iter().filter(|((name, _), _)| *name == table.name);
+		for ((_, key), value) in of_table {
 			if value.is_null() {
+				continue;
+			}
+			if let Some((path, item)) = key.split_once('/')
+				&& (path == SOURCES || COLLECTIONS.iter().any(|c| c.path == path))
+			{
+				items.entry(path).or_default().push((item, value));
 				continue;
 			}
 			match key.split_once('.') {
@@ -334,158 +388,28 @@ pub(crate) fn tree(rows: &Rows) -> Value {
 			}
 		}
 	}
-
-	let sources: Vec<_> = of(&CALENDAR_SOURCES).collect();
-	if !sources.is_empty() {
-		let mut disabled = Vec::new();
-		let mut order = Vec::new();
-		let mut task_colors = Map::new();
-		let mut calendar_colors = Map::new();
-		for source in sources {
-			let Some(id) = source.get("id").and_then(Value::as_str) else {
-				continue;
-			};
-			if source.get("hidden").and_then(Value::as_bool) == Some(true) {
-				disabled.push(Value::from(id));
-			}
-			if let Some(position) = source.get("position").and_then(Value::as_i64) {
-				order.push((position, id));
-			}
-			if let Some(color) = source.get("color").filter(|color| !color.is_null()) {
-				// Task lists are named `tasks:<list>`; everything else that
-				// can be colored is a Google calendar.
-				let colors = if id.starts_with(crate::config::CalendarSettings::GOOGLE_TASKS_ID) {
-					&mut task_colors
-				} else {
-					&mut calendar_colors
-				};
-				colors.insert(id.to_owned(), color.clone());
-			}
+	for collection in &COLLECTIONS {
+		if let Some(items) = items.get(collection.path) {
+			let (name, field) = collection.path.split_once('.').expect("section.field");
+			section(&mut tree, name).insert(field.to_owned(), collection.tree(items));
 		}
-		order.sort();
-		let calendar = section(&mut tree, "calendar");
-		calendar.insert("disabled".into(), disabled.into());
-		let order: Vec<Value> = order.into_iter().map(|(_, id)| id.into()).collect();
-		calendar.insert("source_order".into(), order.into());
-		calendar.insert("task_colors".into(), task_colors.into());
-		calendar.insert("calendar_colors".into(), calendar_colors.into());
 	}
-
-	let schedule: Vec<_> = of(&SLEEP_SCHEDULE).collect();
-	if !schedule.is_empty() {
-		let default = json!(crate::calendar::sleep::Times::default());
-		let days: Vec<Value> = (0..7)
-			.map(|weekday| {
-				schedule
-					.iter()
-					.find(|row| number(row, "weekday") == weekday)
-					.map_or_else(
-						|| default.clone(),
-						|row| json!({"bedtime": row["bedtime"], "wakeup": row["wakeup"]}),
-					)
-			})
-			.collect();
-		section(&mut tree, "calendar").insert("sleep_schedule".into(), days.into());
+	if let Some(sources) = items.get(SOURCES) {
+		calendar_source_fields(section(&mut tree, "calendar"), sources);
 	}
-
-	let changes: Vec<Value> = of(&SLEEP_SCHEDULE_CHANGES)
-		.map(|row| {
-			json!({
-				"from": row["from_date"],
-				"previous": {"bedtime": row["previous_bedtime"], "wakeup": row["previous_wakeup"]},
-				"times": {"bedtime": row["bedtime"], "wakeup": row["wakeup"]},
-			})
-		})
-		.collect();
-	if !changes.is_empty() {
-		section(&mut tree, "calendar").insert("sleep_schedule_changes".into(), changes.into());
-	}
-
-	let order: Map<String, Value> = of(&WEEKLY_TASK_ORDER)
-		.filter_map(|row| {
-			Some((
-				row.get("day")?.as_str()?.to_owned(),
-				row.get("cards")?.clone(),
-			))
-		})
-		.collect();
-	if !order.is_empty() {
-		section(&mut tree, "calendar").insert("weekly_task_order".into(), order.into());
-	}
-
-	let mut places: Vec<_> = of(&PLACES).collect();
-	places.sort_by_key(|row| number(row, "id"));
-	let places: Vec<Value> = places
-		.into_iter()
-		.map(|row| {
-			let mut place = json!({"id": row["id"], "name": row["name"], "address": row["address"],
-                "place_id": row["provider_id"], "lat": row["lat"], "lng": row["lng"]});
-			if row.get("favorite").and_then(Value::as_bool) == Some(true) {
-				place["favorite"] = true.into();
-			}
-			place
-		})
-		.collect();
-	if !places.is_empty() {
-		section(&mut tree, "travel").insert("places".into(), places.into());
-	}
-
-	let event_places: Map<String, Value> = of(&EVENT_PLACES)
-		.filter_map(|row| {
-			Some((
-				row.get("event_id")?.as_str()?.to_owned(),
-				row.get("place_id")?.clone(),
-			))
-		})
-		.collect();
-	if !event_places.is_empty() {
-		section(&mut tree, "travel").insert("event_places".into(), event_places.into());
-	}
-
-	let trip = |row: &Map<String, Value>| (number(row, "from_place"), number(row, "to_place"));
-	let mut modes: Vec<_> = of(&TRAVEL_MODES).collect();
-	modes.sort_by_key(|row| trip(row));
-	let modes: Vec<Value> = modes
-		.into_iter()
-		.map(|row| json!({"from": row["from_place"], "to": row["to_place"], "mode": row["mode"]}))
-		.collect();
-	if !modes.is_empty() {
-		section(&mut tree, "travel").insert("modes".into(), modes.into());
-	}
-
-	let mut routes: Vec<_> = of(&TRAVEL_ROUTES).collect();
-	routes.sort_by(|a, b| {
-		(trip(a), a.get("mode").and_then(Value::as_str))
-			.cmp(&(trip(b), b.get("mode").and_then(Value::as_str)))
-	});
-	let routes: Vec<Value> = routes
-		.into_iter()
-		.map(|row| {
-			json!({"from": row["from_place"], "to": row["to_place"], "mode": row["mode"],
-                "seconds": row["seconds"], "meters": row["meters"]})
-		})
-		.collect();
-	if !routes.is_empty() {
-		section(&mut tree, "travel").insert("routes".into(), routes.into());
-	}
-
-	for row in of(&REMINDERS) {
-		let Some(category) = row.get("category").and_then(Value::as_str) else {
-			continue;
-		};
-		let settings = json!({"enabled": row["enabled"], "minutes_before": row["minutes_before"],
-            "sound": row["sound"]});
-		section(&mut tree, "reminders").insert(category.to_owned(), settings);
-	}
-
 	Value::Object(tree)
 }
 
+/// The table a row of [`Rows`] belongs to.
+pub(crate) fn table(name: &str) -> &'static Table {
+	super::schema::table(name).expect("rows are only made for settings tables")
+}
+
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
 	use super::*;
 
-	fn sample() -> Value {
+	pub(crate) fn sample() -> Value {
 		json!({
 			"appearance": {"theme": "Ocean", "time_format": "compact"},
 			"alarm": {"sound": {"volume": 25, "choice": {"file": "/tmp/a.ogg"}}},
@@ -518,36 +442,50 @@ mod tests {
 		})
 	}
 
+	fn key(table: &'static str, key: &str) -> (&'static str, String) {
+		(table, key.to_owned())
+	}
+
 	#[test]
-	fn every_field_lands_in_the_table_that_fits_it() {
+	fn every_field_lands_in_the_row_that_fits_it() {
 		let rows = rows(&sample());
-		let tables = |name: &str| rows.keys().filter(|(table, _)| *table == name).count();
-		assert_eq!(tables("places"), 1);
-		assert_eq!(tables("event_places"), 1);
-		assert_eq!(tables("travel_modes"), 1);
-		assert_eq!(tables("travel_routes"), 1);
-		assert_eq!(tables("reminders"), 1);
-		assert_eq!(tables("sleep_schedule"), 1);
-		assert_eq!(tables("sleep_schedule_changes"), 1);
-		assert_eq!(tables("weekly_task_order"), 1);
+		let items = |path: &str| {
+			rows.keys()
+				.filter(|(_, key)| key.starts_with(&format!("{path}/")))
+				.count()
+		};
+		assert_eq!(items("travel.places"), 1);
+		assert_eq!(items("travel.event_places"), 1);
+		assert_eq!(items("travel.modes"), 1);
+		assert_eq!(items("travel.routes"), 1);
+		assert_eq!(items("calendar.sleep_schedule"), 1);
+		assert_eq!(items("calendar.sleep_schedule_changes"), 1);
+		assert_eq!(items("calendar.weekly_task_order"), 1);
 		// work, tasks:abc, b and the colored calendar.
-		assert_eq!(tables("calendar_sources"), 4);
-		let key = |table: &'static str, key: &str| (table, Value::from(vec![key]).to_string());
+		assert_eq!(items("calendar.sources"), 4);
+		assert_eq!(rows[&key("settings", "calendar.weekly_day_width")], 200);
+		assert_eq!(rows[&key("settings", "appearance.theme")], "Ocean");
+		assert_eq!(rows[&key("settings", "reminders.enabled")], true);
 		assert_eq!(
-			rows[&key("settings", "calendar.weekly_day_width")]["value"],
-			200
+			rows[&key("settings", "reminders.events")]["minutes_before"],
+			15
 		);
-		assert_eq!(rows[&key("settings", "appearance.theme")]["value"], "Ocean");
-		assert_eq!(rows[&key("settings", "reminders.enabled")]["value"], true);
-		assert_eq!(rows[&key("settings", "alarm.sound")]["value"]["volume"], 25);
+		assert_eq!(rows[&key("settings", "alarm.sound")]["volume"], 25);
+		assert_eq!(rows[&key("settings", "travel.modes/1/2")]["mode"], "car");
 		assert_eq!(
-			rows[&key("device_settings", "window.width")]["value"],
-			320.0
+			rows[&key("settings", "travel.routes/1/2/car")]["meters"],
+			5000
 		);
 		assert_eq!(
-			rows[&key("device_settings", "notepad.font_size")]["value"],
-			120
+			rows[&key("settings", "travel.places/1730000000000")]["name"],
+			"Home"
 		);
+		assert_eq!(
+			rows[&key("settings", "calendar.sleep_schedule_changes/2026-11-10")]["times"]["bedtime"],
+			"23:00:00"
+		);
+		assert_eq!(rows[&key("device_settings", "window.width")], 320.0);
+		assert_eq!(rows[&key("device_settings", "notepad.font_size")], 120);
 		assert!(
 			!rows.contains_key(&key("settings", "calendar.app_calendar")),
 			"null is the default"
@@ -558,11 +496,14 @@ mod tests {
 				.any(|(_, key)| key.contains("notepad.text") || key.contains("projects"))
 		);
 		assert_eq!(
-			rows[&key("calendar_sources", "b")]["position"],
+			rows[&key("settings", "calendar.sources/b")]["position"],
 			0,
 			"the first place counts"
 		);
-		assert_eq!(rows[&key("calendar_sources", "work")]["hidden"], true);
+		assert_eq!(
+			rows[&key("settings", "calendar.sources/work")]["hidden"],
+			true
+		);
 	}
 
 	#[test]
@@ -606,6 +547,28 @@ mod tests {
 	}
 
 	#[test]
+	fn items_come_back_in_the_order_of_what_names_them() {
+		let places = json!({"travel": {"places": [
+			{"id": 100, "name": "C", "lat": 0, "lng": 0},
+			{"id": 9, "name": "A", "lat": 0, "lng": 0},
+			{"id": 20, "name": "B", "lat": 0, "lng": 0},
+			{"name": "No ID", "lat": 0, "lng": 0},
+		]}});
+		let back = tree(&rows(&places));
+		let names: Vec<&str> = back["travel"]["places"]
+			.as_array()
+			.unwrap()
+			.iter()
+			.map(|place| place["name"].as_str().unwrap())
+			.collect();
+		assert_eq!(
+			names,
+			["A", "B", "C"],
+			"and an item without its ID is not kept"
+		);
+	}
+
+	#[test]
 	fn values_at_their_default_are_not_stored() {
 		let defaults = rows(&json!({"calendar": {"weekly_day_width": 150, "show_tasks": true}}));
 		let stored = without_defaults(
@@ -613,6 +576,6 @@ mod tests {
 			&defaults,
 		);
 		let keys: Vec<&String> = stored.keys().map(|(_, key)| key).collect();
-		assert_eq!(keys, [&json!(["calendar.show_tasks"]).to_string()]);
+		assert_eq!(keys, ["calendar.show_tasks"]);
 	}
 }

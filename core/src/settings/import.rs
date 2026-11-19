@@ -10,8 +10,8 @@
 //! setting changed in the app on any device afterwards always wins over a
 //! file, and where only two files disagree, every device settles on the same
 //! one of them. Values a file held at their default are not imported at all,
-//! so they never override another device's choice. Places, reminders and the
-//! other tables merge row by row, so both devices' places survive.
+//! so they never override another device's choice. Places and the other
+//! collections merge item by item, so both devices' places survive.
 
 use std::fs;
 use std::io;
@@ -113,9 +113,8 @@ fn store(
 		0
 	};
 
-	for ((table, _), row) in &rows {
-		let table = super::schema::table(table).expect("rows are only made for settings tables");
-		table.upsert(tx, row).map_err(other)?;
+	for ((table, key), value) in &rows {
+		super::put(tx, table, key, value)?;
 	}
 
 	// A document already in the database is newer than the file's copy: the
@@ -295,11 +294,16 @@ dock_width = nan
 				"appearance.time_format",
 				"calendar.client_id",
 				"calendar.client_secret",
+				"calendar.sleep_schedule/0",
+				"calendar.sources/work",
 				"reminders.enabled",
+				"reminders.events",
 				"travel.api_key",
+				"travel.event_places/standup",
 				"travel.home",
+				"travel.places/1",
 			],
-			"weekly_day_width = 150 is the default"
+			"weekly_day_width = 150 and the six unchanged weekdays are defaults"
 		);
 		let device = rows(&path, "SELECT key, value FROM device_settings ORDER BY key");
 		assert_eq!(
@@ -314,15 +318,11 @@ dock_width = nan
 		// A partial reminder table gets the defaults it always had.
 		let reminders = rows(
 			&path,
-			"SELECT category, json_object('e',enabled,'m',minutes_before) FROM reminders",
+			"SELECT key, json_object('e',json_extract(value,'$.enabled'),'m',json_extract(value,'$.minutes_before')) FROM settings WHERE key='reminders.events'",
 		);
 		assert_eq!(
 			reminders,
-			[("events".to_owned(), r#"{"e":0,"m":0}"#.to_owned())]
-		);
-		assert_eq!(
-			rows(&path, "SELECT weekday, bedtime FROM sleep_schedule").len(),
-			1
+			[("reminders.events".to_owned(), r#"{"e":0,"m":0}"#.to_owned())]
 		);
 
 		let config: Config = super::super::load(&path, |_| {}).unwrap().value;
@@ -364,7 +364,12 @@ dock_width = nan
 				.iter()
 				.all(|clock| *clock == 1)
 		);
-		assert!(clock("places:").iter().all(|clock| *clock == 1));
+		assert!(
+			clock("settings:[\"travel.places/")
+				.iter()
+				.all(|clock| *clock == 1)
+		);
+		assert_eq!(clock("settings:[\"travel.places/").len(), 1);
 		assert_eq!(
 			clock("settings:[\"calendar.weekly_day_width\"]"),
 			[2],

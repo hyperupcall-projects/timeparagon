@@ -23,7 +23,12 @@ The Android setup flow keeps its place: the page you are on and everything you h
 
 ## Database sync
 
-Each device keeps its own local SQLite database. Habits, goals, settings, routines, alarms, cached calendar data and the rest are swapped between devices through a [Turso](https://turso.tech) sync server that **you** run, usually on your desktop or a home server.
+Each device keeps its own local SQLite database. Habits, goals, settings, routines, alarms and the rest are swapped between devices through a [Turso](https://turso.tech) sync server that **you** run, usually on your desktop or a home server.
+
+Sleep nights come from Google Calendar on each device; they appear after that
+device refreshes Google. The weekly sleep schedule still syncs through Turso.
+When upgrading from a version with separate settings tables, upgrade every
+syncing device and restart all TimeParagon processes on each device.
 
 Every device needs the server's URL. On Android, setup does not continue until **Connect and sync** has succeeded, which does two things:
 

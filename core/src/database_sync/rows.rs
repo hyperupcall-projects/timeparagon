@@ -1,12 +1,13 @@
-//! Rows of the synced settings tables, replicated the way documents are.
+//! Rows of the synced tables (settings and note metadata), replicated the way
+//! documents are.
 //!
 //! Every row is a document of its own in the journal, named after its table
-//! and primary key: `places:[17]`, `settings:["calendar.weekly_day_width"]`,
-//! `travel_modes:[1,2]`. Its value is the row as a JSON object, with JSON
-//! columns embedded as JSON. So the same journal, merge, snapshots and
-//! compaction serve rows too: two devices editing different columns of one
-//! row both keep their edit, and deleting a row removes it whatever was
-//! changed in it meanwhile.
+//! and primary key: `settings:["calendar.weekly_day_width"]`,
+//! `settings:["travel.places/17"]`, `notes:["n1"]`. Its value is the row as a
+//! JSON object, with JSON columns embedded as JSON. So the same journal,
+//! merge, snapshots and compaction serve rows too: two devices editing
+//! different fields of one place both keep their edit, and deleting a row
+//! removes it whatever was changed in it meanwhile.
 //!
 //! Triggers journal every change an app makes to these tables. The sync
 //! worker writes merged rows back with `projecting` set, so those writes are

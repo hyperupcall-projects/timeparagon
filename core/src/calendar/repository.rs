@@ -50,7 +50,7 @@ pub(super) fn save_state(connection: &Connection, state: &SyncState) -> Result<(
 }
 
 /// Read everything available locally, even if some requested dates are uncovered.
-/// A missing range can still contain local creations or replicated sleep.
+/// A missing range can still contain local creations or stored sleep.
 pub fn read(path: &Path, dates: &[NaiveDate], hour: u32) -> Result<Read, String> {
 	let day = *dates.first().ok_or("Calendar range is empty")?;
 	let mut database = Database::open(path)?;
@@ -92,7 +92,7 @@ pub fn read(path: &Path, dates: &[NaiveDate], hour: u32) -> Result<Read, String>
 }
 
 /// Source ownership is exclusive: Calendar rows own calendar tasks, Tasks rows
-/// own Google Tasks, and the replicated sleep table owns nights. Local operations
+/// own Google Tasks, and the stored sleep table owns nights. Local operations
 /// are the sole authority over changes that Google has not yet superseded.
 pub(super) fn events(connection: &Connection) -> Result<Vec<Event>, String> {
 	let mut events = Vec::new();
@@ -355,7 +355,7 @@ mod tests {
 	}
 
 	#[test]
-	fn deleted_replicated_sleep_is_never_resurrected_from_a_calendar_row() {
+	fn deleted_cached_sleep_is_never_resurrected_from_a_calendar_row() {
 		let dir = tempfile::tempdir().unwrap();
 		let path = dir.path().join("calendar.sqlite3");
 		let mut night = sample_snapshot().events.remove(0);

@@ -28,7 +28,7 @@ flowchart TB
     GC <-- "immediate writes + refresh" --> DB
     GT <-- "immediate writes + refresh" --> DB
     GP <-- "cache" --> DB
-    DB <-- "6 shared documents,<br/>settings rows" --> TURSO
+    DB <-- "7 shared documents,<br/>settings and note metadata" --> TURSO
     NOTES <-. "you sync it" .-> SYNCTHING
 ```
 
@@ -37,7 +37,7 @@ flowchart TB
 | **Google Calendar** | Events, time blocks, scheduled (dated) tasks, habit occurrences, sleep nights, meeting guests and replies | Google |
 | **Google Tasks** | Undated tasks (inbox, triaged, backlog) | Google |
 | **Google People** | Contacts, contact groups, Workspace directory | Google |
-| **SQLite** `timeparagon.sqlite3` | Habits, alarms, notepad, brain dump, projects and life areas, work sessions, note colors and connections, [settings](#settings) (calendar choices, colors, places and travel, reminders, sleep schedule, …); caches of everything Google owns; local copies of edits being sent to Google | Turso, for six documents and synced settings and data tables |
+| **SQLite** `timeparagon.sqlite3` | Habits, alarms, notepad, brain dump, projects and life areas, work sessions, note colors and connections, [settings](#settings) (calendar choices, colors, places and travel, reminders, sleep schedule, …); caches of everything Google owns; local copies of edits being sent to Google | Turso, for seven documents, settings and note metadata |
 | **`secrets.json`** | Google tokens, connected Gmail accounts, OpenRouter token | Not shared |
 | **Notes directory** | Markdown notes, one file each | Whatever syncs the folder (Syncthing, say) |
 
@@ -75,7 +75,8 @@ scratch directory and never contact Google or the sync server.
 ### What is shared between devices
 
 Turso replicates exactly these `documents` rows (`database_sync::SHARED_KEYS`),
-and every row of the synced [settings tables](#settings):
+and every row of the `settings` table (see [Settings](#settings)) and of the
+`notes` metadata table:
 
 | Document | Holds |
 | --- | --- |
@@ -94,9 +95,10 @@ and keys (`task_db::keys`), so they have no prefix, but they are synced all the
 same. Only `SHARED_KEYS` decides what is replicated.
 
 Everything else stays on the device. That includes the Google caches and the
-local copies of edits being sent (each device talks to Google itself), contacts, cached routes,
-calendar sync state, the Android theme, `device_settings`, secrets and
-notes.
+local copies of edits being sent (each device talks to Google itself), the
+stored nights of sleep (each device refreshes them from Google), contacts,
+cached routes, calendar sync state, the Android theme, `device_settings`,
+secrets and notes.
 
 Concurrent edits are merged **field by field**, not by whichever document was
 saved last. See [Merge rules](./database-schema.md#merge-rules). This is why
@@ -143,7 +145,7 @@ time blocks by ID, so you can rename those freely.
 | --- | --- | --- |
 | `id` | string | Google calendar ID, or `tasks:<listId>` for a Google Tasks list |
 | `name` | string | |
-| `color` | color | Google's color, which a `calendar_sources` row can override |
+| `color` | color | Google's color, which a `calendar.sources/<id>` setting can override |
 | `primary` | bool | The account's primary calendar |
 | `selected_by_google` | bool | Checked in Google Calendar's own list |
 
@@ -164,7 +166,7 @@ honor the sync interval.
 
 Every calendar consumer (desktop, mobile, dock and reminders) reads through
 `calendar::repository`. A single database transaction assembles confirmed
-Calendar records, normalized Google Tasks and replicated sleep, then applies
+Calendar records, normalized Google Tasks and stored sleep, then applies
 desired local operations once. `google_sync_windows` records coverage even for
 empty dates. Reads return coverage separately from events and a revision that
 prevents an older worker result from replacing newer displayed data.
@@ -703,14 +705,15 @@ in a later area gets a new ID, and its area's objectives follow their goal.
 
 ## Places and travel
 
-Shared between devices, in tables of their own (see [Settings](#settings)):
+Shared between devices as settings, one row per item (see
+[Settings](./database-schema.md#settings)):
 
-| Table | Row | Notes |
+| Setting | Item | Notes |
 | --- | --- | --- |
-| `places` | `{id, name, address, provider_id, lat, lng, favorite}` | `provider_id` is Mapbox's ID (older entries hold a Google ID), which keeps one place from being saved twice. `name` can be renamed freely |
-| `event_places` | `{event_id, place_id}` | Links a calendar event to a saved place |
-| `travel_modes` | `{from_place, to_place, mode}` | Per-trip overrides of the default mode |
-| `travel_routes` | `{from_place, to_place, mode, seconds, meters}` | Trips any device has calculated, so the others need not ask Mapbox again |
+| `travel.places/<id>` | `{id, name, address, place_id, lat, lng, favorite}` | `place_id` is Mapbox's ID (older entries hold a Google ID), which keeps one place from being saved twice. `name` can be renamed freely |
+| `travel.event_places/<event id>` | place ID | Links a calendar event to a saved place |
+| `travel.modes/<from>/<to>` | `{from, to, mode}` | Per-trip overrides of the default mode |
+| `travel.routes/<from>/<to>/<mode>` | `{from, to, mode, seconds, meters}` | Trips any device has calculated, so the others need not ask Mapbox again |
 
 and the settings `travel.api_key` (Mapbox token), `travel.home` (place ID),
 `travel.default_mode` (`walk` / `bike` / `car`), `travel.show` (show travel
@@ -718,7 +721,7 @@ on the calendar) and `travel.map_app` (which map to open, chosen on the desktop)
 
 Tasks refer to places with `metadata.location`, and time blocks pass a place
 down with `ChildMetadata.location`. The desktop app also caches calculated
-trips in the `routes` document (same shape as `travel_routes`), which stays
+trips in the `routes` document (same shape as `travel.routes`), which stays
 on the device.
 
 ---
@@ -844,16 +847,16 @@ Stored as the `alarms` document (shared), type `alarms::Library`:
 
 ## Reminders
 
-Notifications for upcoming items are configured in the shared
-`reminders.enabled` and `reminders.use_calendar_reminders` settings and the
-`reminders` table, one row per kind (`reminders::ReminderSettings`).
+Notifications for upcoming items are configured in the shared `reminders.*`
+settings (`reminders::ReminderSettings`): two switches, and one setting per
+kind.
 Reminders are computed, not stored:
 
 | Field | Meaning |
 | --- | --- |
 | `enabled` | Master switch. Off by default |
 | `use_calendar_reminders` | Use each event's Google reminders instead of `events.minutes_before` |
-| `events`, `tasks`, `time_blocks`, `habits`, `sleep`, `travel` | `{enabled, minutes_before, sound}` per category: a row of `reminders` |
+| `events`, `tasks`, `time_blocks`, `habits`, `sleep`, `travel` | `{enabled, minutes_before, sound}` per category: the setting `reminders.<category>` |
 
 A device sound (`{"kind":"device", …}`) names a file on the desktop or a
 ringtone on Android. A device given the other kind plays its default sound.
@@ -932,12 +935,12 @@ setup and the timer running on it. Another device would be broken by them.
 | Settings | Where | Shared |
 | --- | --- | :---: |
 | `calendar.*`: OAuth client, app calendar and task-list IDs, task sorts, triage requirements, day-end hour, first day of week, week view, colors per kind | `settings` | ✅ |
-| Hidden calendars, source order, colors per calendar or task list | `calendar_sources` | ✅ |
-| Weekly bedtime and wake-up times, and dated changes to them | `sleep_schedule`, `sleep_schedule_changes` | ✅ |
-| Card order on the week board | `weekly_task_order` | ✅ |
-| Places, the place of each event, trip modes, calculated trips | `places`, `event_places`, `travel_modes`, `travel_routes` | ✅ |
+| Hidden calendars, source order, colors per calendar or task list | `settings`, a row per source | ✅ |
+| Weekly bedtime and wake-up times, and dated changes to them | `settings`, a row per weekday and per change | ✅ |
+| Card order on the week board | `settings`, a row per day | ✅ |
+| Places, the place of each event, trip modes, calculated trips | `settings`, a row per item | ✅ |
 | `travel.*`: Mapbox token, home, default mode, map app, show travel | `settings` | ✅ |
-| Reminders per kind; `reminders.enabled`, `reminders.use_calendar_reminders` | `reminders`; `settings` | ✅ |
+| `reminders.*`: the switches, and each kind of reminder | `settings` | ✅ |
 | `alarm.*`: the default alarm profile | `settings` | ✅ |
 | `appearance.*`: theme, time format, distance unit | `settings` | ✅ |
 | Projects, notepad text, brain dump, work sessions, routines | their [documents](#what-is-shared-between-devices) | ✅ |
@@ -952,12 +955,15 @@ The split is `settings::mapping::DEVICE_SECTIONS`.
 
 A setting is named `section.field`, as in the apps' `Config`
 (`calendar.weekly_day_width`), and its value is JSON (`200`, `"Ocean"`, or an
-object for `alarm.sound`). **A setting at its default is not stored**: no
-row means the default. So a device that never touched a setting cannot
-override another device's choice, and an untouched install stores nothing.
+object for `alarm.sound`). A collection whose items have an identity, such as
+places or the sleep schedule, is stored one row per item, named
+`section.field/item` (`travel.places/1730000000000`), so that two devices
+merge it item by item. **A setting at its default is not stored**: no row
+means the default. So a device that never touched a setting cannot override
+another device's choice, and an untouched install stores nothing.
 
 **A save writes only what changed** since the settings were loaded: the rows
-that differ, and of those only the columns that differ. A window holding
+that differ, and of those only what changed within the value. A window holding
 settings that another device has since changed does not put them back when
 it saves something else. A stored setting the app cannot read (written by a
 newer version, or damaged) is left at its default for the session, reported,
@@ -1028,9 +1034,10 @@ request to the running app over its IPC socket.
   concurrent remote change.
 - **The app calendar is identified by name** (`TimeParagon`) until its ID is
   recorded, so a fresh device can recognize it.
-- **References between settings tables are not enforced.** Two devices can
+- **References between settings are not enforced.** Two devices can
   delete a place and link an event to it at the same moment, so code reading
-  `event_places`, `travel_*` or `travel.home` skips a place that is gone.
+  `travel.event_places`, `travel.modes`, `travel.routes` or `travel.home`
+  skips a place that is gone.
 - **Save settings with a baseline** (`settings::save`, or `settings::update`).
   Writing a whole `Config` without one would put back what other devices
   changed.

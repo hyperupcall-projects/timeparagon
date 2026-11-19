@@ -24,8 +24,8 @@ const OVERLAY: &str = "google.overlay";
 /// Bumped by changes to any settings table (see [`crate::settings`]).
 const SETTINGS: &str = "settings";
 
-/// Bumped by changes to the stored nights of sleep, including those database
-/// sync brings from another device (see `calendar::sleep::store`).
+/// Bumped by changes to the stored nights of sleep (see
+/// `calendar::sleep::store`).
 const SLEEP: &str = "sleep";
 
 /// The counters a poll compares against what it last applied.
@@ -36,8 +36,8 @@ pub struct Counters {
 	pub habits: i64,
 	pub alarms: i64,
 	pub overlay: i64,
-	/// Moves whenever anything the apps' `Config` holds changes: a settings
-	/// table, or one of the shared documents laid into it.
+	/// Moves whenever anything the apps' `Config` holds changes: a setting,
+	/// or one of the shared documents laid into it.
 	pub config: i64,
 	/// Moves whenever a stored night of sleep changes.
 	pub sleep: i64,
@@ -70,12 +70,12 @@ fn watch(db: &Connection, table: &str, counter: &str) -> rusqlite::Result<()> {
 	Ok(())
 }
 
-/// The triggers on the synced data tables, installed during versioned setup
-/// and sync enrollment (see `settings::schema::create_data`).
+/// The triggers on the data tables, installed during versioned setup and sync
+/// enrollment (see `settings::schema::create_data`).
 /// Idempotent, and expects the tables to exist.
 pub(crate) fn install_data(db: &Connection) -> rusqlite::Result<()> {
 	db.execute_batch(CREATE)?;
-	watch(db, crate::settings::schema::SLEEP_NIGHTS.name, SLEEP)?;
+	watch(db, "sleep_nights", SLEEP)?;
 	watch(db, crate::settings::schema::NOTES.name, "notes")
 }
 
@@ -219,7 +219,7 @@ mod tests {
 		assert!(after_notepad.config > after_setting.config);
 		assert_eq!(after_notepad.sleep, after_setting.sleep);
 
-		// Stored nights, written here or brought by sync, move only theirs.
+		// Stored nights move only theirs.
 		let mut database = crate::task_db::Database::open(&path).unwrap();
 		crate::settings::schema::create_data(database.connection()).unwrap();
 		database
