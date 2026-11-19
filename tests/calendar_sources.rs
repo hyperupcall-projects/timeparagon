@@ -1,5 +1,6 @@
 use iced::{Size, window};
 use iced_test::{Simulator, core::Settings};
+use timeparagon::app::Popup;
 use timeparagon::app::{CalendarMessage, SettingsMessage};
 use timeparagon::{
 	app::{self, Message, Screen, State},
@@ -104,7 +105,7 @@ fn regular_calendar_colors_survive_sync_and_reset_without_changing_event_colors(
 #[test]
 fn regular_calendar_menu_shows_a_picker_at_narrow_widths() {
 	let mut state = state();
-	state.calendar.menu_open = true;
+	state.popup = Some(Popup::CalendarMenu);
 	let _ = app::update(
 		&mut state,
 		Message::Settings(SettingsMessage::SourceColorEditorToggled("work".into())),
@@ -198,7 +199,7 @@ fn ordering_individual_lists_retains_hidden_sources_and_survives_restart_and_syn
 #[test]
 fn menu_and_settings_offer_individual_task_lists_and_work_at_narrow_widths() {
 	let mut state = state();
-	state.calendar.menu_open = true;
+	state.popup = Some(Popup::CalendarMenu);
 	for width in [180.0, 200.0, 420.0] {
 		let mut ui = Simulator::with_size(
 			Settings::default(),
@@ -211,7 +212,7 @@ fn menu_and_settings_offer_individual_task_lists_and_work_at_narrow_widths() {
 		assert!(ui.find("Second task list").is_ok());
 	}
 	state.screen = Screen::Settings;
-	state.calendar.menu_open = false;
+	state.popup = None;
 	for width in [180.0, 200.0, 420.0] {
 		let mut ui = Simulator::with_size(
 			Settings::default(),
@@ -390,7 +391,7 @@ fn managed_lists_are_omitted_by_name_and_configured_id() {
 		.map(|c| c.id.as_str())
 		.collect();
 	assert_eq!(lists, ["tasks:one", "tasks:two"]);
-	state.calendar.menu_open = true;
+	state.popup = Some(Popup::CalendarMenu);
 	let mut ui = Simulator::with_size(
 		Settings::default(),
 		Size::new(420.0, 4000.0),
@@ -552,7 +553,7 @@ fn menu_groups_google_sources_before_all_timeparagon_types() {
 			selected_by_google: true,
 		});
 	}
-	state.calendar.menu_open = true;
+	state.popup = Some(Popup::CalendarMenu);
 	for width in [180.0, 200.0, 420.0] {
 		state.main_size = Size::new(width, 4000.0);
 		let mut ui = Simulator::with_size(
@@ -667,7 +668,7 @@ fn timeparagon_colors_are_chosen_from_the_menu_and_not_from_settings() {
 
 	// The menu swatch opens the same picker as a Google source, and resetting
 	// it clears the custom color.
-	state.calendar.menu_open = true;
+	state.popup = Some(Popup::CalendarMenu);
 	for source in TimeParagonSource::ALL {
 		state.calendar.color_editor = Some(source.id().into());
 		state.main_size = Size::new(420.0, 4000.0);
@@ -696,7 +697,7 @@ fn timeparagon_colors_are_chosen_from_the_menu_and_not_from_settings() {
 	}
 
 	// The old settings section is gone; colors live in the calendar menu.
-	state.calendar.menu_open = false;
+	state.popup = None;
 	state.screen = Screen::Settings;
 	let mut ui = Simulator::with_size(
 		Settings::default(),

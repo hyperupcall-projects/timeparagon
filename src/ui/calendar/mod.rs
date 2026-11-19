@@ -58,7 +58,7 @@ use crate::app::{
 	CalendarMessage, EventDraftMessage, EventEditMessage, EventMessage, SettingsMessage,
 	SystemMessage, TaskMessage,
 };
-use crate::app::{Message, MonthPicker, State};
+use crate::app::{Message, MonthPicker, Popup, State};
 use crate::calendar::colors::{self, on_color};
 use crate::calendar::layout::{self, Span};
 use crate::calendar::search::{PRIVATE_COLOR, PRIVATE_TITLE};
@@ -148,14 +148,8 @@ pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 		super::alarms::editor_overlay(state, metrics)
 	} else if state.calendar.month_open {
 		month_overlay(state, MonthPicker::Panel, metrics)
-	} else if state.calendar.menu_open {
-		menu_overlay(state, metrics)
-	} else if state.calendar.search.open {
-		search_overlay(state, metrics)
-	} else if state.calendar.actions_open {
-		actions_overlay(state, metrics, true)
 	} else {
-		iced::widget::Space::new().width(0.0).height(0.0).into()
+		popup_overlay(state, metrics, true)
 	};
 
 	pointer_watch(stack![content, overlay])

@@ -2,6 +2,7 @@ use chrono::Duration;
 use iced::{Size, window};
 use iced_test::{Simulator, core::Settings};
 use timeparagon::alarms::{Action, Alarm};
+use timeparagon::app::Popup;
 use timeparagon::app::{self, Message, NavigationMessage, Screen, State};
 use timeparagon::config::AlarmProfile;
 
@@ -27,7 +28,7 @@ fn more_alarms_lists_pending_alarms_and_cancels_only_the_chosen_one() {
 		state
 			.alarms
 			.adopt_shared(vec![alarm(2, "Stretch", 120), alarm(1, "Tea", 60)]);
-		state.more_menu_open = true;
+		state.popup = Some(Popup::MoreMenu);
 		let mut ui = render(&state, width);
 		let item = ui.find("Alarms").unwrap().bounds();
 		assert!(item.y >= 0.0 && item.y + item.height <= 240.0);
@@ -41,7 +42,7 @@ fn more_alarms_lists_pending_alarms_and_cancels_only_the_chosen_one() {
 			let _ = app::update(&mut state, message);
 		}
 		assert_eq!(state.screen, Screen::Alarms);
-		assert!(!state.more_menu_open);
+		assert_ne!(state.popup, Some(Popup::MoreMenu));
 		assert!(!state.alarms.mode);
 		assert!(state.alarms.editor.is_none());
 

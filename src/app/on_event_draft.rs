@@ -18,6 +18,7 @@ pub(super) fn update(state: &mut State, message: EventDraftMessage) -> Task<Mess
 
 			state.calendar.error = None;
 			state.calendar.begin_draft(calendar_id, start, end);
+			state.close_calendar_popup();
 			state.draft_kind_focus = None;
 			state.calendar.day = calendar::day_at(start, state.config.calendar.day_start_hour());
 			iced::widget::operation::focus("calendar-draft-title")
@@ -237,9 +238,7 @@ fn open_new_event(state: &mut State, draft: calendar::Draft) -> Task<Message> {
 		.is_some()
 		.then(|| crate::timeblocking::close(state));
 	state.calendar.error = None;
-	state.calendar.menu_open = false;
-	state.calendar.search.open = false;
-	state.calendar.actions_open = false;
+	state.close_calendar_popup();
 	state.calendar.detail_event = Some(event);
 	state.calendar.edit_draft = Some(edit);
 	state.calendar.open_event = Some(crate::inbox::NEW_EVENT_ID.into());

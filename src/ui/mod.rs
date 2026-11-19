@@ -46,7 +46,7 @@ use iced::{Alignment, Center, Element, Fill, Length, Padding, Size};
 use crate::app::{
 	CalendarMessage, CalendarView, NavigationMessage, Pane, PlanTab, ResizeEdge, SystemMessage,
 };
-use crate::app::{Message, Screen, State};
+use crate::app::{Message, Popup, Screen, State};
 
 use layout::Metrics;
 
@@ -412,14 +412,11 @@ pub fn view(state: &State) -> Element<'_, Message> {
 		// Adding/removing a wrapper resets the state of all its descendants.
 		// Keep one stack with the calendar first, and append active dialogs.
 		let mut layers = vec![base.into()];
-		if state.view_menu_open {
-			layers.push(view_menu(state, &nav_metrics));
-		}
-		if state.more_menu_open {
-			layers.push(more_menu::view(state, &nav_metrics));
-		}
-		if state.activity.open {
-			layers.push(activity_log(state, &nav_metrics));
+		match state.popup {
+			Some(Popup::ViewMenu) => layers.push(view_menu(state, &nav_metrics)),
+			Some(Popup::MoreMenu) => layers.push(more_menu::view(state, &nav_metrics)),
+			Some(Popup::ActivityLog) => layers.push(activity_log(state, &nav_metrics)),
+			_ => {}
 		}
 		// Shared state is visible to both windows, but dialogs have one owner.
 		// Add task creation stays in the sidebar, including its supporting dialogs.
@@ -735,7 +732,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 			state.screen,
 			Screen::Overdue | Screen::Inbox | Screen::Today | Screen::Triaged | Screen::Backlog
 		);
-	let more_active = state.more_menu_open
+	let more_active = state.popup == Some(Popup::MoreMenu)
 		|| matches!(
 			state.screen,
 			Screen::Notepad
@@ -754,7 +751,7 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 		metrics,
 		fit,
 	);
-	let plan_active = state.view_menu_open || planning || tasks_open;
+	let plan_active = state.popup == Some(Popup::ViewMenu) || planning || tasks_open;
 	let plan = container(
 		row![
 			button(

@@ -27,7 +27,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 			} else {
 				super::on_navigation::select_screen(state, Screen::Calendar)
 			};
-			state.view_menu_open = false;
+			state.close_popup(Popup::ViewMenu);
 			state.habits.calendar_habit = None;
 			let was_weekly = state.range_view_active();
 			let view = if weekly {
@@ -60,7 +60,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 		}
 		CalendarMessage::CalendarMonthViewSelected => {
 			let navigation = planning_sidebar(state);
-			state.view_menu_open = false;
+			state.close_popup(Popup::ViewMenu);
 			let was_wide = state.range_view_active();
 			let changed = !state.monthly();
 			state.week_hover = None;
@@ -74,7 +74,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 		}
 		CalendarMessage::CalendarScheduleViewSelected => {
 			let navigation = planning_sidebar(state);
-			state.view_menu_open = false;
+			state.close_popup(Popup::ViewMenu);
 			state.habits.calendar_habit = None;
 			let was_wide = state.range_view_active();
 			if state.view != CalendarView::Schedule {
@@ -93,7 +93,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 		}
 		CalendarMessage::CalendarTwoWeekViewSelected => {
 			let navigation = planning_sidebar(state);
-			state.view_menu_open = false;
+			state.close_popup(Popup::ViewMenu);
 			state.habits.calendar_habit = None;
 			let was_wide = state.range_view_active();
 			let changed = !state.two_weekly();
@@ -213,7 +213,6 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 			{
 				return Task::none();
 			}
-			let toggled = matches!(action, search::Action::Toggle);
 			let hiding = matches!(action, search::Action::DetailsByVisibility(true));
 			state.calendar.search.update(action);
 			if hiding {
@@ -230,40 +229,27 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 						.chain([crate::timeblocking::close(state)]),
 				);
 			}
-			if !(toggled && state.calendar.search.open) {
+			Task::none()
+		}
+		CalendarMessage::CalendarSearchToggled => {
+			if !state.toggle_popup(Popup::CalendarSearch) {
 				return Task::none();
 			}
-			// One sheet at a time, the same as the menu and the month pickers.
-			state.calendar.menu_open = false;
-			state.calendar.actions_open = false;
-			state.calendar.color_editor = None;
-			state.calendar.month_open = false;
-			state.overview_month_open = false;
+			clear_behind_sheet(state);
 			iced::widget::operation::focus(iced::widget::Id::new(ui::calendar::SEARCH_INPUT))
 		}
 		CalendarMessage::CalendarActionsToggled => {
-			state.calendar.actions_open = !state.calendar.actions_open;
-			if state.calendar.actions_open {
-				// One sheet at a time, the same as the View sheet and the
-				// month pickers.
-				state.calendar.menu_open = false;
-				state.calendar.search.open = false;
-				state.calendar.color_editor = None;
-				state.calendar.month_open = false;
-				state.overview_month_open = false;
+			if state.toggle_popup(Popup::CalendarActions) {
+				clear_behind_sheet(state);
 			}
 			Task::none()
 		}
 		CalendarMessage::CalendarMenuToggled => {
-			state.calendar.menu_open = !state.calendar.menu_open;
-			if state.calendar.menu_open {
-				state.calendar.search.open = false;
-				state.calendar.actions_open = false;
-			}
+			let opened = state.toggle_popup(Popup::CalendarMenu);
 			// Dismissing the menu also puts away any open color picker, so it
 			// does not pop back up the next time the menu is opened.
 			state.calendar.color_editor = None;
-			if state.calendar.menu_open {
+			if opened {
 				// The old single TimeParagon toggle is replaced by per-kind
 				// toggles. Preserve its hidden state without leaving an
 				// invisible calendar-wide switch behind the new controls.
@@ -461,7 +447,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 				state.week_anchor = day;
 				state.week_scroll_x = 0.0;
 			}
-			state.calendar.menu_open = false;
+			state.close_popup(Popup::CalendarMenu);
 			if state.range_view_active() {
 				state.overview_month_open = false;
 			} else {
@@ -507,9 +493,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 			if state.calendar.month_open {
 				state.calendar.month = calendar::first_of_month(state.calendar.day);
 				if !state.range_view_active() {
-					state.calendar.menu_open = false;
-					state.calendar.search.open = false;
-					state.calendar.actions_open = false;
+					state.close_calendar_popup();
 				}
 			}
 			Task::none()
@@ -518,9 +502,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 			state.overview_month_open = !state.overview_month_open;
 			if state.overview_month_open {
 				state.overview_month = calendar::first_of_month(state.week_anchor);
-				state.calendar.menu_open = false;
-				state.calendar.search.open = false;
-				state.calendar.actions_open = false;
+				state.close_calendar_popup();
 			}
 			Task::none()
 		}
@@ -572,6 +554,14 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 			])
 		}
 	}
+}
+
+/// One sheet at a time: a sheet that opens takes the month pickers' place, and
+/// a color picker left open does not come back with the menu.
+fn clear_behind_sheet(state: &mut State) {
+	state.calendar.color_editor = None;
+	state.calendar.month_open = false;
+	state.overview_month_open = false;
 }
 
 /// Enter Plan on Schedule; switching ranges keeps its current sidebar tab.

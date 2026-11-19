@@ -12,6 +12,7 @@ use iced_test::core::Settings;
 use iced_test::{Error, Simulator as Sim};
 
 use timeparagon::app::MonthPicker;
+use timeparagon::app::Popup;
 use timeparagon::app::{self, Message, Screen, State};
 use timeparagon::app::{
 	CalendarMessage, EventMessage, NavigationMessage, NotepadMessage, SettingsMessage, TaskMessage,
@@ -50,7 +51,7 @@ fn at<'a>(size: Size, element: Element<'a, Message>) -> Simulator<'a> {
 #[test]
 fn set_alarm_is_clickable_at_the_minimum_width() -> Result<(), Error> {
 	let mut state = state();
-	state.calendar.actions_open = true;
+	state.popup = Some(Popup::CalendarActions);
 	let mut ui = render(&state, Size::new(180.0, 240.0));
 
 	let _ = ui.click("Set alarm")?;
@@ -525,7 +526,7 @@ fn the_calendar_menu_lists_calendars_without_website_or_dock_buttons() {
 	state.screen = Screen::Calendar;
 	state.calendar =
 		timeparagon::calendar::Store::with_snapshot(timeparagon::calendar::sample_snapshot());
-	state.calendar.menu_open = true;
+	state.popup = Some(Popup::CalendarMenu);
 
 	let mut ui = render(&state, Size::new(200.0, 500.0));
 
@@ -646,7 +647,7 @@ fn plan_day_has_task_tabs_and_more_opens_a_menu() -> Result<(), Error> {
 		&mut state,
 		Message::Navigation(NavigationMessage::MoreMenuToggled),
 	);
-	assert!(state.more_menu_open);
+	assert_eq!(state.popup, Some(Popup::MoreMenu));
 	let mut ui = render(&state, Size::new(420.0, 600.0));
 	for label in timeparagon::ui::MORE_LABELS {
 		assert!(ui.find(label).is_ok(), "{label:?} is missing from More");
@@ -658,7 +659,7 @@ fn plan_day_has_task_tabs_and_more_opens_a_menu() -> Result<(), Error> {
 		&mut state,
 		Message::Navigation(NavigationMessage::ScreenSelected(Screen::Notes)),
 	);
-	assert!(!state.more_menu_open);
+	assert_ne!(state.popup, Some(Popup::MoreMenu));
 
 	Ok(())
 }
@@ -761,7 +762,7 @@ fn google_task_lists_can_be_given_individual_colors() -> Result<(), Error> {
 	state.screen = Screen::Calendar;
 	state.calendar =
 		timeparagon::calendar::Store::with_snapshot(timeparagon::calendar::sample_snapshot());
-	state.calendar.menu_open = true;
+	state.popup = Some(Popup::CalendarMenu);
 	state
 		.calendar
 		.calendars
@@ -1088,7 +1089,7 @@ fn the_notepad_is_first_under_more() {
 		);
 		drop(ui);
 
-		state.more_menu_open = true;
+		state.popup = Some(Popup::MoreMenu);
 		let mut ui = render(&state, Size::new(width, HEIGHT));
 		let notepad = ui.find("Notepad").expect("Notepad in More").bounds();
 		for label in timeparagon::ui::MORE_LABELS.into_iter().skip(1) {
@@ -1104,7 +1105,7 @@ fn the_notepad_is_first_under_more() {
 fn the_more_menu_is_laid_out_in_rows_of_tiles() {
 	for width in WIDTHS {
 		let mut state = state();
-		state.more_menu_open = true;
+		state.popup = Some(Popup::MoreMenu);
 		let mut ui = render(&state, Size::new(width, 480.0));
 		let mut at = |label: &str| ui.find(label).expect(label).bounds();
 		let rows = [
@@ -1136,7 +1137,7 @@ fn the_more_menu_is_laid_out_in_rows_of_tiles() {
 #[test]
 fn the_habits_item_opens_the_habits() -> Result<(), Error> {
 	let mut state = state();
-	state.more_menu_open = true;
+	state.popup = Some(Popup::MoreMenu);
 	let mut ui = render(&state, Size::new(420.0, 600.0));
 
 	for label in timeparagon::ui::MORE_LABELS {
@@ -1162,7 +1163,7 @@ fn the_habits_item_opens_the_habits() -> Result<(), Error> {
 fn the_notepad_item_opens_the_notepad() -> Result<(), Error> {
 	for width in WIDTHS {
 		let mut state = state();
-		state.more_menu_open = true;
+		state.popup = Some(Popup::MoreMenu);
 		let mut ui = render(&state, Size::new(width, HEIGHT));
 		ui.click("Notepad")?;
 		let message = ui.into_messages().next().expect("Notepad navigation");
@@ -1172,7 +1173,7 @@ fn the_notepad_item_opens_the_notepad() -> Result<(), Error> {
 		));
 		let _ = app::update(&mut state, message);
 		assert_eq!(state.screen, Screen::Notepad);
-		assert!(!state.more_menu_open);
+		assert_ne!(state.popup, Some(Popup::MoreMenu));
 	}
 	Ok(())
 }
@@ -2733,14 +2734,14 @@ fn google_sync_keeps_completed_block_tasks_and_stops_their_running_session() {
 fn notes_navigation_and_toolbar_fit_every_width() -> Result<(), Error> {
 	for width in WIDTHS {
 		let mut state = state();
-		state.more_menu_open = true;
+		state.popup = Some(Popup::MoreMenu);
 		let mut ui = render(&state, Size::new(width, HEIGHT));
 		ui.click("Notes")?;
 		assert!(ui.into_messages().any(|m| matches!(
 			m,
 			Message::Navigation(NavigationMessage::ScreenSelected(Screen::Notes))
 		)));
-		state.more_menu_open = false;
+		state.popup = None;
 		state.screen = Screen::Inbox;
 		let mut ui = render(&state, Size::new(width, HEIGHT));
 		ui.click("Backlog")?;

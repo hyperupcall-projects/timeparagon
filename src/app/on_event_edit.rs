@@ -60,6 +60,7 @@ pub(super) fn update(state: &mut State, message: EventEditMessage) -> Task<Messa
 		}
 		EventEditMessage::EventEditRequested(id) => {
 			state.calendar.begin_edit(&id);
+			state.close_calendar_popup();
 			Task::none()
 		}
 		EventEditMessage::EventEditProjects(action) => {

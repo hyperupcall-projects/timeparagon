@@ -195,6 +195,6 @@ pub(super) fn search_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element
 		metrics,
 		super::ViewTab::Filter,
 		panel,
-		message(Action::Toggle),
+		Message::Calendar(CalendarMessage::CalendarSearchToggled),
 	)
 }

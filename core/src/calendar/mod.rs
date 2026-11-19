@@ -1073,9 +1073,6 @@ pub fn default_calendar_id(sources: &[Calendar], settings: &CalendarSettings) ->
 pub struct Store {
 	pub connection: Connection,
 	pub sync: SyncState,
-	pub menu_open: bool,
-	/// The Actions popup in the calendar header: Sync now and Set alarm.
-	pub actions_open: bool,
 	pub search: search::Search,
 	pub calendars: Vec<Calendar>,
 	pub events: Vec<Event>,
@@ -1152,8 +1149,6 @@ impl Store {
 		Self {
 			connection,
 			sync: SyncState::Idle,
-			menu_open: false,
-			actions_open: false,
 			search: search::Search::default(),
 			calendars: Vec::new(),
 			events: Vec::new(),
@@ -1191,8 +1186,6 @@ impl Store {
 		Self {
 			connection: Connection::SignedIn,
 			sync: SyncState::Idle,
-			menu_open: false,
-			actions_open: false,
 			search: search::Search::default(),
 			calendars: snapshot.calendars,
 			events: snapshot.events,
@@ -1709,8 +1702,6 @@ impl Store {
 		self.draft = Some(Draft::new(calendar_id, start, end));
 		self.open_event = None;
 		self.edit_draft = None;
-		self.menu_open = false;
-		self.search.open = false;
 		self.month_open = false;
 	}
 
@@ -1723,8 +1714,6 @@ impl Store {
 		self.edit_draft = Some(EditDraft::from_event(event));
 		self.open_event = None;
 		self.draft = None;
-		self.menu_open = false;
-		self.search.open = false;
 		self.month_open = false;
 	}
 

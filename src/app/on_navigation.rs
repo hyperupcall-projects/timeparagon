@@ -39,27 +39,19 @@ pub(super) fn update(state: &mut State, message: NavigationMessage) -> Task<Mess
 			])
 		}
 		NavigationMessage::ViewMenuToggled => {
-			state.view_menu_open = !state.view_menu_open;
-			// Only one dropdown is open at a time.
-			if state.view_menu_open {
-				state.more_menu_open = false;
-			}
+			state.toggle_popup(Popup::ViewMenu);
 			Task::none()
 		}
 		NavigationMessage::MoreMenuToggled => {
-			state.more_menu_open = !state.more_menu_open;
-			if state.more_menu_open {
-				state.view_menu_open = false;
-				state.activity.open = false;
-			}
+			state.toggle_popup(Popup::MoreMenu);
 			Task::none()
 		}
 		NavigationMessage::ActivityLogToggled => {
-			state.activity.open = !state.activity.open;
-			if state.activity.open {
-				state.view_menu_open = false;
-				state.more_menu_open = false;
-			}
+			state.toggle_popup(Popup::ActivityLog);
+			Task::none()
+		}
+		NavigationMessage::PopupDismissed => {
+			state.popup = None;
 			Task::none()
 		}
 		NavigationMessage::ScreenSelected(screen) => {
@@ -74,17 +66,11 @@ pub(super) fn update(state: &mut State, message: NavigationMessage) -> Task<Mess
 /// Change sidebar content without changing the planning range.
 pub(super) fn select_screen(state: &mut State, screen: Screen) -> Task<Message> {
 	state.view_layout_input = None;
-	// Choosing a destination puts the dropdown menus away.
-	state.view_menu_open = false;
-	state.more_menu_open = false;
-	state.activity.open = false;
+	// Choosing a destination puts any popup away.
+	state.popup = None;
 	// Alarm setting belongs to the day view, so leaving it ends both.
 	state.alarms.mode = false;
 	state.alarms.editor = None;
-	// Keep the day grid's scroll position when switching screens.
-	state.calendar.menu_open = false;
-	state.calendar.search.open = false;
-	state.calendar.actions_open = false;
 	// Each task list opens its own selection in the details pane.
 	let tasks_screen = |screen| {
 		matches!(

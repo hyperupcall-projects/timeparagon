@@ -461,11 +461,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			state.timeblocking.focus = Some(id);
 			state.work_tracking.work_now = Some(crate::clock::utc_now());
 			state.calendar.open_event = None;
-			state.calendar.menu_open = false;
-			state.calendar.search.open = false;
-			state.calendar.actions_open = false;
-			state.calendar.month_open = false;
-			state.overview_month_open = false;
+			state.clear_calendar_overlays();
 			let unfocus = iced::advanced::widget::operate(
 				iced::advanced::widget::operation::focusable::unfocus(),
 			);
@@ -477,9 +473,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			}
 			state.calendar.open_event = None;
 			state.calendar.detail_event = None;
-			state.calendar.menu_open = false;
-			state.calendar.search.open = false;
-			state.calendar.actions_open = false;
+			state.close_calendar_popup();
 			return open(state, id);
 		}
 		Action::CloseView => {

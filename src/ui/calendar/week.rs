@@ -240,14 +240,8 @@ pub fn weekly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 		super::super::alarms::editor_overlay(state, metrics)
 	} else if state.overview_month_open {
 		month_overlay(state, MonthPicker::Overview, metrics)
-	} else if state.calendar.menu_open {
-		menu_overlay(state, metrics)
-	} else if state.calendar.search.open {
-		search_overlay(state, metrics)
-	} else if state.calendar.actions_open {
-		actions_overlay(state, metrics, true)
 	} else {
-		Space::new().width(0.0).height(0.0).into()
+		popup_overlay(state, metrics, true)
 	};
 	pointer_watch(stack![content, overlay])
 }

@@ -2361,6 +2361,13 @@ fn search_action(state: &mut State, action: calendar::search::Action) {
 	);
 }
 
+fn toggle_search(state: &mut State) {
+	let _ = crate::app::update(
+		state,
+		Message::Calendar(CalendarMessage::CalendarSearchToggled),
+	);
+}
+
 #[test]
 fn view_sits_beside_actions_on_every_header_width() {
 	let state = search_state();
@@ -2389,8 +2396,8 @@ fn view_sits_beside_actions_on_every_header_width() {
 #[test]
 fn search_popup_shows_each_section_and_reports_the_query() {
 	let mut state = search_state();
-	search_action(&mut state, calendar::search::Action::Toggle);
-	assert!(state.calendar.search.open);
+	toggle_search(&mut state);
+	assert_eq!(state.popup, Some(Popup::CalendarSearch));
 	let metrics = Metrics::of(state.main_size);
 	let mut ui = iced_test::Simulator::with_size(
 		Default::default(),
@@ -2474,12 +2481,12 @@ fn search_narrows_each_view_while_a_filter_is_on() {
 #[test]
 fn search_popup_and_the_other_sheets_replace_each_other() {
 	let mut state = search_state();
-	state.calendar.menu_open = true;
+	state.popup = Some(Popup::CalendarMenu);
 	state.calendar.month_open = true;
 	state.overview_month_open = true;
-	search_action(&mut state, calendar::search::Action::Toggle);
-	assert!(state.calendar.search.open);
-	assert!(!state.calendar.menu_open);
+	toggle_search(&mut state);
+	assert_eq!(state.popup, Some(Popup::CalendarSearch));
+	assert_ne!(state.popup, Some(Popup::CalendarMenu));
 	assert!(!state.calendar.month_open);
 	assert!(!state.overview_month_open);
 
@@ -2487,8 +2494,8 @@ fn search_popup_and_the_other_sheets_replace_each_other() {
 		&mut state,
 		Message::Calendar(CalendarMessage::CalendarMenuToggled),
 	);
-	assert!(state.calendar.menu_open);
-	assert!(!state.calendar.search.open);
+	assert_eq!(state.popup, Some(Popup::CalendarMenu));
+	assert_ne!(state.popup, Some(Popup::CalendarSearch));
 }
 
 #[test]
@@ -2514,8 +2521,8 @@ fn the_view_sheet_switches_tabs_and_actions_offers_sync_above_set_alarm() {
 	for message in messages {
 		let _ = crate::app::update(&mut state, message);
 	}
-	assert!(state.calendar.search.open);
-	assert!(!state.calendar.menu_open);
+	assert_eq!(state.popup, Some(Popup::CalendarSearch));
+	assert_ne!(state.popup, Some(Popup::CalendarMenu));
 	let mut ui = iced_test::Simulator::with_size(
 		Default::default(),
 		metrics.size,
@@ -2529,8 +2536,8 @@ fn the_view_sheet_switches_tabs_and_actions_offers_sync_above_set_alarm() {
 		&mut state,
 		Message::Calendar(CalendarMessage::CalendarActionsToggled),
 	);
-	assert!(state.calendar.actions_open);
-	assert!(!state.calendar.search.open);
+	assert_eq!(state.popup, Some(Popup::CalendarActions));
+	assert_ne!(state.popup, Some(Popup::CalendarSearch));
 	let mut ui = iced_test::Simulator::with_size(
 		Default::default(),
 		metrics.size,
@@ -2555,13 +2562,13 @@ fn the_view_sheet_switches_tabs_and_actions_offers_sync_above_set_alarm() {
 #[test]
 fn closing_the_search_popup_leaves_the_filter_on() {
 	let mut state = search_state();
-	search_action(&mut state, calendar::search::Action::Toggle);
+	toggle_search(&mut state);
 	search_action(
 		&mut state,
 		calendar::search::Action::Query("standup".into()),
 	);
-	search_action(&mut state, calendar::search::Action::Toggle);
-	assert!(!state.calendar.search.open);
+	toggle_search(&mut state);
+	assert_ne!(state.popup, Some(Popup::CalendarSearch));
 	assert!(state.calendar.search.is_active());
 }
 
@@ -2715,7 +2722,7 @@ fn messages_after_click(
 #[test]
 fn clicking_a_popups_background_keeps_it_open_but_clicking_outside_closes_it() {
 	let mut state = search_state();
-	search_action(&mut state, calendar::search::Action::Toggle);
+	toggle_search(&mut state);
 	state.main_size = Size::new(900.0, 800.0);
 	let metrics = Metrics::of(state.main_size);
 	// In each card's own padding, clear of every control.
@@ -2729,8 +2736,7 @@ fn clicking_a_popups_background_keeps_it_open_but_clicking_outside_closes_it() {
 			matches!(
 				message,
 				Message::Calendar(
-					CalendarMessage::CalendarSearch(calendar::search::Action::Toggle)
-						| CalendarMessage::CalendarMenuToggled
+					CalendarMessage::CalendarSearchToggled | CalendarMessage::CalendarMenuToggled
 				)
 			)
 		})

@@ -543,12 +543,12 @@ fn the_clock_shortcuts_are_left_off_while_writing() {
 	state.screen = Screen::Notepad;
 
 	let space = key_message(
-		&mut state,
+		&state,
 		Key::Named(keyboard::key::Named::Space),
 		keyboard::Modifiers::default(),
 	);
 	let reset = key_message(
-		&mut state,
+		&state,
 		Key::Character("r".into()),
 		keyboard::Modifiers::default(),
 	);
@@ -558,7 +558,7 @@ fn the_clock_shortcuts_are_left_off_while_writing() {
 
 	// Escape still leaves the page.
 	let escape = key_message(
-		&mut state,
+		&state,
 		Key::Named(keyboard::key::Named::Escape),
 		keyboard::Modifiers::default(),
 	);
@@ -884,7 +884,7 @@ fn range_surface_survives_escape_and_hides_with_the_panel() {
 	assert_eq!(state.editor_window, Some(floating));
 	assert!(state.monthly());
 	let escape = key_message(
-		&mut state,
+		&state,
 		Key::Named(keyboard::key::Named::Escape),
 		keyboard::Modifiers::default(),
 	);
@@ -1171,7 +1171,7 @@ fn editors_leave_the_main_window_geometry_unchanged_on_every_destination() {
 				assert_eq!(state.main_window, Some(main));
 				assert_eq!(state.main_size, Size::new(216.0, 900.0));
 				let escape = key_message(
-					&mut state,
+					&state,
 					Key::Named(keyboard::key::Named::Escape),
 					keyboard::Modifiers::default(),
 				)
@@ -1203,7 +1203,7 @@ fn escape_closes_an_open_contact_before_leaving_people() {
 	let mut state = State::blank();
 	state.screen = Screen::People;
 	let escape = key_message(
-		&mut state,
+		&state,
 		Key::Named(keyboard::key::Named::Escape),
 		keyboard::Modifiers::default(),
 	);
@@ -1221,7 +1221,7 @@ fn escape_closes_the_event_details_pane() {
 	state.calendar.open_event = Some("standup".into());
 
 	let escape = key_message(
-		&mut state,
+		&state,
 		Key::Named(keyboard::key::Named::Escape),
 		keyboard::Modifiers::default(),
 	);
@@ -1811,12 +1811,16 @@ fn place(state: &mut State, minutes: i64) {
 #[test]
 fn set_alarm_enters_and_leaves_alarm_mode() {
 	let mut state = State::blank();
-	state.calendar.menu_open = true;
+	state.popup = Some(Popup::CalendarMenu);
 
 	let _ = update(&mut state, Message::Alarms(alarms::Action::ModeToggled));
 
 	assert!(state.alarms.mode);
-	assert!(!state.calendar.menu_open, "the menu gets out of the way");
+	assert_ne!(
+		state.popup,
+		Some(Popup::CalendarMenu),
+		"the menu gets out of the way"
+	);
 
 	let _ = update(&mut state, Message::Alarms(alarms::Action::ModeToggled));
 
@@ -1829,7 +1833,7 @@ fn escape_leaves_alarm_mode() {
 	state.alarms.mode = true;
 
 	let escape = key_message(
-		&mut state,
+		&state,
 		Key::Named(keyboard::key::Named::Escape),
 		keyboard::Modifiers::default(),
 	);
@@ -2107,7 +2111,7 @@ fn estimate_popup_takes_keyboard_priority_over_the_time_block_view() {
 	state.task_editor_mut().estimate_task = Some("task:deep".into());
 	assert!(
 		key_message(
-			&mut state,
+			&state,
 			Key::Named(keyboard::key::Named::Space),
 			keyboard::Modifiers::default()
 		)
@@ -2115,7 +2119,7 @@ fn estimate_popup_takes_keyboard_priority_over_the_time_block_view() {
 	);
 	assert!(matches!(
 		key_message(
-			&mut state,
+			&state,
 			Key::Named(keyboard::key::Named::Escape),
 			keyboard::Modifiers::default()
 		),
@@ -2132,7 +2136,7 @@ fn escape_closes_the_distraction_choice_before_the_time_block_view() {
 	state.work_tracking.distraction_open = true;
 	assert!(matches!(
 		key_message(
-			&mut state,
+			&state,
 			Key::Named(keyboard::key::Named::Escape),
 			keyboard::Modifiers::default()
 		),
@@ -2166,14 +2170,14 @@ fn dragging_a_task_can_be_cancelled_with_escape() {
 	state.calendar.open_event = Some("deep".into());
 	assert!(
 		key_message(
-			&mut state,
+			&state,
 			Key::Named(keyboard::key::Named::Space),
 			keyboard::Modifiers::default()
 		)
 		.is_none()
 	);
 	let message = key_message(
-		&mut state,
+		&state,
 		Key::Named(keyboard::key::Named::Escape),
 		keyboard::Modifiers::default(),
 	);
@@ -2218,7 +2222,7 @@ fn notes_typing_does_not_trigger_timer_shortcuts() {
 	state.screen = Screen::Notes;
 	assert!(
 		key_message(
-			&mut state,
+			&state,
 			Key::Named(keyboard::key::Named::Space),
 			keyboard::Modifiers::default()
 		)
@@ -2226,7 +2230,7 @@ fn notes_typing_does_not_trigger_timer_shortcuts() {
 	);
 	assert!(matches!(
 		key_message(
-			&mut state,
+			&state,
 			Key::Named(keyboard::key::Named::Escape),
 			keyboard::Modifiers::default()
 		),
@@ -2359,7 +2363,7 @@ fn the_zoom_keys_need_the_modifier() {
 
 	for character in ["+", "-", "0"] {
 		let pressed = key_message(
-			&mut state,
+			&state,
 			Key::Character(character.into()),
 			keyboard::Modifiers::default(),
 		);
@@ -2571,7 +2575,7 @@ fn recurring_moves_and_both_resize_edges_require_scope_and_cancel_restores_times
 				assert_eq!(state.calendar.event(&original.id).unwrap().start, start);
 				assert!(matches!(
 					key_message(
-						&mut state,
+						&state,
 						Key::Named(keyboard::key::Named::Escape),
 						keyboard::Modifiers::default()
 					),
@@ -2673,7 +2677,7 @@ fn quick_create_cycles_types_without_committing_and_escape_dismisses() {
 	assert_eq!(state.draft_kind_focus, Some(calendar::DraftKind::Habit));
 	assert!(matches!(
 		key_message(
-			&mut state,
+			&state,
 			Key::Named(keyboard::key::Named::Enter),
 			keyboard::Modifiers::default()
 		),
@@ -2691,7 +2695,7 @@ fn quick_create_cycles_types_without_committing_and_escape_dismisses() {
 	);
 	assert_eq!(state.draft_kind_focus, Some(calendar::DraftKind::Event));
 	let escape = key_message(
-		&mut state,
+		&state,
 		Key::Named(keyboard::key::Named::Escape),
 		keyboard::Modifiers::default(),
 	)
@@ -2744,7 +2748,7 @@ fn life_area_opens_in_a_separate_panel_and_escape_closes_it() {
 		);
 	}
 	let escape = key_message(
-		&mut state,
+		&state,
 		Key::Named(keyboard::key::Named::Escape),
 		keyboard::Modifiers::default(),
 	)
@@ -2911,4 +2915,121 @@ fn every_life_page_and_panel_renders_with_goals_objectives_and_reviews() {
 			.into_messages()
 			.any(|message| matches!(message, Message::Life(Action::Back)))
 	);
+}
+
+#[test]
+fn opening_a_popup_replaces_the_one_on_show() {
+	let mut state = State::blank();
+	let toggles = [
+		(
+			Message::Navigation(NavigationMessage::ViewMenuToggled),
+			Popup::ViewMenu,
+		),
+		(
+			Message::Navigation(NavigationMessage::MoreMenuToggled),
+			Popup::MoreMenu,
+		),
+		(
+			Message::Navigation(NavigationMessage::ActivityLogToggled),
+			Popup::ActivityLog,
+		),
+		(
+			Message::Calendar(CalendarMessage::CalendarMenuToggled),
+			Popup::CalendarMenu,
+		),
+		(
+			Message::Calendar(CalendarMessage::CalendarSearchToggled),
+			Popup::CalendarSearch,
+		),
+		(
+			Message::Calendar(CalendarMessage::CalendarActionsToggled),
+			Popup::CalendarActions,
+		),
+	];
+	for (message, popup) in toggles {
+		let _ = update(&mut state, message.clone());
+		assert_eq!(state.popup, Some(popup));
+		let _ = update(&mut state, message.clone());
+		assert_eq!(state.popup, None, "{popup:?} closes itself");
+		let _ = update(&mut state, message);
+	}
+}
+
+#[test]
+fn escape_puts_away_the_popup_on_show() {
+	for popup in [
+		Popup::ViewMenu,
+		Popup::MoreMenu,
+		Popup::ActivityLog,
+		Popup::CalendarMenu,
+		Popup::CalendarSearch,
+		Popup::CalendarActions,
+	] {
+		let mut state = State::blank();
+		state.popup = Some(popup);
+		let escape = key_message(
+			&state,
+			Key::Named(keyboard::key::Named::Escape),
+			keyboard::Modifiers::default(),
+		)
+		.expect("Escape has a popup to close");
+		assert_eq!(state.popup, Some(popup), "reading a key changes nothing");
+		let _ = update(&mut state, escape);
+		assert_eq!(state.popup, None, "{popup:?} is put away");
+	}
+}
+
+#[test]
+fn an_open_event_closes_before_a_calendar_popup_but_not_before_a_menu() {
+	let mut state = State::blank();
+	state.calendar.open_event = Some("event".into());
+	let escape = |state: &State| {
+		key_message(
+			state,
+			Key::Named(keyboard::key::Named::Escape),
+			keyboard::Modifiers::default(),
+		)
+	};
+
+	state.popup = Some(Popup::CalendarMenu);
+	assert!(matches!(
+		escape(&state),
+		Some(Message::Event(EventMessage::EventClosed))
+	));
+
+	state.popup = Some(Popup::MoreMenu);
+	assert!(matches!(
+		escape(&state),
+		Some(Message::Navigation(NavigationMessage::PopupDismissed))
+	));
+}
+
+#[test]
+fn calendar_work_leaves_the_navigation_menus_open() {
+	let mut state = State::blank();
+	state.popup = Some(Popup::MoreMenu);
+	state.close_calendar_popup();
+	assert_eq!(state.popup, Some(Popup::MoreMenu));
+
+	state.popup = Some(Popup::CalendarActions);
+	state.close_calendar_popup();
+	assert_eq!(state.popup, None);
+}
+
+#[test]
+fn moving_a_day_puts_the_calendars_tab_away_but_keeps_the_filter_open() {
+	let mut state = State::blank();
+	state.popup = Some(Popup::CalendarSearch);
+	let _ = update(
+		&mut state,
+		Message::Calendar(CalendarMessage::CalendarDayShift(1)),
+	);
+	assert_eq!(state.popup, Some(Popup::CalendarSearch));
+
+	state.popup = Some(Popup::CalendarMenu);
+	let _ = update(
+		&mut state,
+		Message::Calendar(CalendarMessage::CalendarDayShift(1)),
+	);
+	assert_eq!(state.popup, None);
 }

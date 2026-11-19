@@ -6,6 +6,7 @@ use iced_test::core::Settings;
 use iced_test::{Error, Simulator as Sim};
 
 use timeparagon::app::NavigationMessage;
+use timeparagon::app::Popup;
 use timeparagon::app::{self, Message, Screen, State};
 use timeparagon::calendar::{Store, sample_snapshot};
 use timeparagon::config::TravelMode;
@@ -76,7 +77,7 @@ fn travel_is_toggled_from_the_calendar_menu() {
 		drop(header);
 
 		// Travel sits in the Calendars tab under the TimeParagon heading, after Sleep.
-		state.calendar.menu_open = true;
+		state.popup = Some(Popup::CalendarMenu);
 		let mut ui = Sim::with_size(
 			Settings::default(),
 			state.main_size,
@@ -134,7 +135,7 @@ fn toggling_travel_turns_the_day_view_trips_on_and_off() {
 fn the_travel_item_is_in_the_more_menu() -> Result<(), Error> {
 	for width in WIDTHS {
 		let (mut state, ..) = state();
-		state.more_menu_open = true;
+		state.popup = Some(Popup::MoreMenu);
 		let mut ui = render(&state, Size::new(width, 400.0));
 
 		let travel = ui.find("Travel").expect("Travel item").bounds();

@@ -2,6 +2,7 @@ use chrono::{Duration, Local, NaiveDate};
 use iced::futures::{StreamExt, executor::block_on};
 use iced::{Element, Size};
 use iced_test::{Error, Simulator, core::Settings};
+use timeparagon::app::Popup;
 use timeparagon::app::{
 	CalendarMessage, EventMessage, MonthPicker, NavigationMessage, PlanTab, SettingsMessage,
 	SystemMessage, TaskMessage,
@@ -95,7 +96,7 @@ fn open_plan(state: &mut State, size: Size) -> Result<(), Error> {
 	for message in messages {
 		let _ = app::update(state, message);
 	}
-	assert!(state.view_menu_open);
+	assert_eq!(state.popup, Some(Popup::ViewMenu));
 	Ok(())
 }
 
@@ -497,7 +498,7 @@ fn plan_split_button_remembers_and_opens_the_selected_period() -> Result<(), Err
 			}
 			assert_eq!(state.plan_view, view);
 			assert_eq!(state.view, view);
-			assert!(!state.view_menu_open);
+			assert_ne!(state.popup, Some(Popup::ViewMenu));
 			assert_eq!(timeparagon::ui::plan_view_label(&state), label);
 
 			// Leaving planning must preserve the label and main-button action.
@@ -523,7 +524,7 @@ fn plan_split_button_remembers_and_opens_the_selected_period() -> Result<(), Err
 					Screen::Calendar
 				}
 			);
-			assert!(!state.view_menu_open);
+			assert_ne!(state.popup, Some(Popup::ViewMenu));
 		}
 	}
 	Ok(())
@@ -590,7 +591,7 @@ fn plan_menu_selects_overviews_from_every_screen() -> Result<(), Error> {
 				};
 				assert_eq!(state.screen, expected_screen);
 				assert_eq!(state.view, view);
-				assert!(!state.view_menu_open);
+				assert_ne!(state.popup, Some(Popup::ViewMenu));
 				let mut panel = render_main(&state, size);
 				let selected = panel
 					.find(timeparagon::ui::plan_view_label(&state))?
@@ -617,7 +618,7 @@ fn plan_menu_selects_overviews_from_every_screen() -> Result<(), Error> {
 				};
 				assert_eq!(state.screen, expected_screen);
 				assert_eq!(state.view, view);
-				assert!(!state.view_menu_open);
+				assert_ne!(state.popup, Some(Popup::ViewMenu));
 			}
 		}
 	}
@@ -861,7 +862,7 @@ fn weekly_picker_emits_hover_and_selection_and_tabs_remain_reachable() -> Result
 			m,
 			Message::Calendar(CalendarMessage::CalendarModeSelected(true))
 		)));
-		state.view_menu_open = false;
+		state.popup = None;
 	}
 	let mut ui = render(&state, Size::new(180.0, 240.0));
 	// The week view's picker is labelled with the range on screen, written

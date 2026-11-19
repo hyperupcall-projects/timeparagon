@@ -230,11 +230,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			// Alarm mode owns the grid, so whatever else was floating over
 			// it is put away first.
 			state.alarms.mode = true;
-			state.calendar.menu_open = false;
-			state.calendar.search.open = false;
-			state.calendar.actions_open = false;
-			state.calendar.month_open = false;
-			state.overview_month_open = false;
+			state.clear_calendar_overlays();
 			state.calendar.open_event = None;
 
 			close_editor(state)
@@ -360,11 +356,7 @@ fn open(state: &mut State, id: u64) {
 		time_text: alarm.at.format("%H:%M").to_string(),
 		time_error: None,
 	});
-	state.calendar.menu_open = false;
-	state.calendar.search.open = false;
-	state.calendar.actions_open = false;
-	state.calendar.month_open = false;
-	state.overview_month_open = false;
+	state.clear_calendar_overlays();
 }
 
 /// Puts the popup away, writing any edit that was still waiting.

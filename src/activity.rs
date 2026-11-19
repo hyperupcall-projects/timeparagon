@@ -56,8 +56,6 @@ pub struct Activity {
 	database_sequence: u64,
 	/// The last Google write log entry already copied into [`Self::log`].
 	google_sequence: u64,
-	/// The popup listing the log is open.
-	pub open: bool,
 }
 
 impl Activity {

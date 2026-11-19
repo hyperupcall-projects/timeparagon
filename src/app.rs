@@ -326,8 +326,37 @@ impl Flash {
 	}
 }
 
+/// A popup that closes when another one opens. At most one is ever showing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Popup {
+	/// The Plan menu under the left-hand navigation group.
+	ViewMenu,
+	/// The More menu under the right-hand navigation group.
+	MoreMenu,
+	/// The log of background work, rising from the foot of the panel.
+	ActivityLog,
+	/// The Calendars tab of the calendar header's View sheet.
+	CalendarMenu,
+	/// The Filter tab of the same sheet. The filter stays on after it closes.
+	CalendarSearch,
+	/// The Actions popup in the calendar header: Sync now and Set alarm.
+	CalendarActions,
+}
+
+impl Popup {
+	/// Whether this hangs off the calendar, rather than the app's navigation.
+	pub fn is_calendar(self) -> bool {
+		matches!(
+			self,
+			Self::CalendarMenu | Self::CalendarSearch | Self::CalendarActions
+		)
+	}
+}
+
 pub struct State {
 	pub picker: Option<crate::ui::controls::Picker>,
+	/// The popup on show, if any.
+	pub popup: Option<Popup>,
 	/// Background work under way, and the log of what it has done.
 	pub activity: crate::activity::Activity,
 	/// Local edits not yet sent by database sync, as last read.
@@ -362,10 +391,6 @@ pub struct State {
 	pub view: CalendarView,
 	/// Last period chosen for the Plan split button.
 	pub plan_view: CalendarView,
-	/// Whether the Plan menu under the left-hand navigation group is open.
-	pub view_menu_open: bool,
-	/// Whether the More menu under the right-hand navigation group is open.
-	pub more_menu_open: bool,
 	pub week_anchor: chrono::NaiveDate,
 	pub week_hover: Option<chrono::NaiveDate>,
 	pub week_scroll_x: f32,
@@ -513,6 +538,8 @@ pub enum NavigationMessage {
 	MoreMenuToggled,
 	/// The log of background work, opened from the foot of the panel.
 	ActivityLogToggled,
+	/// Escape put away the popup on show.
+	PopupDismissed,
 }
 
 /// The notepad page.
@@ -688,6 +715,8 @@ pub enum CalendarMessage {
 	CalendarMenuToggled,
 	/// The Actions button in the calendar header.
 	CalendarActionsToggled,
+	/// The Filter tab of the View sheet.
+	CalendarSearchToggled,
 	CalendarSearch(calendar::search::Action),
 	CalendarToggled(String, bool),
 	/// Move a calendar-view source one position up (left) or down (right).
@@ -919,6 +948,7 @@ impl State {
 			draft_kind_focus: None,
 			task_description: text_editor::Content::new(),
 			task_creation_window: false,
+			popup: None,
 			description_popup: None,
 			description_editor: text_editor::Content::new(),
 			form_editors: FormEditors::new(),
@@ -929,8 +959,6 @@ impl State {
 			screen: Screen::Calendar,
 			view: CalendarView::default(),
 			plan_view: CalendarView::Day,
-			view_menu_open: false,
-			more_menu_open: false,
 			week_anchor: calendar::day_at(crate::clock::now(), day_end_hour),
 			week_hover: None,
 			week_scroll_x: 0.0,
@@ -1021,6 +1049,34 @@ impl State {
 
 	pub fn screen_margin_width(&self) -> f32 {
 		self.screen_margin() * 2.0
+	}
+
+	/// Opens `popup` in place of whatever is showing, or closes it if it is
+	/// the one showing. Returns whether it is open now.
+	pub fn toggle_popup(&mut self, popup: Popup) -> bool {
+		self.popup = (self.popup != Some(popup)).then_some(popup);
+		self.popup.is_some()
+	}
+
+	/// Closes `popup` if it is the one showing.
+	pub fn close_popup(&mut self, popup: Popup) {
+		if self.popup == Some(popup) {
+			self.popup = None;
+		}
+	}
+
+	/// Closes the calendar's popup, leaving the navigation menus alone.
+	pub fn close_calendar_popup(&mut self) {
+		if self.popup.is_some_and(Popup::is_calendar) {
+			self.popup = None;
+		}
+	}
+
+	/// Clears everything floating over the calendar grid.
+	pub fn clear_calendar_overlays(&mut self) {
+		self.close_calendar_popup();
+		self.calendar.month_open = false;
+		self.overview_month_open = false;
 	}
 
 	/// A habit is open beside the Habits list, or being added.
@@ -1932,13 +1988,14 @@ fn routine_key(state: &State, key: Key) -> Option<Message> {
 ///
 /// Kept apart from the task it turns into, so that what a key does can be
 /// looked at without running anything.
-fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> Option<Message> {
+fn key_message(state: &State, key: Key, modifiers: keyboard::Modifiers) -> Option<Message> {
 	use keyboard::key::Named;
+	// Most of what can be open takes every key, and answers only to Escape.
+	let escape_pressed = key == Key::Named(Named::Escape);
+	let escape = |message: Message| escape_pressed.then_some(message);
+
 	if state.calendar.pending_move.is_some() {
-		return match key.as_ref() {
-			Key::Named(Named::Escape) => Some(Message::Event(EventMessage::EventMoveCancelled)),
-			_ => None,
-		};
+		return escape(Message::Event(EventMessage::EventMoveCancelled));
 	}
 	if state.calendar.draft.is_some() {
 		return match key.as_ref() {
@@ -1952,20 +2009,14 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
 		};
 	}
 	if state.travel.map.active {
-		return match key.as_ref() {
-			Key::Named(Named::Escape) => Some(Message::Travel(crate::travel::Action::Map(
-				crate::travel::map::Action::Close,
-			))),
-			_ => None,
-		};
+		return escape(Message::Travel(crate::travel::Action::Map(
+			crate::travel::map::Action::Close,
+		)));
 	}
 	if state.inbox.voice.debug_open {
-		return match key.as_ref() {
-			Key::Named(Named::Escape) => Some(Message::Inbox(crate::inbox::Action::Voice(
-				crate::voice::Action::Debug(false),
-			))),
-			_ => None,
-		};
+		return escape(Message::Inbox(crate::inbox::Action::Voice(
+			crate::voice::Action::Debug(false),
+		)));
 	}
 	if let Some(picker) = &state.picker {
 		use crate::ui::controls::Action;
@@ -1984,164 +2035,87 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
 	// else looks at the key, so Escape cancels the drag instead of closing the
 	// view underneath it.
 	if state.timeblocking.dragging.is_some() {
-		return match key.as_ref() {
-			Key::Named(Named::Escape) => Some(Message::TimeBlocking(
-				crate::timeblocking::Action::CancelDrag,
-			)),
-			_ => None,
-		};
+		return escape(Message::TimeBlocking(
+			crate::timeblocking::Action::CancelDrag,
+		));
 	}
 
 	// The alarm popup and alarm setting mode are put away with Escape before
 	// anything behind them is.
 	if state.alarms.editor.is_some() {
-		return match key.as_ref() {
-			Key::Named(Named::Escape) => Some(Message::Alarms(alarms::Action::CloseEditor)),
-			_ => None,
-		};
+		return escape(Message::Alarms(alarms::Action::CloseEditor));
 	}
 	if state.alarms.mode {
-		return match key.as_ref() {
-			Key::Named(Named::Escape) => Some(Message::Alarms(alarms::Action::ModeToggled)),
-			_ => None,
-		};
+		return escape(Message::Alarms(alarms::Action::ModeToggled));
 	}
-	if state.view_menu_open {
-		return match key.as_ref() {
-			Key::Named(Named::Escape) => {
-				Some(Message::Navigation(NavigationMessage::ViewMenuToggled))
-			}
-			_ => None,
-		};
-	}
-	if state.more_menu_open {
-		return match key.as_ref() {
-			Key::Named(Named::Escape) => {
-				Some(Message::Navigation(NavigationMessage::MoreMenuToggled))
-			}
-			_ => None,
-		};
-	}
-	if state.activity.open {
-		return match key.as_ref() {
-			Key::Named(Named::Escape) => {
-				Some(Message::Navigation(NavigationMessage::ActivityLogToggled))
-			}
-			_ => None,
-		};
+	// The calendar's own popups wait their turn further down.
+	if state.popup.is_some_and(|popup| !popup.is_calendar()) {
+		return escape(Message::Navigation(NavigationMessage::PopupDismissed));
 	}
 
 	if state.task_editor().estimate_task.is_some() {
-		return match key.as_ref() {
-			Key::Named(Named::Escape) => Some(Message::TaskEditor(
-				crate::task_editor::Action::CloseEstimate,
-			)),
-			_ => None,
-		};
+		return escape(Message::TaskEditor(
+			crate::task_editor::Action::CloseEstimate,
+		));
 	}
 	if state.travel.open.is_some() {
-		return match key.as_ref() {
-			Key::Named(Named::Escape) => Some(Message::Travel(crate::travel::Action::CloseLeg)),
-			_ => None,
-		};
+		return escape(Message::Travel(crate::travel::Action::CloseLeg));
 	}
 	if state.habits.day_dialog.is_some() {
-		return match key.as_ref() {
-			Key::Named(Named::Escape) => Some(Message::Habits(crate::habits::Action::CloseDay)),
-			_ => None,
-		};
+		return escape(Message::Habits(crate::habits::Action::CloseDay));
 	}
 	if state.habits.confirm_delete.is_some() {
-		return match key.as_ref() {
-			Key::Named(Named::Escape) => {
-				Some(Message::Habits(crate::habits::Action::DeleteCancelled))
-			}
-			_ => None,
-		};
+		return escape(Message::Habits(crate::habits::Action::DeleteCancelled));
 	}
 	if state.habits.section_edit.is_some() {
 		// Naming a section must not reach the clock shortcuts.
-		return match key.as_ref() {
-			Key::Named(Named::Escape) => {
-				Some(Message::Habits(crate::habits::Action::CancelSection))
-			}
-			_ => None,
-		};
+		return escape(Message::Habits(crate::habits::Action::CancelSection));
 	}
 	if state.habits.form.is_some() {
 		// Typing into the habit form must not reach the clock shortcuts.
-		return match key.as_ref() {
-			Key::Named(Named::Escape) => Some(Message::Habits(crate::habits::Action::CancelEdit)),
-			_ => None,
-		};
+		return escape(Message::Habits(crate::habits::Action::CancelEdit));
 	}
 	if state.inbox.draft.is_some() {
 		// Typing into the popup must not reach the clock shortcuts. Escape
 		// leaves the calendar preview first, back to the form it came from.
-		return match key.as_ref() {
-			Key::Named(Named::Escape) if state.inbox.preview.is_some() => Some(Message::Inbox(
-				crate::inbox::Action::Preview(crate::inbox::preview::PreviewAction::Close),
-			)),
-			Key::Named(Named::Escape) => Some(Message::Inbox(crate::inbox::Action::Cancel)),
-			_ => None,
-		};
+		return escape(Message::Inbox(if state.inbox.preview.is_some() {
+			crate::inbox::Action::Preview(crate::inbox::preview::PreviewAction::Close)
+		} else {
+			crate::inbox::Action::Cancel
+		}));
 	}
 	if state.brain_dump.open.is_some() {
 		// The page is an editor: only Escape leaves it, and no shortcut may
 		// steal a space while it is being written.
-		return match key.as_ref() {
-			Key::Named(Named::Escape) => Some(Message::BrainDump(crate::brain_dump::Action::Close)),
-			_ => None,
-		};
+		return escape(Message::BrainDump(crate::brain_dump::Action::Close));
 	}
 	if state.work_tracking.distraction_open {
-		return match key.as_ref() {
-			Key::Named(Named::Escape) => Some(Message::WorkTracking(
-				crate::focus::Action::CloseDistraction,
-			)),
-			_ => None,
-		};
+		return escape(Message::WorkTracking(
+			crate::focus::Action::CloseDistraction,
+		));
 	}
 	if state.work_tracking.session_edit.is_some() {
-		return match key.as_ref() {
-			Key::Named(Named::Escape) => {
-				Some(Message::WorkTracking(crate::focus::Action::CloseSession))
-			}
-			_ => None,
-		};
+		return escape(Message::WorkTracking(crate::focus::Action::CloseSession));
 	}
 	if state.timeblocking.focus.is_some() {
-		return match key.as_ref() {
-			// A task opened from the view closes before the view does.
-			Key::Named(Named::Escape) if state.calendar.open_event.is_some() => {
-				Some(Message::Event(EventMessage::EventClosed))
-			}
-			Key::Named(Named::Escape) => Some(Message::TimeBlocking(
-				crate::timeblocking::Action::CloseView,
-			)),
-			_ => None,
-		};
+		// A task opened from the view closes before the view does.
+		return escape(if state.calendar.open_event.is_some() {
+			Message::Event(EventMessage::EventClosed)
+		} else {
+			Message::TimeBlocking(crate::timeblocking::Action::CloseView)
+		});
 	}
 	if state.floating_editors()
 		&& state.calendar.open_event.is_none()
 		&& state.timeblocking.block.is_some()
-		&& key == Key::Named(Named::Escape)
+		&& escape_pressed
 	{
 		return Some(Message::TimeBlocking(crate::timeblocking::Action::Close));
 	}
-	if state.calendar.draft.is_some() || state.calendar.edit_draft.is_some() {
-		return match key.as_ref() {
-			Key::Named(Named::Escape) if state.calendar.draft.is_some() => {
-				Some(Message::EventDraft(EventDraftMessage::EventDraftCancelled))
-			}
-			Key::Named(Named::Escape) => Some(Message::Event(EventMessage::EventClosed)),
-			_ => None,
-		};
+	if state.calendar.edit_draft.is_some() {
+		return escape(Message::Event(EventMessage::EventClosed));
 	}
-	if state.two_week_more.is_some()
-		&& state.calendar.open_event.is_none()
-		&& key == Key::Named(Named::Escape)
-	{
+	if state.two_week_more.is_some() && state.calendar.open_event.is_none() && escape_pressed {
 		return Some(Message::Calendar(CalendarMessage::CalendarTwoWeekMore(
 			None,
 		)));
@@ -2231,15 +2205,8 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
 				Some(Message::Event(EventMessage::EventClosed))
 			} else if state.timeblocking.block.is_some() {
 				Some(Message::TimeBlocking(crate::timeblocking::Action::Close))
-			} else if state.calendar.menu_open {
-				state.calendar.menu_open = false;
-				None
-			} else if state.calendar.search.open {
-				state.calendar.search.open = false;
-				None
-			} else if state.calendar.actions_open {
-				state.calendar.actions_open = false;
-				None
+			} else if state.popup.is_some() {
+				Some(Message::Navigation(NavigationMessage::PopupDismissed))
 			} else if state.alarm_active {
 				Some(Message::System(SystemMessage::Dismiss))
 			} else if state.screen != Screen::Calendar {

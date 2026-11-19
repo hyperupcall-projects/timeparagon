@@ -41,8 +41,6 @@ impl std::fmt::Display for AvailabilityFilter {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Search {
-	/// Whether the popup is showing. The filter stays on after it closes.
-	pub open: bool,
 	pub query: String,
 	/// Look in descriptions as well as titles.
 	pub in_description: bool,
@@ -58,7 +56,6 @@ pub struct Search {
 
 #[derive(Debug, Clone)]
 pub enum Action {
-	Toggle,
 	Query(String),
 	InDescription(bool),
 	/// A time as `HH:MM`, the form the shared time control reports.
@@ -76,7 +73,6 @@ pub enum Action {
 impl Search {
 	pub fn update(&mut self, action: Action) {
 		match action {
-			Action::Toggle => self.open = !self.open,
 			Action::Query(query) => self.query = query,
 			Action::InDescription(value) => self.in_description = value,
 			Action::Time(value) => {
@@ -96,12 +92,7 @@ impl Search {
 			Action::PublicOnly(value) => self.public_only = value,
 			Action::Location(value) => self.location = value,
 			Action::DetailsByVisibility(value) => self.details_by_visibility = value,
-			Action::Clear => {
-				*self = Self {
-					open: self.open,
-					..Self::default()
-				}
-			}
+			Action::Clear => *self = Self::default(),
 		}
 	}
 
@@ -332,25 +323,18 @@ mod tests {
 	}
 
 	#[test]
-	fn an_untouched_search_is_inactive_and_clearing_keeps_the_popup_open() {
+	fn an_untouched_search_is_inactive_and_clearing_resets_it() {
 		let mut search = Search::default();
 		assert!(!search.is_active());
 		search.update(Action::Query("   ".into()));
 		search.update(Action::InDescription(true));
 		assert!(!search.is_active(), "neither narrows anything by itself");
 
-		search.update(Action::Toggle);
 		search.update(Action::Query("standup".into()));
 		search.update(Action::PublicOnly(true));
 		assert!(search.is_active());
 		search.update(Action::Clear);
-		assert_eq!(
-			search,
-			Search {
-				open: true,
-				..Search::default()
-			}
-		);
+		assert_eq!(search, Search::default());
 	}
 
 	#[test]

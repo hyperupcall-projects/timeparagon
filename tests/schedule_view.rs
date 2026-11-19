@@ -1,6 +1,7 @@
 use chrono::{Duration, Local, NaiveDate, TimeZone};
 use iced::Size;
 use iced_test::{Simulator, core::Settings};
+use timeparagon::app::Popup;
 use timeparagon::{
 	app::{self, CalendarMessage, CalendarView, EventMessage, Message, MonthPicker, State},
 	calendar::{self, Store},
@@ -77,14 +78,14 @@ fn date_picker_jumps_schedule_without_switching_views() {
 fn schedule_selection_closes_menu_and_preserves_date_when_reselected() {
 	let mut state = State::blank();
 	let selected = state.calendar.day;
-	state.view_menu_open = true;
+	state.popup = Some(Popup::ViewMenu);
 	let _ = app::update(
 		&mut state,
 		Message::Calendar(CalendarMessage::CalendarScheduleViewSelected),
 	);
 	assert_eq!(state.view, CalendarView::Schedule);
 	assert_eq!(state.plan_view, CalendarView::Schedule);
-	assert!(!state.view_menu_open);
+	assert_ne!(state.popup, Some(Popup::ViewMenu));
 	assert_eq!(state.week_anchor, selected);
 	state.week_anchor = selected + Duration::days(10);
 	let _ = app::update(

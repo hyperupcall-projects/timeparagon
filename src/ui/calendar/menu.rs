@@ -185,6 +185,21 @@ fn zoom_section<'a>(state: &State, metrics: &Metrics) -> Element<'a, Message> {
 	.into()
 }
 
+/// The calendar popup on show, if any. `alarm` is false where there is no
+/// grid to set an alarm on.
+pub(super) fn popup_overlay<'a>(
+	state: &'a State,
+	metrics: &Metrics,
+	alarm: bool,
+) -> Element<'a, Message> {
+	match state.popup {
+		Some(Popup::CalendarMenu) => menu_overlay(state, metrics),
+		Some(Popup::CalendarSearch) => search_overlay(state, metrics),
+		Some(Popup::CalendarActions) => actions_overlay(state, metrics, alarm),
+		_ => Space::new().width(0.0).height(0.0).into(),
+	}
+}
+
 pub(super) fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 	let dismiss = Message::Calendar(CalendarMessage::CalendarMenuToggled);
 
@@ -327,16 +342,17 @@ const VIEW_SHEET_WIDTH: f32 = 380.0;
 /// while a filter is on, because the filter stays on after the sheet closes.
 pub(super) fn view_button<'a>(state: &State, metrics: &Metrics) -> Element<'a, Message> {
 	let search = &state.calendar.search;
-	let open = state.calendar.menu_open || search.open;
+	let open = matches!(
+		state.popup,
+		Some(Popup::CalendarMenu | Popup::CalendarSearch)
+	);
 	// Each tab's own toggle closes it; with neither open, the sheet opens on
 	// the Calendars tab.
-	let message = if search.open {
-		Message::Calendar(CalendarMessage::CalendarSearch(
-			calendar::search::Action::Toggle,
-		))
+	let message = Message::Calendar(if state.popup == Some(Popup::CalendarSearch) {
+		CalendarMessage::CalendarSearchToggled
 	} else {
-		Message::Calendar(CalendarMessage::CalendarMenuToggled)
-	};
+		CalendarMessage::CalendarMenuToggled
+	});
 	button(text("View").size(metrics.label()).center())
 		.on_press(message)
 		.style(if open || search.is_modified() {
@@ -351,11 +367,13 @@ pub(super) fn view_button<'a>(state: &State, metrics: &Metrics) -> Element<'a, M
 pub(super) fn actions_button<'a>(state: &State, metrics: &Metrics) -> Element<'a, Message> {
 	button(text("Actions").size(metrics.label()).center())
 		.on_press(Message::Calendar(CalendarMessage::CalendarActionsToggled))
-		.style(if state.calendar.actions_open || state.alarms.mode {
-			crate::ui::controls::primary
-		} else {
-			crate::ui::controls::secondary
-		})
+		.style(
+			if state.popup == Some(Popup::CalendarActions) || state.alarms.mode {
+				crate::ui::controls::primary
+			} else {
+				crate::ui::controls::secondary
+			},
+		)
 		.into()
 }
 
@@ -397,9 +415,7 @@ pub(super) fn view_sheet<'a>(
 		tab_button(
 			"Filter",
 			tab == ViewTab::Filter,
-			Message::Calendar(CalendarMessage::CalendarSearch(
-				calendar::search::Action::Toggle,
-			)),
+			Message::Calendar(CalendarMessage::CalendarSearchToggled),
 			metrics,
 		),
 	]
