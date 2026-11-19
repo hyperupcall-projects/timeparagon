@@ -131,8 +131,8 @@ pub(super) fn day_canvas<'a>(
 					&& !hidden && (!event.is_task() || event.is_calendar_task()),
 				pending: event.details.sending
 					|| state.calendar.pending_time(&event.id).is_some()
-					|| state.timeblocking.busy.contains_task(&event.id)
-					|| (event.is_task() && !state.timeblocking.busy.is_empty())
+					|| state.task_operations.busy.contains_task(&event.id)
+					|| (event.is_task() && !state.task_operations.busy.is_empty())
 					|| state.habits.completing.contains(&event.id),
 				time_block,
 				habit: (event.is_habit() && !hidden)

@@ -203,7 +203,7 @@ pub fn from_form(state: &State) -> Vec<Proposal> {
 	let tokens = draft.quick_tokens(&state.config.projects);
 	let title = crate::task_input::remove(&draft.title, tokens.into_iter().map(|t| t.range));
 	let today = crate::clock::now().date_naive();
-	let when = crate::task_input::date(state.timeblocking.date.trim(), today).map(|day| {
+	let when = crate::task_input::date(state.task_editor().date.trim(), today).map(|day| {
 		let start = calendar::at_clock(day, 0, 0);
 		When {
 			start,
@@ -522,7 +522,7 @@ mod tests {
 		assert_eq!(proposals[0].title, "Write report");
 		assert!(proposals[0].when.is_none(), "no due date yet");
 
-		state.timeblocking.date = "2026-11-20".into();
+		state.task_editor_mut().date = "2026-11-20".into();
 		let when = from_form(&state)[0].when.clone().unwrap();
 		assert!(when.all_day);
 		assert_eq!(when.start.date_naive(), day("2026-11-20"));

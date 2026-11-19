@@ -30,11 +30,11 @@ fn popup(kind: &str) -> (State, &'static str) {
 				None,
 				chrono::Utc::now(),
 			);
-			state.timeblocking.session_edit = Some(0);
+			state.work_tracking.session_edit = Some(0);
 			"WORK SESSION"
 		}
 		"estimate" => {
-			state.timeblocking.estimate_task = Some("standup".into());
+			state.task_editor_mut().estimate_task = Some("standup".into());
 			"Estimated completion time"
 		}
 		"delete" => {

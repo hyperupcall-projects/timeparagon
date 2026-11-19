@@ -1178,7 +1178,7 @@ fn board_reordering_is_persistent_and_keeps_schedule_and_block_membership() {
 		);
 		assert_eq!(state.calendar.event("task:first").unwrap(), &original);
 		assert!(state.timeblocking.dragging.is_none());
-		assert!(state.timeblocking.busy.is_empty());
+		assert!(state.task_operations.busy.is_empty());
 	}
 	let serialized = toml::to_string(&state.config.calendar).unwrap();
 	let loaded = toml::from_str::<timeparagon::config::CalendarSettings>(&serialized).unwrap();

@@ -109,7 +109,7 @@ fn decisions_wait_their_turn_and_go_out_as_each_save_finishes() {
 
 	// Today, for an overdue task: the deadline moves with it.
 	run(&mut state, Action::Decide(Decision::Day(today)));
-	assert!(state.timeblocking.busy.contains_task("task:100"));
+	assert!(state.task_operations.busy.contains_task("task:100"));
 	assert_eq!(
 		state.routines.queue.front(),
 		Some(&Op {
@@ -138,7 +138,7 @@ fn decisions_wait_their_turn_and_go_out_as_each_save_finishes() {
 			Ok(vec![saved]),
 		)),
 	);
-	assert!(state.timeblocking.busy.contains_task("task:100"));
+	assert!(state.task_operations.busy.contains_task("task:100"));
 	assert_eq!(
 		state.routines.queue.front().map(|op| op.key.as_str()),
 		Some("101")
@@ -156,7 +156,7 @@ fn task_by<'a>(state: &'a State, key: &str) -> &'a Event {
 #[test]
 fn a_changed_mind_replaces_the_waiting_change() {
 	let mut state = refresh_state();
-	state.timeblocking.busy.insert("something-else");
+	state.task_operations.busy.insert("something-else");
 	run(&mut state, Action::Start(Routine::DailyRefresh));
 	run(&mut state, Action::Next);
 	run(&mut state, Action::Decide(Decision::Skip));
@@ -184,10 +184,10 @@ fn deleting_takes_a_second_press() {
 	run(&mut state, Action::Decide(Decision::Delete));
 	assert_eq!(state.routines.confirm_delete.as_deref(), Some("100"));
 	assert_eq!(state.routines.flow.as_ref().unwrap().refresh.index, 0);
-	assert!(state.timeblocking.busy.is_empty());
+	assert!(state.task_operations.busy.is_empty());
 	run(&mut state, Action::Decide(Decision::Delete));
 	assert!(state.routines.confirm_delete.is_none());
-	assert!(state.timeblocking.busy.contains_task("task:100"));
+	assert!(state.task_operations.busy.contains_task("task:100"));
 	assert_eq!(state.routines.flow.as_ref().unwrap().refresh.index, 1);
 }
 
@@ -403,7 +403,7 @@ fn moving_everything_left_to_tomorrow_queues_each_task() {
 			Change::Day(today + Duration::days(1)),
 		),
 	);
-	assert!(state.timeblocking.busy.contains_task("task:103"));
+	assert!(state.task_operations.busy.contains_task("task:103"));
 	assert_eq!(
 		state.routines.queue.iter().collect::<Vec<_>>(),
 		[&Op {

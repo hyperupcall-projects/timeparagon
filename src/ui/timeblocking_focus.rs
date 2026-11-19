@@ -32,8 +32,8 @@ const TIMELINE_INSET: f32 = 10.0;
 /// The closest two time labels can be without overlapping.
 const MARK_SPACING: f32 = 13.0;
 
-fn msg(action: Action) -> Message {
-	Message::TimeBlocking(action)
+fn msg(action: impl Into<Message>) -> Message {
+	action.into()
 }
 
 pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
@@ -153,7 +153,7 @@ fn pomodoro(state: &State, narrow: bool) -> Element<'_, Message> {
 			})
 			.size(13)
 		)
-		.on_press(msg(Action::PomodoroToggle))
+		.on_press(msg(crate::focus::Action::PomodoroToggle))
 		.style(if timer.running() {
 			crate::ui::controls::danger
 		} else {
@@ -165,7 +165,7 @@ fn pomodoro(state: &State, narrow: bool) -> Element<'_, Message> {
 	if !timer.fresh() {
 		controls = controls.push(
 			button(text("Reset").size(13))
-				.on_press(msg(Action::PomodoroReset))
+				.on_press(msg(crate::focus::Action::PomodoroReset))
 				.style(crate::ui::controls::ghost),
 		);
 	}
@@ -191,11 +191,11 @@ fn pomodoro(state: &State, narrow: bool) -> Element<'_, Message> {
 					button(text("−").size(13))
 						.padding([0, 7])
 						.style(crate::ui::controls::ghost)
-						.on_press(msg(Action::PomodoroMinutes(work, -1))),
+						.on_press(msg(crate::focus::Action::PomodoroMinutes(work, -1))),
 					button(text("+").size(13))
 						.padding([0, 7])
 						.style(crate::ui::controls::ghost)
-						.on_press(msg(Action::PomodoroMinutes(work, 1))),
+						.on_press(msg(crate::focus::Action::PomodoroMinutes(work, 1))),
 				]
 				.align_y(iced::Center),
 			);
@@ -252,7 +252,7 @@ fn task_list<'a>(
 		.into();
 	}
 	let now = state
-		.timeblocking
+		.work_tracking
 		.work_now
 		.unwrap_or_else(crate::clock::utc_now);
 	let current = tb::current_task(state, block).map(|task| task.id.as_str());
@@ -334,7 +334,7 @@ fn task_line<'a>(
 				..Default::default()
 			}
 		});
-	if state.timeblocking.busy.is_empty() {
+	if state.task_operations.busy.is_empty() {
 		check = check.on_press(Message::Task(TaskMessage::TaskToggled(task.id.clone())));
 	}
 	let title = button(title_text(
@@ -371,8 +371,10 @@ fn task_line<'a>(
 	let mut planned = button(text(planned_label).size(13).style(text::secondary))
 		.padding([2, 2])
 		.style(crate::ui::controls::ghost);
-	if !state.timeblocking.busy.contains_task(&task.id) {
-		planned = planned.on_press(msg(Action::EditEstimate(task.id.clone())));
+	if !state.task_operations.busy.contains_task(&task.id) {
+		planned = planned.on_press(msg(crate::task_editor::Action::EditEstimate(
+			task.id.clone(),
+		)));
 	}
 	let action: Element<'a, Message> = if task.completed {
 		Space::new().width(ACTION_WIDTH).into()
@@ -398,11 +400,11 @@ fn task_line<'a>(
 		} else {
 			crate::ui::controls::primary
 		});
-		if running || !state.timeblocking.busy.contains_task(&task.id) {
+		if running || !state.task_operations.busy.contains_task(&task.id) {
 			control = control.on_press(msg(if running {
-				Action::StopWork(task.id.clone())
+				crate::focus::Action::StopWork(task.id.clone())
 			} else {
-				Action::StartWork(task.id.clone())
+				crate::focus::Action::StartWork(task.id.clone())
 			}));
 		}
 		control.into()
@@ -499,14 +501,14 @@ fn distractions<'a>(state: &'a State, block: &'a Event) -> Element<'a, Message> 
 	if count > 0 {
 		line = line.push(
 			button(text("Undo").size(13))
-				.on_press(msg(Action::UndoDistraction))
+				.on_press(msg(crate::focus::Action::UndoDistraction))
 				.style(crate::ui::controls::ghost),
 		);
 	}
 	container(
 		line.push(
 			button(text("I got distracted").size(13))
-				.on_press(msg(Action::OpenDistraction))
+				.on_press(msg(crate::focus::Action::OpenDistraction))
 				.style(crate::ui::controls::secondary),
 		),
 	)
@@ -521,7 +523,7 @@ fn distraction_causes<'a>(habits: Vec<&'a crate::habits::Habit>) -> Element<'a, 
 	let choice = |label: &'a str, cause| {
 		button(text(label).size(13).width(Fill))
 			.width(Fill)
-			.on_press(msg(Action::ChooseDistraction(cause)))
+			.on_press(msg(crate::focus::Action::ChooseDistraction(cause)))
 	};
 	let mut choices = column![].spacing(4);
 	for habit in habits {
@@ -541,7 +543,7 @@ fn distraction_lengths<'a>() -> Element<'a, Message> {
 	for minutes in task_work::DISTRACTION_MINUTES {
 		choices = choices.push(
 			button(text(format!("+{minutes}m")).size(13))
-				.on_press(msg(Action::AddDistraction(minutes)))
+				.on_press(msg(crate::focus::Action::AddDistraction(minutes)))
 				.style(crate::ui::controls::primary),
 		);
 	}
@@ -552,7 +554,7 @@ fn distraction_lengths<'a>() -> Element<'a, Message> {
 /// how long it lasted.
 pub fn distraction_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 	let library = &state.habits.library;
-	let cause = state.timeblocking.distraction_cause.as_ref();
+	let cause = state.work_tracking.distraction_cause.as_ref();
 	let habits = library.distraction_habits();
 	let choosing = cause.is_none() && !habits.is_empty();
 	let chosen = match cause {
@@ -569,7 +571,7 @@ pub fn distraction_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'
 			.size(16)
 			.width(Fill),
 			button(text("Cancel").size(13))
-				.on_press(msg(Action::CloseDistraction))
+				.on_press(msg(crate::focus::Action::CloseDistraction))
 				.style(crate::ui::controls::ghost),
 		]
 		.spacing(8)
@@ -599,7 +601,7 @@ pub fn distraction_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'
 					..Default::default()
 				}),
 		)
-		.on_press(msg(Action::CloseDistraction))
+		.on_press(msg(crate::focus::Action::CloseDistraction))
 		.on_scroll(|_| Message::Ignored);
 	let foreground = container(
 		mouse_area(card)
@@ -615,7 +617,7 @@ pub fn distraction_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'
 /// Edit the exact start and end of a work session. A blank end keeps the
 /// session running, which is what the red "now" line shows.
 pub fn session_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-	let Some(index) = state.timeblocking.session_edit else {
+	let Some(index) = state.work_tracking.session_edit else {
 		return Space::new().width(0.0).height(0.0).into();
 	};
 	let Some(session) = state.config.task_work.sessions.get(index) else {
@@ -623,7 +625,7 @@ pub fn session_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
 	};
 	let width = metrics.size.width * 0.9;
 	let date = state
-		.timeblocking
+		.work_tracking
 		.session_date
 		.map(|date| date.format("%A, %B %-d, %Y").to_string())
 		.unwrap_or_default();
@@ -634,7 +636,7 @@ pub fn session_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
 				.style(text::secondary)
 				.width(Fill),
 			button("Close")
-				.on_press(msg(Action::CloseSession))
+				.on_press(msg(crate::focus::Action::CloseSession))
 				.style(crate::ui::controls::ghost),
 		],
 		text(session.task_title.clone()).size(if width < 360.0 { 18 } else { 23 }),
@@ -644,10 +646,10 @@ pub fn session_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
 				text("Start").size(12).style(text::secondary),
 				super::controls::time(
 					state.config.appearance.time_format,
-					&state.timeblocking.session_start,
+					&state.work_tracking.session_start,
 					true,
 					metrics.label(),
-					|value| msg(Action::SessionStart(value))
+					|value| msg(crate::focus::Action::SessionStart(value))
 				),
 			]
 			.spacing(3)
@@ -656,10 +658,10 @@ pub fn session_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
 				text("End").size(12).style(text::secondary),
 				container(super::controls::time(
 					state.config.appearance.time_format,
-					&state.timeblocking.session_end,
+					&state.work_tracking.session_end,
 					true,
 					metrics.label(),
-					|value| msg(Action::SessionEnd(value))
+					|value| msg(crate::focus::Action::SessionEnd(value))
 				)),
 			]
 			.spacing(3)
@@ -668,20 +670,20 @@ pub fn session_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
 		.spacing(8),
 		button(text("Still working — clear end time").size(11))
 			.style(crate::ui::controls::ghost)
-			.on_press(msg(Action::SessionEnd(String::new()))),
+			.on_press(msg(crate::focus::Action::SessionEnd(String::new()))),
 	]
 	.spacing(10);
-	if let Some(error) = &state.timeblocking.session_error {
+	if let Some(error) = &state.work_tracking.session_error {
 		body = body.push(text(error).size(12).style(text::danger));
 	}
 	body = body.push(
 		row![
 			button("Save")
-				.on_press(msg(Action::SaveSession))
+				.on_press(msg(crate::focus::Action::SaveSession))
 				.style(crate::ui::controls::primary)
 				.width(Fill),
 			button("Delete")
-				.on_press(msg(Action::DeleteSession))
+				.on_press(msg(crate::focus::Action::DeleteSession))
 				.style(crate::ui::controls::danger)
 				.width(Fill),
 		]
@@ -719,7 +721,7 @@ pub fn session_editor<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Me
 					..Default::default()
 				}),
 		)
-		.on_press(msg(Action::CloseSession));
+		.on_press(msg(crate::focus::Action::CloseSession));
 	let foreground = container(mouse_area(card).on_press(Message::Ignored))
 		.center_x(Fill)
 		.center_y(Fill);
@@ -754,7 +756,7 @@ fn timeline<'a>(state: &'a State, block: &'a Event, size: Size) -> Element<'a, M
 	let scale = fit_scale(size.height, duration, &slots);
 	let height = Length::Fixed(size.height);
 	let now = state
-		.timeblocking
+		.work_tracking
 		.work_now
 		.unwrap_or_else(crate::clock::utc_now);
 	let bars = session_bars(state, block, now);
@@ -931,8 +933,10 @@ impl canvas::Program<Message> for WorkLane {
 		for bar in &self.bars {
 			if self.rect(bounds, bar).contains(point) {
 				return Some(
-					canvas::Action::publish(Message::TimeBlocking(Action::EditSession(bar.index)))
-						.and_capture(),
+					canvas::Action::publish(Message::WorkTracking(
+						crate::focus::Action::EditSession(bar.index),
+					))
+					.and_capture(),
 				);
 			}
 		}

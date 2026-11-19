@@ -194,7 +194,7 @@ fn habit_occurrence<'a>(
 	.padding([2, 4])
 	.style(crate::ui::controls::secondary);
 	if event.is_task() {
-		if state.timeblocking.busy.is_empty() {
+		if state.task_operations.busy.is_empty() {
 			toggle = toggle.on_press(Message::Task(TaskMessage::TaskToggled(event.id.clone())));
 		}
 	} else if !state.habits.completing.contains(&event.id) {
@@ -249,7 +249,7 @@ impl Completion {
 		}
 		match self {
 			Self::Habit(_) => !state.habits.completing.contains(&event.id),
-			Self::Task(_) => state.timeblocking.busy.is_empty(),
+			Self::Task(_) => state.task_operations.busy.is_empty(),
 		}
 	}
 }

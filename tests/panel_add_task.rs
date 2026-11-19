@@ -122,7 +122,7 @@ fn dock_editor_window_uses_the_full_form_and_can_open_the_estimate_dialog() {
 	}
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(timeparagon::timeblocking::Action::EditEstimate(
+		Message::TaskEditor(timeparagon::task_editor::Action::EditEstimate(
 			inbox::DRAFT_ID.into(),
 		)),
 	);

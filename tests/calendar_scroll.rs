@@ -88,10 +88,15 @@ fn time_block_edit_and_view_preserve_calendar_scroll() {
 			(Message::TimeBlocking(Action::View("standup".into())), false),
 			(Message::TimeBlocking(Action::CloseView), false),
 			(
-				Message::TimeBlocking(Action::EditEstimate("standup".into())),
+				Message::TaskEditor(timeparagon::task_editor::Action::EditEstimate(
+					"standup".into(),
+				)),
 				false,
 			),
-			(Message::TimeBlocking(Action::CloseEstimate), false),
+			(
+				Message::TaskEditor(timeparagon::task_editor::Action::CloseEstimate),
+				false,
+			),
 		] {
 			let step = format!("{message:?}");
 			let _ = app::update(&mut state, message);

@@ -1514,7 +1514,7 @@ fn planned_task_status_can_be_changed_and_undone_without_hiding_the_task() -> Re
 				Ok(task),
 			)),
 		);
-		assert!(!state.timeblocking.busy.contains_task(id));
+		assert!(!state.task_operations.busy.contains_task(id));
 		let task = state.calendar.event(id).unwrap();
 		let mut actions = at(
 			Size::new(260.0, 240.0),
@@ -1620,27 +1620,30 @@ fn the_task_editor_sets_project_and_priority_and_offers_a_location() -> Result<(
 	}
 	let _ = ui.click("P1")?;
 	assert!(ui.into_messages().any(|message| matches!(message,
-        Message::TimeBlocking(Action::Priority(id, Some(Priority::P1))) if id == "task:backlog")));
+        Message::TaskEditor(timeparagon::task_editor::Action::Priority(id, Some(Priority::P1))) if id == "task:backlog")));
 
 	// Projects are added through a picker with its own search box.
 	let mut ui = render(&state, size);
 	let _ = ui.click("+ Add project")?;
 	assert!(ui.into_messages().any(|message| matches!(message,
-        Message::TimeBlocking(Action::ProjectPicker(id, true)) if id == "task:backlog")));
+        Message::TaskEditor(timeparagon::task_editor::Action::ProjectPicker(id, true)) if id == "task:backlog")));
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(Action::ProjectPicker("task:backlog".into(), true)),
+		Message::TaskEditor(timeparagon::task_editor::Action::ProjectPicker(
+			"task:backlog".into(),
+			true,
+		)),
 	);
 	let mut ui = render(&state, size);
 	assert!(ui.find("Search projects…").is_ok());
 	drop(ui);
-	state.timeblocking.project_query = "calc".into();
+	state.task_editor_mut().project_query = "calc".into();
 	let mut ui = render(&state, size);
 	assert!(ui.find("School/Calculus").is_ok());
 	assert!(ui.find("School/Homework").is_err());
 	let _ = ui.click("School/Calculus")?;
 	assert!(ui.into_messages().any(|message| matches!(message,
-        Message::TimeBlocking(Action::ProjectAdd(id, 3)) if id == "task:backlog")));
+        Message::TaskEditor(timeparagon::task_editor::Action::ProjectAdd(id, 3)) if id == "task:backlog")));
 
 	// The location button opens the place search for this task.
 	let mut ui = render(&state, size);
@@ -1651,7 +1654,10 @@ fn the_task_editor_sets_project_and_priority_and_offers_a_location() -> Result<(
 	// The saved choice comes back on the task, and the details stay open.
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(Action::ProjectAdd("task:backlog".into(), 2)),
+		Message::TaskEditor(timeparagon::task_editor::Action::ProjectAdd(
+			"task:backlog".into(),
+			2,
+		)),
 	);
 	let mut saved = state.calendar.event("task:backlog").unwrap().clone();
 	let mut data = saved
@@ -1683,21 +1689,19 @@ fn the_task_editor_sets_project_and_priority_and_offers_a_location() -> Result<(
 /// Labels are typed into the task editor and added to the task.
 #[test]
 fn the_task_editor_adds_custom_labels() -> Result<(), Error> {
-	use timeparagon::timeblocking::Action;
-
 	let mut state = timeblocking_state();
 	let _ = app::update(
 		&mut state,
 		Message::Event(EventMessage::EventOpened("task:backlog".into())),
 	);
-	state.timeblocking.label_draft = "deep work".into();
+	state.task_editor_mut().label_draft = "deep work".into();
 
 	let mut ui = render(&state, Size::new(560.0, 1000.0));
 	assert!(ui.find("Labels").is_ok());
 	assert!(ui.find("Add a label…").is_err()); // the typed text replaces the hint
 	let _ = ui.click("Add")?;
 	assert!(ui.into_messages().any(|message| matches!(message,
-        Message::TimeBlocking(Action::AddLabel(id, label))
+        Message::TaskEditor(timeparagon::task_editor::Action::AddLabel(id, label))
             if id == "task:backlog" && label == "deep work")));
 	Ok(())
 }
@@ -1743,7 +1747,7 @@ fn task_actions_are_ordered_reachable_and_delete_requires_confirmation() -> Resu
 				Message::Task(TaskMessage::TaskDeleteRequested("task:backlog".into())),
 			);
 			assert!(state.calendar.event("task:backlog").is_some());
-			assert!(state.timeblocking.busy.is_empty());
+			assert!(state.task_operations.busy.is_empty());
 			let mut ui = render(&state, render_size);
 			assert!(
 				ui.find("Are you sure you want to delete this task?")
@@ -1776,7 +1780,7 @@ fn task_actions_are_ordered_reachable_and_delete_requires_confirmation() -> Resu
 		Message::Task(TaskMessage::TaskDeleteConfirmed("task:planned".into())),
 	);
 	assert!(
-		state.timeblocking.busy.is_empty(),
+		state.task_operations.busy.is_empty(),
 		"must request confirmation first"
 	);
 	let _ = app::update(
@@ -1787,7 +1791,7 @@ fn task_actions_are_ordered_reachable_and_delete_requires_confirmation() -> Resu
 		&mut state,
 		Message::Task(TaskMessage::TaskDeleteConfirmed("task:planned".into())),
 	);
-	assert!(state.timeblocking.busy.contains_task("task:planned"));
+	assert!(state.task_operations.busy.contains_task("task:planned"));
 	let _ = app::update(
 		&mut state,
 		Message::Task(TaskMessage::TaskDeleted("task:planned".into(), Ok(()))),
@@ -1796,7 +1800,7 @@ fn task_actions_are_ordered_reachable_and_delete_requires_confirmation() -> Resu
 	// confirms the delete.
 	assert!(state.calendar.event("task:planned").is_some());
 	assert!(state.calendar.event("standup").is_some());
-	assert!(state.timeblocking.busy.is_empty());
+	assert!(state.task_operations.busy.is_empty());
 	assert!(!state.config.task_work.running(&key));
 	Ok(())
 }
@@ -2093,7 +2097,7 @@ fn backlog_shows_unscheduled_tasks_with_independent_deadline_and_time_editors() 
 		&mut state,
 		Message::Event(EventMessage::EventOpened("task:backlog".into())),
 	);
-	assert_eq!(state.timeblocking.title, "Research outline");
+	assert_eq!(state.task_editor().title, "Research outline");
 	let mut ui = render(&state, Size::new(420.0, 720.0));
 	for label in [
 		"Research outline",
@@ -2107,11 +2111,11 @@ fn backlog_shows_unscheduled_tasks_with_independent_deadline_and_time_editors() 
 	drop(ui);
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(timeparagon::timeblocking::Action::EditTitle),
+		Message::TaskEditor(timeparagon::task_editor::Action::EditTitle),
 	);
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(timeparagon::timeblocking::Action::Title(
+		Message::TaskEditor(timeparagon::task_editor::Action::Title(
 			"Revised outline".into(),
 		)),
 	);
@@ -2119,7 +2123,7 @@ fn backlog_shows_unscheduled_tasks_with_independent_deadline_and_time_editors() 
 	ui.click(iced::widget::Id::new("task-title"))?;
 	ui.tap_key(iced::keyboard::key::Named::Enter);
 	assert!(ui.into_messages().any(|message| matches!(message,
-		Message::TimeBlocking(timeparagon::timeblocking::Action::SaveTitle(id)) if id == "task:backlog"
+		Message::TaskEditor(timeparagon::task_editor::Action::SaveTitle(id)) if id == "task:backlog"
 	)));
 	Ok(())
 }
@@ -2331,13 +2335,13 @@ fn invalid_rescheduling_keeps_the_task_and_reports_the_date_problem() {
 	let before = state.calendar.event("task:backlog").unwrap().clone();
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(timeparagon::timeblocking::Action::DueDate(
+		Message::TaskEditor(timeparagon::task_editor::Action::DueDate(
 			"task:backlog".into(),
 			"not a date".into(),
 		)),
 	);
 	assert_eq!(state.calendar.event("task:backlog"), Some(&before));
-	assert!(state.timeblocking.busy.is_empty());
+	assert!(state.task_operations.busy.is_empty());
 	assert!(
 		state
 			.calendar
@@ -2351,7 +2355,7 @@ fn invalid_rescheduling_keeps_the_task_and_reports_the_date_problem() {
 #[test]
 fn a_sync_started_before_a_task_edit_cannot_replace_the_edited_tasks() {
 	let mut state = timeblocking_state();
-	state.timeblocking.revision = 2;
+	state.task_operations.revision = 2;
 	let _ = app::update(
 		&mut state,
 		Message::Calendar(CalendarMessage::CalendarSyncedAt(
@@ -2438,7 +2442,7 @@ fn focused_view_uses_a_modal_without_opening_or_expanding_the_sidebar() {
 
 #[test]
 fn work_sessions_stop_on_completion_and_remain_visible_and_saved() {
-	use timeparagon::timeblocking::{self as tb, Action};
+	use timeparagon::timeblocking::{self as tb};
 	let mut state = focus_state();
 	let key = tb::task_key(state.calendar.event("task:planned").unwrap());
 	let _ = app::update(
@@ -2467,7 +2471,7 @@ fn work_sessions_stop_on_completion_and_remain_visible_and_saved() {
 	assert_eq!(restored.task_work, state.config.task_work);
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(Action::StartWork("task:done".into())),
+		Message::WorkTracking(timeparagon::focus::Action::StartWork("task:done".into())),
 	);
 	assert!(
 		state.config.task_work.active().is_none(),
@@ -2477,13 +2481,13 @@ fn work_sessions_stop_on_completion_and_remain_visible_and_saved() {
 
 #[test]
 fn start_and_stop_are_local_and_do_not_change_google_task_status() {
-	use timeparagon::timeblocking::{self as tb, Action};
+	use timeparagon::timeblocking::{self as tb};
 	let mut state = focus_state();
 	let second = state.calendar.event("task:second").unwrap();
 	let key = tb::task_key(second);
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(Action::StartWork("task:second".into())),
+		Message::WorkTracking(timeparagon::focus::Action::StartWork("task:second".into())),
 	);
 	assert!(state.config.task_work.running(&key));
 	assert_eq!(
@@ -2498,11 +2502,11 @@ fn start_and_stop_are_local_and_do_not_change_google_task_status() {
 	);
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(Action::StopWork("task:second".into())),
+		Message::WorkTracking(timeparagon::focus::Action::StopWork("task:second".into())),
 	);
 	assert!(state.config.task_work.active().is_none());
 	assert!(!state.calendar.event("task:second").unwrap().completed);
-	assert!(state.timeblocking.busy.is_empty());
+	assert!(state.task_operations.busy.is_empty());
 }
 
 #[test]
@@ -2519,14 +2523,13 @@ fn the_focus_overlay_blocks_controls_in_the_underlying_calendar() -> Result<(), 
 
 #[test]
 fn focused_timer_controls_remain_reachable_at_narrow_widths() -> Result<(), Error> {
-	use timeparagon::timeblocking::Action;
 	for width in [200.0, 320.0, 900.0] {
 		let state = focus_state();
 		let mut ui = render(&state, Size::new(width, 720.0));
 		let _ = ui.click("Stop")?;
 		assert!(
 			ui.into_messages().any(
-				|m| matches!(m,Message::TimeBlocking(Action::StopWork(id)) if id == "task:planned")
+				|m| matches!(m,Message::WorkTracking(timeparagon::focus::Action::StopWork(id)) if id == "task:planned")
 			),
 			"Stop did not work at {width}px"
 		);
@@ -2598,40 +2601,58 @@ fn title_bounds(ui: &mut Simulator<'_>, title: &str) -> Vec<iced::Rectangle> {
 
 #[test]
 fn the_pomodoro_starts_and_stops_the_current_task() {
-	use timeparagon::timeblocking::{self as tb, Action};
+	use timeparagon::timeblocking::{self as tb};
 	let mut state = focus_state();
 	let planned = tb::task_key(state.calendar.event("task:planned").unwrap());
 	let second = tb::task_key(state.calendar.event("task:second").unwrap());
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(Action::StopWork("task:planned".into())),
+		Message::WorkTracking(timeparagon::focus::Action::StopWork("task:planned".into())),
 	);
 	assert!(state.config.task_work.active().is_none());
 
 	// Nothing is running, so the first task still to do is the current one.
-	let _ = app::update(&mut state, Message::TimeBlocking(Action::PomodoroToggle));
+	let _ = app::update(
+		&mut state,
+		Message::WorkTracking(timeparagon::focus::Action::PomodoroToggle),
+	);
 	assert!(state.config.pomodoro.running());
 	assert!(state.config.task_work.running(&planned));
-	let _ = app::update(&mut state, Message::TimeBlocking(Action::PomodoroToggle));
+	let _ = app::update(
+		&mut state,
+		Message::WorkTracking(timeparagon::focus::Action::PomodoroToggle),
+	);
 	assert!(!state.config.pomodoro.running());
 	assert!(state.config.task_work.active().is_none());
 
 	// Whichever task was last chosen is the one that comes back.
 	let _ = app::update(
 		&mut state,
-		Message::TimeBlocking(Action::StartWork("task:second".into())),
+		Message::WorkTracking(timeparagon::focus::Action::StartWork("task:second".into())),
 	);
-	let _ = app::update(&mut state, Message::TimeBlocking(Action::PomodoroToggle));
+	let _ = app::update(
+		&mut state,
+		Message::WorkTracking(timeparagon::focus::Action::PomodoroToggle),
+	);
 	assert!(state.config.task_work.running(&second));
-	let _ = app::update(&mut state, Message::TimeBlocking(Action::PomodoroToggle));
+	let _ = app::update(
+		&mut state,
+		Message::WorkTracking(timeparagon::focus::Action::PomodoroToggle),
+	);
 	assert!(state.config.task_work.active().is_none());
 	let block = state.calendar.event("standup").unwrap();
 	assert_eq!(tb::current_task(&state, block).unwrap().id, "task:second");
-	let _ = app::update(&mut state, Message::TimeBlocking(Action::PomodoroToggle));
+	let _ = app::update(
+		&mut state,
+		Message::WorkTracking(timeparagon::focus::Action::PomodoroToggle),
+	);
 	assert!(state.config.task_work.running(&second));
 
 	// Resetting a running clock stops it, and so stops the task too.
-	let _ = app::update(&mut state, Message::TimeBlocking(Action::PomodoroReset));
+	let _ = app::update(
+		&mut state,
+		Message::WorkTracking(timeparagon::focus::Action::PomodoroReset),
+	);
 	assert!(!state.config.pomodoro.running());
 	assert!(state.config.task_work.active().is_none());
 }
@@ -2787,7 +2808,7 @@ fn deadline_and_time_editors_stay_inside_narrow_backlog_windows() -> Result<(), 
 			&mut state,
 			Message::Event(EventMessage::EventOpened("task:backlog".into())),
 		);
-		assert_eq!(state.timeblocking.deadline, "2026-12-31");
+		assert_eq!(state.task_editor().deadline, "2026-12-31");
 		let mut ui = render(&state, Size::new(width, 720.0));
 		for label in [
 			"Research outline",
@@ -2869,7 +2890,7 @@ fn backlog_sections_are_ordered_and_accept_drops_on_headers_and_tasks() -> Resul
 		let _ = app::update(&mut state, message);
 	}
 	assert!(state.timeblocking.dragging.is_none());
-	assert!(state.timeblocking.busy.contains_task("task:backlog"));
+	assert!(state.task_operations.busy.contains_task("task:backlog"));
 	Ok(())
 }
 
@@ -2885,14 +2906,14 @@ fn dropping_in_the_current_backlog_section_is_a_noop() {
 		Message::TimeBlocking(Action::DropBacklogSection(BacklogSection::Someday)),
 	);
 	assert!(state.timeblocking.dragging.is_none());
-	assert!(state.timeblocking.busy.is_empty());
+	assert!(state.task_operations.busy.is_empty());
 	assert_eq!(state.calendar.event("task:backlog"), Some(&before));
 }
 
 #[test]
 fn a_distraction_is_recorded_from_the_focus_view_at_every_width() -> Result<(), Error> {
 	use timeparagon::task_work::DISTRACTION_MINUTES;
-	use timeparagon::timeblocking::Action;
+
 	for width in [200.0, 320.0, 480.0, 900.0] {
 		let size = Size::new(width, 900.0);
 		let mut state = focus_state();
@@ -2903,12 +2924,16 @@ fn a_distraction_is_recorded_from_the_focus_view_at_every_width() -> Result<(), 
 		let _ = ui.click("I got distracted")?;
 		let messages: Vec<_> = ui.into_messages().collect();
 		assert!(
-			messages
-				.iter()
-				.any(|m| matches!(m, Message::TimeBlocking(Action::OpenDistraction))),
+			messages.iter().any(|m| matches!(
+				m,
+				Message::WorkTracking(timeparagon::focus::Action::OpenDistraction)
+			)),
 			"{width}"
 		);
-		let _ = app::update(&mut state, Message::TimeBlocking(Action::OpenDistraction));
+		let _ = app::update(
+			&mut state,
+			Message::WorkTracking(timeparagon::focus::Action::OpenDistraction),
+		);
 
 		let mut ui = render(&state, size);
 		for minutes in DISTRACTION_MINUTES {
@@ -2918,12 +2943,16 @@ fn a_distraction_is_recorded_from_the_focus_view_at_every_width() -> Result<(), 
 		let _ = ui.click("+5m")?;
 		let messages: Vec<_> = ui.into_messages().collect();
 		assert!(
-			messages
-				.iter()
-				.any(|m| matches!(m, Message::TimeBlocking(Action::AddDistraction(5)))),
+			messages.iter().any(|m| matches!(
+				m,
+				Message::WorkTracking(timeparagon::focus::Action::AddDistraction(5))
+			)),
 			"{width}"
 		);
-		let _ = app::update(&mut state, Message::TimeBlocking(Action::AddDistraction(5)));
+		let _ = app::update(
+			&mut state,
+			Message::WorkTracking(timeparagon::focus::Action::AddDistraction(5)),
+		);
 
 		let mut ui = render(&state, size);
 		assert!(ui.find("+5m").is_err(), "the choice closes at {width}");
@@ -2935,14 +2964,17 @@ fn a_distraction_is_recorded_from_the_focus_view_at_every_width() -> Result<(), 
 #[test]
 fn a_distraction_habit_is_chosen_from_the_focus_view_at_every_width() -> Result<(), Error> {
 	use timeparagon::habits::Habit;
-	use timeparagon::timeblocking::{Action, DistractionCause};
+	use timeparagon::timeblocking::DistractionCause;
 	for width in [200.0, 320.0, 480.0, 900.0] {
 		let size = Size::new(width, 900.0);
 		let mut state = focus_state();
 		let mut habit = Habit::new("phone", "Check phone");
 		habit.distraction = true;
 		state.habits.library.habits.push(habit);
-		let _ = app::update(&mut state, Message::TimeBlocking(Action::OpenDistraction));
+		let _ = app::update(
+			&mut state,
+			Message::WorkTracking(timeparagon::focus::Action::OpenDistraction),
+		);
 
 		let mut ui = render(&state, size);
 		assert!(ui.find("What distracted you?").is_ok(), "{width}");
@@ -2956,20 +2988,23 @@ fn a_distraction_habit_is_chosen_from_the_focus_view_at_every_width() -> Result<
 		assert!(
 			ui.into_messages().any(|m| matches!(
 				&m,
-				Message::TimeBlocking(Action::ChooseDistraction(chosen)) if *chosen == cause
+				Message::WorkTracking(timeparagon::focus::Action::ChooseDistraction(chosen)) if *chosen == cause
 			)),
 			"{width}"
 		);
 		let _ = app::update(
 			&mut state,
-			Message::TimeBlocking(Action::ChooseDistraction(cause)),
+			Message::WorkTracking(timeparagon::focus::Action::ChooseDistraction(cause)),
 		);
 
 		let mut ui = render(&state, size);
 		assert!(ui.find("How long were you distracted?").is_ok(), "{width}");
 		assert!(ui.find("Check phone").is_ok(), "{width}");
 		drop(ui);
-		let _ = app::update(&mut state, Message::TimeBlocking(Action::AddDistraction(5)));
+		let _ = app::update(
+			&mut state,
+			Message::WorkTracking(timeparagon::focus::Action::AddDistraction(5)),
+		);
 
 		// The habit's own dialog comes up over the focus view, ready to save.
 		let mut ui = render(&state, size);

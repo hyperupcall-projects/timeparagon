@@ -893,7 +893,7 @@ fn load_range(state: &mut State) -> Task<Message> {
 	state.routines.loading = true;
 	state.routines.requests += 1;
 	let request = state.routines.requests;
-	let revision = state.timeblocking.revision;
+	let revision = state.task_operations.revision;
 	let settings = state.config.calendar.clone();
 	let fetched = dates.clone();
 	crate::blocking::run(move || {
@@ -1165,7 +1165,7 @@ pub fn pump(state: &mut State) -> Task<Message> {
 	let mut tasks = Vec::new();
 	// While the add-task popup is open the time-blocking workspace is set
 	// aside with its saves, so this one cannot tell what is in flight.
-	while state.timeblocking.busy.is_empty() && state.inbox.draft.is_none() {
+	while state.task_operations.busy.is_empty() && state.inbox.draft.is_none() {
 		let Some(op) = state.routines.queue.pop_front() else {
 			break;
 		};
@@ -1201,18 +1201,20 @@ pub fn pump(state: &mut State) -> Task<Message> {
 				continue;
 			}
 			Change::Estimate(minutes) => {
-				Message::TimeBlocking(tb::Action::SetEstimate(id, minutes))
+				Message::TaskEditor(crate::task_editor::Action::SetEstimate(id, minutes))
 			}
-			Change::Priority(priority) => Message::TimeBlocking(tb::Action::Priority(id, priority)),
+			Change::Priority(priority) => {
+				Message::TaskEditor(crate::task_editor::Action::Priority(id, priority))
+			}
 			Change::Deadline(deadline) => {
-				Message::TimeBlocking(tb::Action::SetDeadline(id, deadline))
+				Message::TaskEditor(crate::task_editor::Action::SetDeadline(id, deadline))
 			}
 			Change::Block(block) => Message::TimeBlocking(tb::Action::Assign(id, block)),
 		};
 		tasks.push(crate::app::dispatch(state, message));
 		// A change that was refused, such as triaging a task missing a
 		// required field, leaves nothing in flight; say why.
-		if state.timeblocking.busy.is_empty()
+		if state.task_operations.busy.is_empty()
 			&& let Some(error) = state.inbox.error.take()
 		{
 			state.routines.error = Some(error);
@@ -1226,8 +1228,8 @@ fn delete(state: &mut State, id: String) -> Task<Message> {
 	let Some(task) = state.calendar.event(&id).filter(|e| e.is_task()).cloned() else {
 		return Task::none();
 	};
-	state.timeblocking.revision += 1;
-	state.timeblocking.busy.insert(id.clone());
+	state.task_operations.revision += 1;
+	state.task_operations.busy.insert(id.clone());
 	state.calendar.error = None;
 	let app_calendar = state.config.calendar.app_calendar.clone();
 	crate::blocking::run(move || calendar::delete_task(&task, app_calendar.as_deref()))
@@ -1562,7 +1564,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			match result {
 				Ok(event) => {
 					state.routines.quick_add.clear();
-					state.timeblocking.revision += 1;
+					state.task_operations.revision += 1;
 					state.calendar.replace_task(&event.id, &event);
 					Task::done(Message::Calendar(CalendarMessage::CalendarSyncRequested))
 				}
@@ -1706,7 +1708,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			match result {
 				// A task saved since the request began may be stale in it, so
 				// such an answer is dropped rather than shown.
-				Ok(snapshot) if revision == state.timeblocking.revision => {
+				Ok(snapshot) if revision == state.task_operations.revision => {
 					state.calendar.accept_snapshot(snapshot, &dates);
 					state.calendar.apply_task_colors(&state.config.calendar);
 					state.routines.fetched = Some((period, std::time::Instant::now()));

@@ -535,7 +535,7 @@ mod tests {
 					"{screen:?}, monthly={monthly}, point={point:?}: {message:?}"
 				);
 				// Block the save path: test only UI routing, never remote writes.
-				state.timeblocking.busy.insert("test-no-remote-write");
+				state.task_operations.busy.insert("test-no-remote-write");
 				let _ = app::update(&mut state, message);
 				assert_eq!(state.calendar.day, day);
 				assert_eq!(state.week_anchor, anchor);
@@ -544,7 +544,7 @@ mod tests {
 				assert_eq!(state.weekly(), !monthly);
 				assert!(state.timeblocking.dragging.is_none());
 				assert!(state.timeblocking.drag_pointer.is_none());
-				assert_eq!(state.timeblocking.busy.len(), 1);
+				assert_eq!(state.task_operations.busy.len(), 1);
 			}
 		}
 	}
@@ -644,7 +644,7 @@ mod tests {
 		));
 		let _ = app::update(&mut state, no_target);
 		assert!(state.timeblocking.dragging.is_none());
-		assert!(state.timeblocking.busy.is_empty());
+		assert!(state.task_operations.busy.is_empty());
 		let _ = app::update(
 			&mut state,
 			Message::Task(TaskMessage::TaskDragDropped(
@@ -652,7 +652,7 @@ mod tests {
 				Some(Box::new(Message::TimeBlocking(Action::DropDay))),
 			)),
 		);
-		assert!(state.timeblocking.busy.is_empty());
+		assert!(state.task_operations.busy.is_empty());
 	}
 
 	#[test]

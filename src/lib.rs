@@ -45,6 +45,9 @@ pub mod ui;
 pub mod webextension;
 pub mod window_effect;
 
+pub mod focus;
+pub mod task_editor;
+pub mod task_operations;
 pub mod timeblocking;
 
 pub mod pomodoro;

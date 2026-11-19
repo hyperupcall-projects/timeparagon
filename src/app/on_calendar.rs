@@ -341,7 +341,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 		}
 		CalendarMessage::CalendarResyncRequested => sync_calendar(state),
 		CalendarMessage::CalendarSyncedAt(revision, result) => {
-			if revision != state.timeblocking.revision {
+			if revision != state.task_operations.revision {
 				state.calendar.sync = SyncState::Idle;
 				return update(state, CalendarMessage::CalendarSyncRequested);
 			}
@@ -352,7 +352,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 			update(state, CalendarMessage::CalendarSynced(result))
 		}
 		CalendarMessage::CalendarRangeSynced(revision, dates, result) => {
-			if revision != state.timeblocking.revision {
+			if revision != state.task_operations.revision {
 				state.calendar.sync = SyncState::Idle;
 				return update(state, CalendarMessage::CalendarSyncRequested);
 			}
@@ -361,7 +361,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 					state
 						.activity
 						.record(crate::activity::synced_text(&snapshot.events), false);
-					if let Some(notice) = state.timeblocking.sync_notice.take() {
+					if let Some(notice) = state.task_operations.sync_notice.take() {
 						snapshot.notice = Some(match snapshot.notice.take() {
 							Some(existing) => format!("{notice}\n{existing}"),
 							None => notice,
@@ -392,7 +392,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 			state
 				.activity
 				.record(crate::activity::synced_text(&snapshot.events), false);
-			if let Some(notice) = state.timeblocking.sync_notice.take() {
+			if let Some(notice) = state.task_operations.sync_notice.take() {
 				snapshot.notice = Some(match snapshot.notice.take() {
 					Some(existing) => format!("{notice}\n{existing}"),
 					None => notice,

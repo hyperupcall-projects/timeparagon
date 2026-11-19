@@ -228,7 +228,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			}
 			let settings = state.config.voice.clone();
 			let draft = state.inbox.draft.as_ref().unwrap();
-			let context = json!({"title": draft.title, "description": state.task_description.text(), "due": state.timeblocking.date, "due_time": draft.event.as_ref().filter(|e| !e.all_day).map(|e| e.start.format("%H:%M").to_string()), "today": crate::clock::now().date_naive().to_string(), "deadline": state.timeblocking.deadline, "metadata": draft.event.as_ref().map(crate::timeblocking::metadata), "projects": state.config.projects.items});
+			let context = json!({"title": draft.title, "description": state.task_description.text(), "due": state.task_editor().date, "due_time": draft.event.as_ref().filter(|e| !e.all_day).map(|e| e.start.format("%H:%M").to_string()), "today": crate::clock::now().date_naive().to_string(), "deadline": state.task_editor().deadline, "metadata": draft.event.as_ref().map(crate::timeblocking::metadata), "projects": state.config.projects.items});
 			let (tx, rx) = mpsc::channel();
 			let voice = &mut state.inbox.voice;
 			voice.stop = Arc::new(AtomicBool::new(false));
@@ -964,7 +964,7 @@ model = "granite"
 		assert!(!event.all_day);
 		assert_eq!((event.start.hour(), event.start.minute()), (21, 0));
 		assert_eq!(event.end - event.start, chrono::Duration::minutes(30));
-		assert_eq!(state.timeblocking.start_time, "21:00");
+		assert_eq!(state.task_editor().start_time, "21:00");
 		assert!(inbox::validate(draft).is_ok());
 		inbox::apply_voice(
 			&mut state,
@@ -1276,6 +1276,6 @@ model = "granite"
 			vec!["home"]
 		);
 		let _ = inbox::update(&mut state, inbox::Action::Title("Pay rent soon".into()));
-		assert_eq!(state.timeblocking.date, "2026-11-03");
+		assert_eq!(state.task_editor().date, "2026-11-03");
 	}
 }

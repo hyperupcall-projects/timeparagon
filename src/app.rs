@@ -449,6 +449,9 @@ pub struct State {
 	/// Visible empty days awaiting an in-flight calendar request.
 	calendar_fetch_pending: Vec<chrono::NaiveDate>,
 	pub timeblocking: crate::timeblocking::Workspace,
+	pub task_editor: crate::task_editor::Editor,
+	pub task_operations: crate::task_operations::Pending,
+	pub work_tracking: crate::focus::Workspace,
 	/// The Brain dump screen and the page open in its editor.
 	pub brain_dump: crate::brain_dump::Workspace,
 	/// The Routines screen and the routine in progress.
@@ -471,6 +474,9 @@ pub enum Message {
 	CloseError,
 	Picker(crate::ui::controls::Action),
 	TimeBlocking(crate::timeblocking::Action),
+	TaskEditor(crate::task_editor::Action),
+	WorkTracking(crate::focus::Action),
+	TaskOperations(crate::task_operations::Action),
 	BrainDump(crate::brain_dump::Action),
 	Routines(crate::routines::Action),
 	Inbox(crate::inbox::Action),
@@ -974,6 +980,9 @@ impl State {
 			calendar: calendar::Store::new(day_end_hour),
 			calendar_fetch_pending: Vec::new(),
 			timeblocking: crate::timeblocking::Workspace::default(),
+			task_editor: Default::default(),
+			task_operations: Default::default(),
+			work_tracking: Default::default(),
 			brain_dump: crate::brain_dump::Workspace::default(),
 			routines: crate::routines::Workspace::default(),
 			habits: crate::habits::Store::default(),
@@ -1418,7 +1427,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 	let editor = reconcile_editor_window(state);
 	let fetch = if !state.calendar_fetch_pending.is_empty()
 		&& !state.calendar.is_busy()
-		&& state.timeblocking.busy.is_empty()
+		&& state.task_operations.busy.is_empty()
 	{
 		show_calendar(state)
 	} else {
@@ -1518,6 +1527,9 @@ pub(crate) fn dispatch(state: &mut State, message: Message) -> Task<Message> {
 			Task::none()
 		}
 		Message::TimeBlocking(action) => crate::timeblocking::update(state, action),
+		Message::TaskEditor(action) => crate::task_editor::update(state, action),
+		Message::WorkTracking(action) => crate::focus::update(state, action),
+		Message::TaskOperations(action) => crate::task_operations::update(state, action),
 		Message::BrainDump(action) => crate::brain_dump::update(state, action),
 		Message::Routines(action) => crate::routines::update(state, action),
 		Message::Inbox(action) => {
@@ -1753,7 +1765,7 @@ pub fn subscription(state: &State) -> Subscription<Message> {
 	{
 		subscriptions.push(
 			iced::time::every(Duration::from_secs(1))
-				.map(|_| Message::TimeBlocking(crate::timeblocking::Action::WorkTick)),
+				.map(|_| Message::WorkTracking(crate::focus::Action::WorkTick)),
 		);
 	}
 	if state.calendar.is_signed_in() {
@@ -2019,10 +2031,10 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
 		};
 	}
 
-	if state.timeblocking.estimate_task.is_some() {
+	if state.task_editor().estimate_task.is_some() {
 		return match key.as_ref() {
-			Key::Named(Named::Escape) => Some(Message::TimeBlocking(
-				crate::timeblocking::Action::CloseEstimate,
+			Key::Named(Named::Escape) => Some(Message::TaskEditor(
+				crate::task_editor::Action::CloseEstimate,
 			)),
 			_ => None,
 		};
@@ -2082,19 +2094,19 @@ fn key_message(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> O
 			_ => None,
 		};
 	}
-	if state.timeblocking.distraction_open {
+	if state.work_tracking.distraction_open {
 		return match key.as_ref() {
-			Key::Named(Named::Escape) => Some(Message::TimeBlocking(
-				crate::timeblocking::Action::CloseDistraction,
+			Key::Named(Named::Escape) => Some(Message::WorkTracking(
+				crate::focus::Action::CloseDistraction,
 			)),
 			_ => None,
 		};
 	}
-	if state.timeblocking.session_edit.is_some() {
+	if state.work_tracking.session_edit.is_some() {
 		return match key.as_ref() {
-			Key::Named(Named::Escape) => Some(Message::TimeBlocking(
-				crate::timeblocking::Action::CloseSession,
-			)),
+			Key::Named(Named::Escape) => {
+				Some(Message::WorkTracking(crate::focus::Action::CloseSession))
+			}
 			_ => None,
 		};
 	}
@@ -2407,7 +2419,7 @@ fn refresh_day(state: &mut State) -> Task<Message> {
 
 pub(crate) fn refresh_week_after_write(state: &mut State) -> Task<Message> {
 	let overlay = crate::local_poll::refresh_calendar(state);
-	state.timeblocking.revision += 1;
+	state.task_operations.revision += 1;
 	Task::batch([
 		overlay,
 		Task::done(Message::Calendar(CalendarMessage::CalendarSyncRequested)),
@@ -2430,7 +2442,7 @@ fn reconcile_completed_task(state: &mut State) -> Task<Message> {
 	if let Some(key) = completed_key {
 		let now = crate::clock::utc_now();
 		state.config.task_work.stop(&key, now);
-		state.timeblocking.work_now = Some(now);
+		state.work_tracking.work_now = Some(now);
 		queue_save(state)
 	} else {
 		Task::none()
@@ -2522,7 +2534,7 @@ fn sync_calendar(state: &mut State) -> Task<Message> {
 		|| state.calendar.pending_move.is_some()
 		|| state.calendar.events.iter().any(|event| {
 			event.details.sleep.is_some() && state.calendar.pending_time(&event.id).is_some()
-		}) || !state.timeblocking.busy.is_empty()
+		}) || !state.task_operations.busy.is_empty()
 		|| state
 			.calendar
 			.edit_draft
@@ -2542,7 +2554,7 @@ fn sync_calendar(state: &mut State) -> Task<Message> {
 
 	let settings = state.config.calendar.clone();
 	let day = state.calendar.day;
-	let revision = state.timeblocking.revision;
+	let revision = state.task_operations.revision;
 	if state.range_view_active() && !panel_day {
 		let anchor = state.week_anchor;
 		let dates = state.calendar_dates();
@@ -2617,4 +2629,21 @@ fn panel_ipc_listener(
 			}
 		}
 	})
+}
+
+impl State {
+	/// The visible task form. Creation owns a separate editor from task details.
+	pub fn task_editor(&self) -> &crate::task_editor::Editor {
+		self.inbox
+			.draft
+			.as_ref()
+			.map_or(&self.task_editor, |draft| &draft.editor)
+	}
+
+	pub fn task_editor_mut(&mut self) -> &mut crate::task_editor::Editor {
+		self.inbox
+			.draft
+			.as_mut()
+			.map_or(&mut self.task_editor, |draft| &mut draft.editor)
+	}
 }

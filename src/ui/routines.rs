@@ -385,7 +385,7 @@ fn task_meta(state: &State, task: &Event) -> String {
 /// Whether a change to the task is on its way.
 fn pending(state: &State, task: &Event) -> bool {
 	state.routines.queued(&tb::task_key(task))
-		|| state.timeblocking.busy.contains_task(&task.id)
+		|| state.task_operations.busy.contains_task(&task.id)
 		|| task.details.sending
 }
 
@@ -874,7 +874,9 @@ fn footer<'a>(state: &'a State, flow: &'a Flow, metrics: &Metrics) -> Element<'a
 		.padding([4, 12])
 		.style(controls::primary)
 		.on_press(msg(Action::Next));
-	let saving = state.routines.saving(!state.timeblocking.busy.is_empty());
+	let saving = state
+		.routines
+		.saving(!state.task_operations.busy.is_empty());
 	let note = if saving > 0 {
 		format!("Saving {saving}…")
 	} else if state.routines.loading {

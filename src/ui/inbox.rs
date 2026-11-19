@@ -182,7 +182,7 @@ fn task_card<'a>(
 	metrics: &Metrics,
 	list: List,
 ) -> Element<'a, Message> {
-	let busy = state.timeblocking.busy.contains_task(&task.id);
+	let busy = state.task_operations.busy.contains_task(&task.id);
 	let shown = state.calendar.open_event.as_deref() == Some(task.id.as_str());
 
 	let mut heading = row![].spacing(4).align_y(Center);
@@ -598,7 +598,7 @@ pub fn day_picker<'a>(
 		.as_ref()
 		.filter(|(id, _)| *id == task.id)
 		.map(|(_, month)| *month);
-	let busy = state.timeblocking.busy.contains_task(&task.id);
+	let busy = state.task_operations.busy.contains_task(&task.id);
 
 	let toggle = button(
 		text(if busy { "Saving…" } else { "Schedule Day" })

@@ -187,7 +187,7 @@ pub(crate) fn delete_confirmation<'a>(state: &'a State, metrics: &Metrics) -> El
 	let mut delete = button(text("Delete").size(metrics.label()).center().width(Fill))
 		.width(Fill)
 		.style(crate::ui::controls::secondary);
-	if state.timeblocking.busy.is_empty() {
+	if state.task_operations.busy.is_empty() {
 		delete = delete.on_press(confirm);
 	}
 	let buttons = row![

@@ -216,7 +216,7 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
 			{
 				return Task::none();
 			}
-			state.timeblocking.backlog_picker = None;
+			state.task_editor_mut().backlog_picker = None;
 			if state
 				.calendar
 				.detail_event
@@ -247,14 +247,10 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
 					state.calendar.edit_draft = Some(draft);
 				}
 				if is_task {
-					state.timeblocking.editing_title = false;
-					state.timeblocking.title = event.title.clone();
-					state.timeblocking.title_error = None;
-					crate::timeblocking::seed_schedule(state, &event);
-					state.timeblocking.project_query.clear();
-					state.timeblocking.project_picker = None;
-					state.timeblocking.label_draft.clear();
-					state.timeblocking.label_error = None;
+					let mut editor = crate::task_editor::Editor::new(&mut state.task_operations);
+					editor.title = event.title.clone();
+					editor.seed_schedule(&event);
+					state.task_editor = editor;
 				}
 			}
 			let habit_load = state
@@ -600,7 +596,7 @@ fn write_event_time(
 		event.details.sleep.as_mut().unwrap().automatic = scope != calendar::SaveScope::Current;
 		// Only a single-night edit becomes an exception to the shared schedule.
 		let settings = state.config.calendar.clone();
-		state.timeblocking.revision += 1;
+		state.task_operations.revision += 1;
 		return blocking::run(move || calendar::sleep::save(&settings, event, false)).map(
 			move |result| Message::Event(EventMessage::SleepTimeSaved(id.clone(), scope, result)),
 		);

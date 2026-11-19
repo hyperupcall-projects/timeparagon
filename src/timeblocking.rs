@@ -1,5 +1,5 @@
-//! Task planning, Calendar scheduling, metadata and work sessions.
-use crate::app::CalendarMessage;
+//! Desktop block planning and a compatibility router for planning UI actions.
+//! Task forms, pending writes, and work tracking own their state separately.
 use crate::calendar::ids;
 use crate::{
 	app::{Message, State},
@@ -7,94 +7,27 @@ use crate::{
 	calendar::{self, Event},
 	config::CalendarSettings,
 };
-use chrono::{DateTime, Local, NaiveDate, NaiveTime, TimeZone};
+use chrono::{DateTime, Local, NaiveDate, NaiveTime};
 use iced::Task;
 use timeparagon_core::calendar::google::GoogleError;
-use timeparagon_core::task_edit::{self, Change, clean_label};
+use timeparagon_core::task_edit::{self, Change};
 
 pub use timeparagon_core::timeblocking::*;
 
+mod drag;
+mod recurring;
+#[cfg(test)]
+use crate::focus::advance_pomodoro;
+pub use crate::focus::current_task;
+#[cfg(test)]
+use crate::task_editor::end_keeping_length;
+pub(crate) use drag::place_week_card;
+pub(crate) use drag::week_drop_times;
+pub use recurring::repeats_on_its_own;
+use recurring::*;
+
 pub const PANEL_WIDTH: f32 = 400.0;
-/// A save in progress, and what its result will be for.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BusyKey {
-	Task(String),
-	/// A todo that does not have a task id until Google creates it.
-	AddingTodo,
-	AddingHabit,
-}
-
-impl BusyKey {
-	/// The task this save is for, which matches no task while adding a todo.
-	fn task_id(&self) -> &str {
-		match self {
-			Self::Task(id) => id,
-			Self::AddingTodo | Self::AddingHabit => "",
-		}
-	}
-}
-
-impl From<String> for BusyKey {
-	fn from(id: String) -> Self {
-		Self::Task(id)
-	}
-}
-
-impl From<&str> for BusyKey {
-	fn from(id: &str) -> Self {
-		Self::Task(id.to_owned())
-	}
-}
-
-/// Which saves are in flight.
-#[derive(Debug, Default)]
-pub struct Busy {
-	tasks: std::collections::HashSet<String>,
-	adding_todo: bool,
-	adding_habit: bool,
-}
-
-impl Busy {
-	pub fn insert(&mut self, key: impl Into<BusyKey>) {
-		match key.into() {
-			BusyKey::Task(id) => {
-				self.tasks.insert(id);
-			}
-			BusyKey::AddingTodo => self.adding_todo = true,
-			BusyKey::AddingHabit => self.adding_habit = true,
-		}
-	}
-
-	pub fn remove(&mut self, key: &BusyKey) {
-		match key {
-			BusyKey::Task(id) => {
-				self.tasks.remove(id);
-			}
-			BusyKey::AddingTodo => self.adding_todo = false,
-			BusyKey::AddingHabit => self.adding_habit = false,
-		}
-	}
-
-	pub fn remove_task(&mut self, id: &str) {
-		self.tasks.remove(id);
-	}
-
-	pub fn contains_task(&self, id: &str) -> bool {
-		self.tasks.contains(id)
-	}
-
-	pub fn adding_todo(&self) -> bool {
-		self.adding_todo
-	}
-
-	pub fn is_empty(&self) -> bool {
-		self.tasks.is_empty() && !self.adding_todo && !self.adding_habit
-	}
-
-	pub fn len(&self) -> usize {
-		self.tasks.len() + usize::from(self.adding_todo) + usize::from(self.adding_habit)
-	}
-}
+pub use crate::task_operations::{Busy, BusyKey};
 use timeparagon_core::task_edit::MAX_TITLE_CHARS as MAX_TODO_CHARS;
 /// What a recurring item being added to a time block is.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,14 +53,7 @@ pub struct PendingJoin {
 	pub block: String,
 }
 
-/// The answer to what a distraction was.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DistractionCause {
-	/// One of the distraction habits, by id.
-	Habit(String),
-	/// Something no distraction habit covers.
-	Other,
-}
+pub use crate::focus::DistractionCause;
 
 #[derive(Default)]
 pub struct Workspace {
@@ -140,35 +66,6 @@ pub struct Workspace {
 	pub one_off: bool,
 	pub block: Option<String>,
 	pub focus: Option<String>,
-	pub work_now: Option<chrono::DateTime<chrono::Utc>>,
-	/// The work session open in the editor, as an index into the work log.
-	pub session_edit: Option<usize>,
-	/// The day the edited session started, so its times can be parsed back.
-	pub session_date: Option<NaiveDate>,
-	/// The start and end being edited, as local `HH:MM`.
-	pub session_start: String,
-	pub session_end: String,
-	pub session_error: Option<String>,
-	/// The questions about a distraction are open.
-	pub distraction_open: bool,
-	/// What the open distraction was, once that has been answered.
-	pub distraction_cause: Option<DistractionCause>,
-	pub revision: u64,
-	pub date: String,
-	pub deadline: String,
-	pub sync_notice: Option<String>,
-	pub start_time: String,
-	pub end_time: String,
-	pub estimate: String,
-	pub estimate_task: Option<String>,
-	pub estimate_error: Option<String>,
-	pub color_input: Option<(String, String)>,
-	/// The name being edited for the open task, before it is saved.
-	pub title: String,
-	pub editing_title: bool,
-	pub title_error: Option<String>,
-	/// The task whose rename is in flight, so a failure stays on the name field.
-	pub renaming: Option<String>,
 	/// The line being typed into the open time block, before it is saved.
 	pub todo_draft: String,
 	pub todo_error: Option<String>,
@@ -181,8 +78,6 @@ pub struct Workspace {
 	pub available_all: bool,
 	/// Include tasks that already have a due time or calendar schedule.
 	pub available_planned: bool,
-	/// Placement is committed only after a cross-day schedule write succeeds.
-	pub pending_week_drop: Option<WeekListPlacement>,
 	pub dragging: Option<String>,
 	/// Where the pointer is while a task is being dragged, so the floating
 	/// card can follow it. Only meaningful while `dragging` is set.
@@ -193,22 +88,10 @@ pub struct Workspace {
 	/// asking the plan view under the pointer. It drives the drop preview, so
 	/// the preview always agrees with where the task actually lands.
 	pub drop_hover: Option<DropHover>,
-	pub busy: Busy,
-	/// A task whose fields are being saved without closing its details pane.
-	pub keep_open: Option<String>,
 	/// Text that narrows the backlog by task title or list name.
 	pub backlog_query: String,
 	/// When set, the backlog shows only tasks from this Google Tasks list.
 	pub backlog_list: Option<String>,
-	/// Text that narrows the project picker in the task editor.
-	pub project_query: String,
-	/// The task whose project picker is open.
-	pub project_picker: Option<String>,
-	/// The task whose backlog destination choices are open.
-	pub backlog_picker: Option<String>,
-	/// The label being typed for the open task, before it is added.
-	pub label_draft: String,
-	pub label_error: Option<String>,
 }
 #[derive(Debug, Clone)]
 pub struct WeekListPlacement {
@@ -227,6 +110,8 @@ pub struct DropHover {
 	pub action: Action,
 }
 
+/// Planning actions, including compatibility entry points for existing callers.
+/// New task forms and work controls send their typed messages directly to the app.
 // Messages only live until the next update, so a large variant costs nothing lasting.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
@@ -397,13 +282,6 @@ pub enum Action {
 	Saved(BusyKey, Result<Event, String>),
 	SavedMany(BusyKey, Result<Vec<Event>, String>),
 }
-fn take_drag(state: &mut State) -> Option<String> {
-	state.timeblocking.drag_pointer = None;
-	state.timeblocking.drop_hover = None;
-	state.timeblocking.drag_window = None;
-	state.timeblocking.dragging.take()
-}
-
 /// The tasks in `block`, in the order they are laid out (see
 /// [`timeparagon_core::timeblocking::membership`]).
 pub fn assigned_all<'a>(state: &'a State, block: &Event) -> Vec<&'a Event> {
@@ -500,9 +378,9 @@ pub fn close(state: &mut State) -> Task<Message> {
 	}
 	state.timeblocking.block = None;
 	state.timeblocking.focus = None;
-	state.timeblocking.distraction_open = false;
-	state.timeblocking.session_edit = None;
-	state.timeblocking.session_error = None;
+	state.work_tracking.distraction_open = false;
+	state.work_tracking.session_edit = None;
+	state.work_tracking.session_error = None;
 	state.timeblocking.dragging = None;
 	state.timeblocking.drag_pointer = None;
 	state.timeblocking.available_query.clear();
@@ -510,7 +388,7 @@ pub fn close(state: &mut State) -> Task<Message> {
 	state.timeblocking.available_all = false;
 	state.timeblocking.available_planned = false;
 	// A save still in flight keeps the draft so its result can land on the same field.
-	if !state.timeblocking.busy.adding_todo() {
+	if !state.task_operations.busy.adding_todo() {
 		state.timeblocking.todo_open = false;
 		state.timeblocking.todo_draft.clear();
 		state.timeblocking.todo_error = None;
@@ -519,7 +397,7 @@ pub fn close(state: &mut State) -> Task<Message> {
 }
 pub fn open(state: &mut State, id: String) -> Task<Message> {
 	if state.timeblocking.block.as_deref() != Some(id.as_str())
-		&& !state.timeblocking.busy.adding_todo()
+		&& !state.task_operations.busy.adding_todo()
 	{
 		state.timeblocking.todo_open = false;
 		state.timeblocking.todo_draft.clear();
@@ -530,68 +408,12 @@ pub fn open(state: &mut State, id: String) -> Task<Message> {
 		state.timeblocking.available_planned = false;
 	}
 	state.timeblocking.focus = None;
-	state.timeblocking.distraction_open = false;
+	state.work_tracking.distraction_open = false;
 	// The panel edits the block in place, so it always opens with a live
 	// draft of the block's own fields.
 	state.calendar.edit_draft = event(state, &id).map(crate::calendar::EditDraft::from_event);
 	state.timeblocking.block = Some(id);
 	Task::none()
-}
-
-fn focused_block_key(state: &State) -> Option<String> {
-	let id = state.timeblocking.focus.as_deref()?;
-	state.calendar.event(id).map(block_key)
-}
-
-fn advance_pomodoro(state: &mut State, now: chrono::DateTime<chrono::Utc>) -> bool {
-	let eligible: std::collections::HashSet<_> = state
-		.calendar
-		.events
-		.iter()
-		.filter(|e| e.is_task() && task_status(e) == TaskStatus::Active)
-		.map(task_key)
-		.collect();
-	state
-		.config
-		.pomodoro
-		.advance(&mut state.config.task_work, now, |key| {
-			eligible.contains(key)
-		})
-}
-
-/// What the Pomodoro should start next: a marker, never an active work session.
-fn resume_target(
-	state: &State,
-	task: &Event,
-	now: chrono::DateTime<chrono::Utc>,
-) -> crate::task_work::Session {
-	crate::task_work::Session {
-		task_key: task_key(task),
-		task_title: task.title.clone(),
-		block_key: block_key_of(state, task),
-		started_at: now,
-		stopped_at: Some(now),
-	}
-}
-
-/// The task a block is on: the one running, else the one the Pomodoro will
-/// resume, else the first still to do.
-pub fn current_task<'a>(state: &'a State, block: &Event) -> Option<&'a Event> {
-	let open: Vec<_> = assigned_all(state, block)
-		.into_iter()
-		.filter(|task| task_status(task) == TaskStatus::Active)
-		.collect();
-	let find = |key: &str| open.iter().copied().find(|task| task_key(task) == key);
-	state
-		.config
-		.task_work
-		.active()
-		.and_then(|session| find(&session.task_key))
-		.or_else(|| {
-			let target = state.config.pomodoro.target.as_ref()?;
-			find(&target.task_key)
-		})
-		.or_else(|| open.first().copied())
 }
 
 /// Resolve staged tasks without adding them to calendar snapshots or caches.
@@ -615,17 +437,6 @@ pub(crate) fn schedule_created(
 }
 
 pub fn update(state: &mut State, action: Action) -> Task<Message> {
-	// Writes started before creation opened still finish in their own workspace.
-	if matches!(&action, Action::Saved(_, _) | Action::SavedMany(_, _))
-		&& let Some(previous) = state.inbox.workspace.take()
-	{
-		let draft_workspace = std::mem::replace(&mut state.timeblocking, *previous);
-		let task = update(state, action);
-		let previous = std::mem::replace(&mut state.timeblocking, draft_workspace);
-		state.inbox.workspace = Some(Box::new(previous));
-		return task;
-	}
-
 	// Triaging is a review step: the task cannot leave the Inbox until every
 	// required field is filled in. Nothing is sent to Google when it is not.
 	if let Action::Triage(id) = &action
@@ -648,7 +459,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			state.calendar.edit_draft =
 				event(state, &id).map(crate::calendar::EditDraft::from_event);
 			state.timeblocking.focus = Some(id);
-			state.timeblocking.work_now = Some(crate::clock::utc_now());
+			state.work_tracking.work_now = Some(crate::clock::utc_now());
 			state.calendar.open_event = None;
 			state.calendar.menu_open = false;
 			state.calendar.search.open = false;
@@ -673,363 +484,97 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 		}
 		Action::CloseView => {
 			state.timeblocking.focus = None;
-			state.timeblocking.distraction_open = false;
+			state.work_tracking.distraction_open = false;
 			return Task::none();
 		}
-		Action::WorkTick => {
-			let now = crate::clock::utc_now();
-			state.timeblocking.work_now = Some(now);
-			if advance_pomodoro(state, now) {
-				return crate::app::queue_save(state);
-			}
-			return Task::none();
-		}
+		Action::WorkTick => return crate::focus::update(state, crate::focus::Action::WorkTick),
 		Action::PomodoroToggle => {
-			let now = crate::clock::utc_now();
-			advance_pomodoro(state, now);
-			if state.config.pomodoro.running() {
-				// The task stops with the clock and is what the next Start resumes.
-				if let Some(active) = state.config.task_work.active() {
-					state.config.pomodoro.target = Some(active.clone());
-				}
-				state.config.pomodoro.running_since = None;
-				state.config.task_work.stop_all(now);
-			} else {
-				let current = state
-					.timeblocking
-					.focus
-					.as_deref()
-					.and_then(|id| state.calendar.event(id))
-					.and_then(|block| current_task(state, block))
-					.map(|task| resume_target(state, task, now));
-				let eligible: std::collections::HashSet<_> = state
-					.calendar
-					.events
-					.iter()
-					.filter(|e| e.is_task() && task_status(e) == TaskStatus::Active)
-					.map(task_key)
-					.collect();
-				let timer = &mut state.config.pomodoro;
-				timer.running_since = Some(now);
-				if let Some(next) = current.or_else(|| state.config.task_work.active().cloned()) {
-					timer.target = Some(next);
-				}
-				if timer.phase == crate::pomodoro::Phase::Work {
-					timer.resume_task(&mut state.config.task_work, now, |key| {
-						eligible.contains(key)
-					});
-				} else {
-					state.config.task_work.stop_all(now);
-				}
-			}
-			state.timeblocking.work_now = Some(now);
-			return crate::app::queue_save(state);
+			return crate::focus::update(state, crate::focus::Action::PomodoroToggle);
 		}
 		Action::PomodoroReset => {
-			let now = crate::clock::utc_now();
-			advance_pomodoro(state, now);
-			if state.config.pomodoro.running() {
-				state.config.task_work.stop_all(now);
-			}
-			state.config.pomodoro.reset();
-			return crate::app::queue_save(state);
+			return crate::focus::update(state, crate::focus::Action::PomodoroReset);
 		}
 		Action::PomodoroMinutes(work, delta) => {
-			let timer = &mut state.config.pomodoro;
-			if timer.fresh() {
-				let minutes = if work {
-					&mut timer.work_minutes
-				} else {
-					&mut timer.break_minutes
-				};
-				*minutes = (i64::from(*minutes) + i64::from(delta)).clamp(1, 180) as u32;
-				timer.remaining = timer.duration();
-				return crate::app::queue_save(state);
-			}
-			return Task::none();
+			return crate::focus::update(state, crate::focus::Action::PomodoroMinutes(work, delta));
 		}
 		Action::EditSession(index) => {
-			let Some(session) = state.config.task_work.sessions.get(index) else {
-				return Task::none();
-			};
-			let start = session.started_at.with_timezone(&Local);
-			state.timeblocking.session_date = Some(start.date_naive());
-			state.timeblocking.session_start = start.format("%H:%M").to_string();
-			state.timeblocking.session_end = session
-				.stopped_at
-				.map(|end| end.with_timezone(&Local).format("%H:%M").to_string())
-				.unwrap_or_default();
-			state.timeblocking.session_error = None;
-			state.timeblocking.session_edit = Some(index);
-			return iced::widget::operation::focus(iced::widget::Id::new("work-session-start"));
+			return crate::focus::update(state, crate::focus::Action::EditSession(index));
 		}
 		Action::SessionStart(value) => {
-			state.timeblocking.session_start = value;
-			state.timeblocking.session_error = None;
-			return Task::none();
+			return crate::focus::update(state, crate::focus::Action::SessionStart(value));
 		}
 		Action::SessionEnd(value) => {
-			state.timeblocking.session_end = value;
-			state.timeblocking.session_error = None;
-			return Task::none();
+			return crate::focus::update(state, crate::focus::Action::SessionEnd(value));
 		}
 		Action::SaveSession => {
-			let Some(index) = state.timeblocking.session_edit else {
-				return Task::none();
-			};
-			let Some(day) = state.timeblocking.session_date else {
-				return Task::none();
-			};
-			let Some((sh, sm)) = calendar::parse_clock(state.timeblocking.session_start.trim())
-			else {
-				state.timeblocking.session_error = Some("Enter a start time as HH:MM".into());
-				return Task::none();
-			};
-			let Some(start) = Local
-				.from_local_datetime(&day.and_hms_opt(sh, sm, 0).unwrap())
-				.earliest()
-			else {
-				state.timeblocking.session_error =
-					Some("This start time does not exist in your time zone".into());
-				return Task::none();
-			};
-			let end_text = state.timeblocking.session_end.trim();
-			let end = if end_text.is_empty() {
-				None
-			} else {
-				let Some((eh, em)) = calendar::parse_clock(end_text) else {
-					state.timeblocking.session_error = Some("Enter an end time as HH:MM".into());
-					return Task::none();
-				};
-				let end_day = if (eh, em) <= (sh, sm) {
-					match day.succ_opt() {
-						Some(day) => day,
-						None => return Task::none(),
-					}
-				} else {
-					day
-				};
-				let Some(end) = Local
-					.from_local_datetime(&end_day.and_hms_opt(eh, em, 0).unwrap())
-					.earliest()
-				else {
-					state.timeblocking.session_error =
-						Some("This end time does not exist in your time zone".into());
-					return Task::none();
-				};
-				if end <= start {
-					state.timeblocking.session_error =
-						Some("The session must end after it starts".into());
-					return Task::none();
-				}
-				Some(end)
-			};
-			let Some(session) = state.config.task_work.sessions.get_mut(index) else {
-				state.timeblocking.session_edit = None;
-				return Task::none();
-			};
-			session.started_at = start.with_timezone(&chrono::Utc);
-			session.stopped_at = end.map(|end| end.with_timezone(&chrono::Utc));
-			state.timeblocking.session_edit = None;
-			state.timeblocking.session_error = None;
-			state.timeblocking.work_now = Some(crate::clock::utc_now());
-			return crate::app::queue_save(state);
+			return crate::focus::update(state, crate::focus::Action::SaveSession);
 		}
 		Action::CloseSession => {
-			state.timeblocking.session_edit = None;
-			state.timeblocking.session_error = None;
-			return Task::none();
+			return crate::focus::update(state, crate::focus::Action::CloseSession);
 		}
 		Action::DeleteSession => {
-			let Some(index) = state.timeblocking.session_edit.take() else {
-				return Task::none();
-			};
-			if index < state.config.task_work.sessions.len() {
-				state.config.task_work.sessions.remove(index);
-				state.timeblocking.session_error = None;
-				state.timeblocking.work_now = Some(crate::clock::utc_now());
-				return crate::app::queue_save(state);
-			}
-			return Task::none();
+			return crate::focus::update(state, crate::focus::Action::DeleteSession);
 		}
 		Action::OpenDistraction => {
-			state.timeblocking.distraction_open = state.timeblocking.focus.is_some();
-			state.timeblocking.distraction_cause = None;
-			return Task::none();
+			return crate::focus::update(state, crate::focus::Action::OpenDistraction);
 		}
 		Action::CloseDistraction => {
-			state.timeblocking.distraction_open = false;
-			return Task::none();
+			return crate::focus::update(state, crate::focus::Action::CloseDistraction);
 		}
 		Action::ChooseDistraction(cause) => {
-			state.timeblocking.distraction_cause = Some(cause);
-			return Task::none();
+			return crate::focus::update(state, crate::focus::Action::ChooseDistraction(cause));
 		}
 		Action::AddDistraction(minutes) => {
-			state.timeblocking.distraction_open = false;
-			let cause = state.timeblocking.distraction_cause.take();
-			let Some(key) = focused_block_key(state) else {
-				return Task::none();
-			};
-			state
-				.config
-				.task_work
-				.distractions
-				.push(crate::task_work::Distraction {
-					block_key: key,
-					minutes,
-					recorded_at: crate::clock::utc_now(),
-				});
-			let saved = crate::app::queue_save(state);
-			return match cause {
-				Some(DistractionCause::Habit(id)) => {
-					Task::batch([saved, crate::habits::open_happened_now(state, id)])
-				}
-				_ => saved,
-			};
+			return crate::focus::update(state, crate::focus::Action::AddDistraction(minutes));
 		}
 		Action::UndoDistraction => {
-			let Some(key) = focused_block_key(state) else {
-				return Task::none();
-			};
-			state.config.task_work.undo_distraction(&key);
-			return crate::app::queue_save(state);
+			return crate::focus::update(state, crate::focus::Action::UndoDistraction);
 		}
 		Action::StartWork(id) => {
-			let now = crate::clock::utc_now();
-			advance_pomodoro(state, now);
-			let Some(task) = event(state, &id).filter(|e| {
-				e.is_task() && !e.completed && !state.timeblocking.busy.contains_task(&id)
-			}) else {
-				return Task::none();
-			};
-			if state.config.pomodoro.running()
-				&& state.config.pomodoro.phase == crate::pomodoro::Phase::Break
-			{
-				state.config.pomodoro.target = Some(resume_target(state, task, now));
-				return crate::app::queue_save(state);
-			}
-			let block = block_key_of(state, task);
-			state
-				.config
-				.task_work
-				.start(task_key(task), task.title.clone(), block, now);
-			state.config.pomodoro.target = state.config.task_work.active().cloned();
-			state.timeblocking.work_now = Some(now);
-			return crate::app::queue_save(state);
+			return crate::focus::update(state, crate::focus::Action::StartWork(id));
 		}
 		Action::StopWork(id) => {
-			let now = crate::clock::utc_now();
-			advance_pomodoro(state, now);
-			if let Some(task) = event(state, &id) {
-				let key = task_key(task);
-				state.config.task_work.stop(&key, now);
-				if state
-					.config
-					.pomodoro
-					.target
-					.as_ref()
-					.is_some_and(|target| target.task_key == key)
-				{
-					state.config.pomodoro.target = None;
-				}
-				state.timeblocking.work_now = Some(now);
-				return crate::app::queue_save(state);
-			}
-			return Task::none();
+			return crate::focus::update(state, crate::focus::Action::StopWork(id));
 		}
-
 		Action::HideOverdue(hide) => {
 			state.config.calendar.hide_overdue_tasks = hide;
 			return crate::app::queue_save(state);
 		}
 		Action::DueDate(id, value) => {
-			if schedule_locked(state, &id) {
-				return Task::none();
-			}
-			state.timeblocking.date = value;
-			let timed = due_is_timed(state, &id);
-			let Some(change) = due_change(state, timed) else {
-				return Task::none();
-			};
-			(id, change)
+			return crate::task_editor::update(
+				state,
+				crate::task_editor::Action::DueDate(id, value),
+			);
 		}
 		Action::DueAllDay(id, all_day) => {
-			if schedule_locked(state, &id) {
-				return Task::none();
-			}
-			let schedule = &mut state.timeblocking;
-			if calendar::parse_clock(&schedule.start_time).is_none()
-				|| calendar::parse_clock(&schedule.end_time).is_none()
-			{
-				schedule.start_time = "09:00".into();
-				schedule.end_time = "09:30".into();
-			}
-			let Some(change) = due_change(state, !all_day) else {
-				return Task::none();
-			};
-			(id, change)
+			return crate::task_editor::update(
+				state,
+				crate::task_editor::Action::DueAllDay(id, all_day),
+			);
 		}
 		Action::DueStart(id, value) => {
-			if schedule_locked(state, &id) {
-				return Task::none();
-			}
-			let schedule = &mut state.timeblocking;
-			if let Some(end) = end_keeping_length(&schedule.start_time, &schedule.end_time, &value)
-			{
-				schedule.end_time = end;
-			}
-			schedule.start_time = value;
-			let Some(change) = due_change(state, true) else {
-				return Task::none();
-			};
-			(id, change)
+			return crate::task_editor::update(
+				state,
+				crate::task_editor::Action::DueStart(id, value),
+			);
 		}
 		Action::DueEnd(id, value) => {
-			if schedule_locked(state, &id) {
-				return Task::none();
-			}
-			state.timeblocking.end_time = value;
-			let Some(change) = due_change(state, true) else {
-				return Task::none();
-			};
-			(id, change)
+			return crate::task_editor::update(
+				state,
+				crate::task_editor::Action::DueEnd(id, value),
+			);
 		}
 		Action::EditTitle => {
-			if state
-				.calendar
-				.open_event
-				.as_deref()
-				.and_then(|id| state.calendar.event(id))
-				.and_then(|event| state.habits.habit_of(event))
-				.is_some()
-			{
-				return Task::none();
-			}
-			state.timeblocking.editing_title = true;
-			return iced::widget::operation::focus(iced::widget::Id::new("task-title"));
+			return crate::task_editor::update(state, crate::task_editor::Action::EditTitle);
 		}
 		Action::Deadline(id, value) => {
-			if schedule_locked(state, &id) {
-				return Task::none();
-			}
-			state.timeblocking.deadline = value;
-			return update(state, Action::SaveDeadline(id));
+			return crate::task_editor::update(
+				state,
+				crate::task_editor::Action::Deadline(id, value),
+			);
 		}
 		Action::SaveDeadline(id) => {
-			let input = state.timeblocking.deadline.trim();
-			let date = if input.is_empty() {
-				None
-			} else {
-				match calendar::deadline::parse_input(input) {
-					Ok(deadline) => Some(deadline),
-					Err(error) => {
-						state.calendar.error = Some(error);
-						return Task::none();
-					}
-				}
-			};
-			(id, Change::Deadline(date))
+			return crate::task_editor::update(state, crate::task_editor::Action::SaveDeadline(id));
 		}
 		Action::NewWeekTask => {
 			let day = state.calendar.day;
@@ -1046,25 +591,11 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			);
 			return Task::batch([open, due, schedule]);
 		}
-		Action::DropWeekList { target, after } => return drop_week_list(state, target, after),
-		Action::DropAt { start, .. } => {
-			return update(state, start.map_or(Action::DropDay, Action::DropTime));
+		Action::DropWeekList { target, after } => {
+			return drag::update(state, drag::Action::DropWeekList { target, after });
 		}
-		Action::DropTime(start) => {
-			let Some(id) = take_drag(state) else {
-				return Task::none();
-			};
-			let minutes = event(state, &id).map(|t| metadata(t).minutes).unwrap_or(0);
-			let minutes = if minutes == 0 { 30 } else { minutes };
-			return update(
-				state,
-				Action::Schedule(
-					id,
-					start,
-					start + chrono::Duration::minutes(i64::from(minutes)),
-				),
-			);
-		}
+		Action::DropAt { start, .. } => return drag::update(state, drag::Action::DropAt { start }),
+		Action::DropTime(start) => return drag::update(state, drag::Action::DropTime(start)),
 		Action::Schedule(id, start, end) => {
 			if end <= start {
 				state.calendar.error = Some("The task must end after it starts".into());
@@ -1094,10 +625,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			return crate::app::queue_save(state);
 		}
 		Action::Close => return close(state),
-		Action::CancelDrag => {
-			take_drag(state);
-			return Task::none();
-		}
+		Action::CancelDrag => return drag::update(state, drag::Action::CancelDrag),
 		Action::Details(id) => {
 			state.calendar.open_event = Some(id);
 			return Task::none();
@@ -1111,54 +639,21 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			return Task::none();
 		}
 		Action::EditEstimate(id) => {
-			let Some(task) = event(state, &id).filter(|e| e.is_task()) else {
-				return Task::none();
-			};
-			if state.timeblocking.busy.contains_task(&id) {
-				return Task::none();
-			}
-			state.timeblocking.estimate = metadata(task).minutes.to_string();
-			state.timeblocking.estimate_task = Some(id);
-			state.timeblocking.estimate_error = None;
-			state.timeblocking.dragging = None;
-			state.timeblocking.drag_pointer = None;
-			return iced::widget::operation::focus(iced::widget::Id::new("task-estimate"));
+			return crate::task_editor::update(state, crate::task_editor::Action::EditEstimate(id));
 		}
 		Action::CloseEstimate => {
-			state.timeblocking.estimate_task = None;
-			state.timeblocking.estimate_error = None;
-			return Task::none();
+			return crate::task_editor::update(state, crate::task_editor::Action::CloseEstimate);
 		}
 		Action::Estimate(value) => {
-			state.timeblocking.estimate = value;
-			state.timeblocking.estimate_error = None;
-			return Task::none();
+			return crate::task_editor::update(state, crate::task_editor::Action::Estimate(value));
 		}
-		Action::Drag(id, position) => {
-			state.timeblocking.drag_window = None;
-			state.timeblocking.drop_hover = None;
-			state.timeblocking.dragging = Some(id);
-			state.timeblocking.drag_pointer = Some(position);
-			return Task::none();
-		}
+		Action::Drag(id, position) => return drag::update(state, drag::Action::Drag(id, position)),
 		Action::DragMoved(position) => {
-			if state.timeblocking.dragging.is_some() {
-				state.timeblocking.drag_pointer = Some(position);
-			}
-			return Task::none();
+			return drag::update(state, drag::Action::DragMoved(position));
 		}
-		Action::DropBlock(block) => {
-			if let Some(id) = take_drag(state) {
-				return update(state, Action::Assign(id, block));
-			}
-			return Task::none();
-		}
+		Action::DropBlock(block) => return drag::update(state, drag::Action::DropBlock(block)),
 		Action::DropBacklogSection(section) => {
-			let Some(id) = take_drag(state) else {
-				return Task::none();
-			};
-			state.timeblocking.drag_pointer = None;
-			return update(state, Action::SetBacklogSection(id, section));
+			return drag::update(state, drag::Action::DropBacklogSection(section));
 		}
 		Action::SetBacklogSection(id, section) => {
 			let Some(task) = event(state, &id).filter(|task| {
@@ -1175,244 +670,52 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			(id, Change::BacklogSection(section))
 		}
 		Action::DropCalendarTask(target) => {
-			let block = event(state, &target)
-				.and_then(|task| block_of(task, &state.calendar.events, day_start_hour(state)))
-				.map(|block| block.id.clone());
-			return update(state, block.map_or(Action::DropDay, Action::DropBlock));
+			return drag::update(state, drag::Action::DropCalendarTask(target));
 		}
-		Action::DropTask(target) => {
-			if state.screen == crate::app::Screen::Backlog {
-				let Some(task) = event(state, &target) else {
-					return Task::none();
-				};
-				return update(
-					state,
-					Action::DropBacklogSection(metadata(task).backlog_section),
-				);
-			}
-			let Some(id) = take_drag(state) else {
-				return Task::none();
-			};
-			if id == target {
-				return Task::none();
-			}
-			let Some(target) = event(state, &target) else {
-				return Task::none();
-			};
-			let m = metadata(target);
-			let hour = day_start_hour(state);
-			let block = block_of(target, &state.calendar.events, hour);
-			// Into another block: assigned there, as by dropping on the block.
-			if let Some(block) = block
-				&& let Some(dragged) = event(state, &id)
-				&& !in_block(dragged, block, hour)
-			{
-				let block = block.id.clone();
-				return update(state, Action::Assign(id, block));
-			}
-			let siblings: Vec<&Event> = match block {
-				Some(block) => tasks_in(block, &state.calendar.events, hour),
-				None => state
-					.calendar
-					.events
-					.iter()
-					.filter(|e| e.is_task() && !is_assigned(e))
-					.collect(),
-			};
-			let previous = siblings
-				.into_iter()
-				.filter(|e| e.id != id && e.id != target.id)
-				.map(metadata)
-				.filter(|other| other.order < m.order)
-				.map(|other| other.order)
-				.max();
-			let rank = previous.map_or(m.order.saturating_sub(1_i64 << 32), |previous| {
-				(i128::from(previous) + (i128::from(m.order) - i128::from(previous)) / 2) as i64
-			});
-			let key = block.map(block_key);
-			(id, Change::Reorder(key, rank, target.start.date_naive()))
-		}
-		Action::DropDay => {
-			let Some(id) = take_drag(state) else {
-				return Task::none();
-			};
-			(id, Change::Day(state.calendar.day))
-		}
+		Action::DropTask(target) => return drag::update(state, drag::Action::DropTask(target)),
+		Action::DropDay => return drag::update(state, drag::Action::DropDay),
 		Action::SavedMany(key, result) => {
-			state.timeblocking.busy.remove(&key);
-			let mut tasks = Vec::new();
-			match result {
-				Ok(events) => {
-					for (index, event) in events.into_iter().enumerate() {
-						let previous = if index == 0 {
-							key.clone()
-						} else {
-							BusyKey::Task(event.id.clone())
-						};
-						tasks.push(update(state, Action::Saved(previous, Ok(event))));
-					}
-				}
-				Err(error) => {
-					state.timeblocking.sync_notice = Some(error.clone());
-					tasks.push(update(state, Action::Saved(key, Err(error))));
-				}
-			}
-			// Shows at once what is still on its way, such as occurrences
-			// being deleted.
-			tasks.push(crate::local_poll::refresh_calendar(state));
-			// Also reconciles a partially successful cross-service write.
-			tasks.push(Task::done(Message::Calendar(
-				CalendarMessage::CalendarSyncRequested,
-			)));
-			return Task::batch(tasks);
+			return crate::task_operations::saved_many(state, key, result);
 		}
-		Action::Saved(key, result) => {
-			state.timeblocking.revision += 1;
-			state.timeblocking.busy.remove(&key);
-			let id = key.task_id();
-			let mut refresh_week = false;
-			let editing_estimate = state.timeblocking.estimate_task.as_deref() == Some(id);
-			let renaming = state.timeblocking.renaming.as_deref() == Some(id);
-			let keep_open = state
-				.timeblocking
-				.keep_open
-				.take_if(|task| *task == id)
-				.is_some();
-			let showing = keep_open && state.calendar.open_event.as_deref() == Some(id);
-			if showing
-				&& result.is_err()
-				&& let Some(task) = event(state, id).cloned()
-			{
-				// The fields go back to what the task still says.
-				seed_schedule(state, &task);
-			}
-			match result {
-				Ok(event) => {
-					let saved_id = event.id.clone();
-					if renaming {
-						state.timeblocking.renaming = None;
-						state.timeblocking.title_error = None;
-						state.timeblocking.editing_title = false;
-					}
-					if key == BusyKey::AddingTodo {
-						state.timeblocking.todo_draft.clear();
-						state.timeblocking.todo_error = None;
-						state.timeblocking.todo_open = false;
-					}
-					if event.is_calendar_task() && state.config.calendar.app_calendar.is_none() {
-						state.config.calendar.app_calendar = Some(event.calendar_id.clone());
-					}
-					if showing {
-						seed_schedule(state, &event);
-					}
-					let key = task_key(&event);
-					state
-						.calendar
-						.events
-						.retain(|e| e.id != id && (!e.is_task() || task_key(e) != key));
-					state.calendar.replace_task(id, &event);
-					if state.range_view_active() {
-						refresh_week = true;
-					}
-					if let Some(placement) = state
-						.timeblocking
-						.pending_week_drop
-						.take_if(|p| p.task == id)
-					{
-						for order in state.config.calendar.weekly_task_order.values_mut() {
-							order.retain(|old| old != id);
-						}
-						place_week_card(
-							state,
-							&saved_id,
-							placement.day,
-							placement.target.as_deref(),
-							placement.after,
-						);
-					}
-					if editing_estimate {
-						state.timeblocking.estimate_task = None;
-						state.timeblocking.estimate_error = None;
-					} else if !keep_open {
-						state.calendar.open_event = None;
-					}
-				}
-				Err(error) if editing_estimate => state.timeblocking.estimate_error = Some(error),
-				Err(error) if renaming => {
-					state.timeblocking.renaming = None;
-					if state.calendar.open_event.as_deref() == Some(id) {
-						state.timeblocking.title_error = Some(error);
-					} else {
-						state.calendar.error = Some(error);
-					}
-				}
-				Err(error) if key == BusyKey::AddingTodo => {
-					state.timeblocking.todo_error = Some(error);
-					state.timeblocking.todo_open = true;
-				}
-				Err(error) => state.calendar.error = Some(error),
-			}
-			state
-				.timeblocking
-				.pending_week_drop
-				.take_if(|p| p.task == id);
-			let save = crate::app::queue_save(state);
-			return if refresh_week {
-				Task::batch([save, crate::app::refresh_week_after_write(state)])
-			} else {
-				save
-			};
-		}
+		Action::Saved(key, result) => return crate::task_operations::saved(state, key, result),
 		Action::SaveEstimate(id) => {
-			if state.timeblocking.estimate_task.as_deref() != Some(&id) {
-				return Task::none();
-			}
-			let Ok(minutes) = state.timeblocking.estimate.trim().parse::<u32>() else {
-				state.timeblocking.estimate_error =
-					Some("Enter an estimate in whole minutes".into());
-				return Task::none();
-			};
-			if minutes == 0 {
-				state.timeblocking.estimate_error = Some("An estimate is required".into());
-				return Task::none();
-			}
-			if minutes > 10080 {
-				state.timeblocking.estimate_error =
-					Some("Estimate must be at most 10080 minutes".into());
-				return Task::none();
-			}
-			(id, Change::Estimate(minutes))
+			return crate::task_editor::update(state, crate::task_editor::Action::SaveEstimate(id));
 		}
 		Action::SetEstimate(id, minutes) => {
-			if minutes == 0 || minutes > 10080 {
-				return Task::none();
-			}
-			(id, Change::Estimate(minutes))
+			return crate::task_editor::update(
+				state,
+				crate::task_editor::Action::SetEstimate(id, minutes),
+			);
 		}
-		Action::SetDeadline(id, deadline) => (id, Change::Deadline(deadline)),
+		Action::SetDeadline(id, deadline) => {
+			return crate::task_editor::update(
+				state,
+				crate::task_editor::Action::SetDeadline(id, deadline),
+			);
+		}
 		Action::BacklogPicker(id) => {
-			if !state.timeblocking.busy.is_empty()
+			if !state.task_operations.busy.is_empty()
 				|| !event(state, &id).is_some_and(|task| task.is_task())
 			{
 				return Task::none();
 			}
-			state.timeblocking.backlog_picker =
-				(state.timeblocking.backlog_picker.as_deref() != Some(id.as_str())).then_some(id);
+			state.task_editor_mut().backlog_picker =
+				(state.task_editor().backlog_picker.as_deref() != Some(id.as_str())).then_some(id);
 			return Task::none();
 		}
 		Action::Backlog(id) => (id, Change::Backlog(None)),
 		Action::MoveToBacklog(id, section) => {
-			if !state.timeblocking.busy.is_empty() {
+			if !state.task_operations.busy.is_empty() {
 				return Task::none();
 			}
-			state.timeblocking.backlog_picker = None;
+			state.task_editor_mut().backlog_picker = None;
 			(id, Change::Backlog(Some(section)))
 		}
 		Action::MoveToInbox(id) => {
-			if !state.timeblocking.busy.is_empty() {
+			if !state.task_operations.busy.is_empty() {
 				return Task::none();
 			}
-			state.timeblocking.backlog_picker = None;
+			state.task_editor_mut().backlog_picker = None;
 			(id, Change::Inbox)
 		}
 		Action::Triage(id) => (id, Change::Triaged),
@@ -1431,7 +734,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			// Something that repeats is asked about: just this occurrence,
 			// or this one and the later ones.
 			if self::event(state, &id).is_some_and(|task| task.is_task() && task.is_recurring()) {
-				if !state.timeblocking.busy.is_empty() {
+				if !state.task_operations.busy.is_empty() {
 					return Task::none();
 				}
 				state.timeblocking.pending_recurring = Some(PendingRecurring {
@@ -1446,210 +749,110 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			(id, Change::Block(key, event.start, event.end))
 		}
 		Action::CancelRecurring => {
-			state.timeblocking.pending_recurring = None;
-			return Task::none();
+			return recurring::update(state, recurring::Action::CancelRecurring);
 		}
 		Action::OneOff(one_off) => {
-			state.timeblocking.one_off = one_off;
-			return Task::none();
+			return recurring::update(state, recurring::Action::OneOff(one_off));
 		}
-		Action::StopRepeating(id) => return stop_repeating(state, &id),
+		Action::StopRepeating(id) => {
+			return recurring::update(state, recurring::Action::StopRepeating(id));
+		}
 		Action::RepeatWithBlock(task, block) => {
-			return repeat_with_block(state, &task, &block, false);
+			return recurring::update(state, recurring::Action::RepeatWithBlock(task, block));
 		}
 		Action::ConfirmRepeatWithBlock => {
-			let Some(PendingJoin { task, block }) = state.timeblocking.pending_join.take() else {
-				return Task::none();
-			};
-			return repeat_with_block(state, &task, &block, true);
+			return recurring::update(state, recurring::Action::ConfirmRepeatWithBlock);
 		}
 		Action::CancelRepeatWithBlock => {
-			state.timeblocking.pending_join = None;
-			return Task::none();
+			return recurring::update(state, recurring::Action::CancelRepeatWithBlock);
 		}
-		Action::MoveRecurring(future) => return move_recurring(state, future),
+		Action::MoveRecurring(future) => {
+			return recurring::update(state, recurring::Action::MoveRecurring(future));
+		}
 		Action::Title(value) => {
-			state.timeblocking.title = value;
-			state.timeblocking.title_error = None;
-			return Task::none();
+			return crate::task_editor::update(state, crate::task_editor::Action::Title(value));
 		}
 		Action::ColorInput(id, value) => {
-			state.timeblocking.color_input = Some((id, value));
-			return Task::none();
+			return crate::task_editor::update(
+				state,
+				crate::task_editor::Action::ColorInput(id, value),
+			);
 		}
 		Action::SaveColor(id, value) => {
-			let choice = match crate::calendar::colors::selection(&value) {
-				Ok(choice) => choice,
-				Err(error) => {
-					state.calendar.error = Some(error);
-					return Task::none();
-				}
-			};
-			state.timeblocking.color_input = None;
-			if let Some(block) = event(state, &id)
-				.filter(|e| is_block(e, &state.config.calendar))
-				.cloned()
-			{
-				if block.details.sending
-					|| state
-						.calendar
-						.edit_draft
-						.as_ref()
-						.is_some_and(|d| d.id == id && d.saving)
-				{
-					return Task::none();
-				}
-				let mut draft = state
-					.calendar
-					.edit_draft
-					.take()
-					.filter(|d| d.id == id)
-					.unwrap_or_else(|| calendar::EditDraft::from_event(&block));
-				draft.color_input = choice.unwrap_or_default();
-				state.calendar.edit_draft = Some(draft);
-				return crate::app::update(
-					state,
-					Message::EventEdit(crate::app::EventEditMessage::EventEditSaveRequested),
-				);
-			}
-			(id, Change::Color(choice))
+			return crate::task_editor::update(
+				state,
+				crate::task_editor::Action::SaveColor(id, value),
+			);
 		}
-		Action::SaveDescription(id, value) => (id, Change::Description(value)),
+		Action::SaveDescription(id, value) => {
+			return crate::task_editor::update(
+				state,
+				crate::task_editor::Action::SaveDescription(id, value),
+			);
+		}
 		Action::SaveTitle(id) => {
-			if event(state, &id)
-				.and_then(|event| state.habits.habit_of(event))
-				.is_some()
-			{
-				return Task::none();
-			}
-			let title = state.timeblocking.title.trim().to_owned();
-			if title.is_empty() {
-				state.timeblocking.title_error = Some("A task needs a name".into());
-				return Task::none();
-			}
-			if title.chars().count() > MAX_TODO_CHARS {
-				state.timeblocking.title_error = Some(format!(
-					"A task name can be at most {MAX_TODO_CHARS} characters"
-				));
-				return Task::none();
-			}
-			let Some(task) = event(state, &id).filter(|event| event.is_task()) else {
-				return Task::none();
-			};
-			if task.title == title {
-				state.timeblocking.title_error = None;
-				state.timeblocking.editing_title = false;
-				return Task::none();
-			}
-			state.timeblocking.title_error = None;
-			(id, Change::Title(title))
+			return crate::task_editor::update(state, crate::task_editor::Action::SaveTitle(id));
 		}
 		Action::ProjectAdd(id, project) => {
-			if state.config.projects.get(project).is_none() {
-				return Task::none();
-			}
-			let Some(task) = event(state, &id).filter(|event| event.is_task()) else {
-				return Task::none();
-			};
-			let mut projects = metadata(task).projects;
-			if projects.contains(&project) {
-				return Task::none();
-			}
-			projects.push(project);
-			projects.sort_unstable();
-			(id, Change::Projects(projects))
+			return crate::task_editor::update(
+				state,
+				crate::task_editor::Action::ProjectAdd(id, project),
+			);
 		}
 		Action::ProjectRemove(id, project) => {
-			let Some(task) = event(state, &id).filter(|event| event.is_task()) else {
-				return Task::none();
-			};
-			let mut projects = metadata(task).projects;
-			if !projects.contains(&project) {
-				return Task::none();
-			}
-			projects.retain(|id| *id != project);
-			(id, Change::Projects(projects))
+			return crate::task_editor::update(
+				state,
+				crate::task_editor::Action::ProjectRemove(id, project),
+			);
 		}
 		Action::ProjectQuery(value) => {
-			state.timeblocking.project_query = value;
-			return Task::none();
+			return crate::task_editor::update(
+				state,
+				crate::task_editor::Action::ProjectQuery(value),
+			);
 		}
 		Action::ProjectPicker(id, open) => {
-			if open {
-				state.timeblocking.project_picker = Some(id);
-			} else if state.timeblocking.project_picker.as_deref() == Some(id.as_str()) {
-				state.timeblocking.project_picker = None;
-			}
-			return Task::none();
+			return crate::task_editor::update(
+				state,
+				crate::task_editor::Action::ProjectPicker(id, open),
+			);
 		}
 		Action::LabelDraft(value) => {
-			state.timeblocking.label_draft = value;
-			state.timeblocking.label_error = None;
-			return Task::none();
+			return crate::task_editor::update(
+				state,
+				crate::task_editor::Action::LabelDraft(value),
+			);
 		}
 		Action::AddLabel(id, label) => {
-			let Some(task) = event(state, &id).filter(|event| event.is_task()) else {
-				return Task::none();
-			};
-			let label = match clean_label(&label) {
-				Ok(label) => label,
-				Err(error) => {
-					state.timeblocking.label_error = Some(error.to_owned());
-					return Task::none();
-				}
-			};
-			let mut labels = metadata(task).labels;
-			if labels
-				.iter()
-				.any(|existing| existing.eq_ignore_ascii_case(&label))
-			{
-				state.timeblocking.label_draft.clear();
-				state.timeblocking.label_error = None;
-				return Task::none();
-			}
-			labels.push(label);
-			state.timeblocking.label_draft.clear();
-			state.timeblocking.label_error = None;
-			(id, Change::Labels(labels))
+			return crate::task_editor::update(
+				state,
+				crate::task_editor::Action::AddLabel(id, label),
+			);
 		}
 		Action::RemoveLabel(id, label) => {
-			let Some(task) = event(state, &id).filter(|event| event.is_task()) else {
-				return Task::none();
-			};
-			let mut labels = metadata(task).labels;
-			if !labels
-				.iter()
-				.any(|existing| existing.eq_ignore_ascii_case(&label))
-			{
-				return Task::none();
-			}
-			labels.retain(|existing| !existing.eq_ignore_ascii_case(&label));
-			(id, Change::Labels(labels))
+			return crate::task_editor::update(
+				state,
+				crate::task_editor::Action::RemoveLabel(id, label),
+			);
 		}
 		Action::Priority(id, priority) => {
-			let Some(task) = event(state, &id).filter(|event| event.is_task()) else {
-				return Task::none();
-			};
-			if metadata(task).priority == priority {
-				return Task::none();
-			}
-			(id, Change::Priority(priority))
+			return crate::task_editor::update(
+				state,
+				crate::task_editor::Action::Priority(id, priority),
+			);
 		}
 		Action::Location(id, location) => {
-			let Some(task) = event(state, &id).filter(|event| event.is_task()) else {
-				return Task::none();
-			};
-			if metadata(task).location == location {
-				return Task::none();
-			}
-			(id, Change::Location(location))
+			return crate::task_editor::update(
+				state,
+				crate::task_editor::Action::Location(id, location),
+			);
 		}
 		Action::OpenTodo => {
 			state.timeblocking.todo_open = true;
 			return iced::widget::operation::focus(iced::widget::Id::new("time-block-todo"));
 		}
 		Action::CloseTodo => {
-			if state.timeblocking.busy.adding_todo() {
+			if state.task_operations.busy.adding_todo() {
 				return Task::none();
 			}
 			state.timeblocking.todo_open = false;
@@ -1681,7 +884,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 					&& event.details.recurring_event_id.is_some()
 					&& event.details.habit_id.as_deref() == Some(&habit_id)
 			}) {
-				if state.timeblocking.busy.is_empty() {
+				if state.task_operations.busy.is_empty() {
 					state.timeblocking.pending_recurring = Some(PendingRecurring {
 						item: RecurringItem::Habit(habit_id),
 						block: block_id,
@@ -1721,178 +924,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			return Task::none();
 		}
 	};
-	if id == crate::inbox::DRAFT_ID {
-		let Some(draft) = state.inbox.draft.as_mut().filter(|d| !d.saving) else {
-			return Task::none();
-		};
-		let Some(task) = draft.event.as_mut() else {
-			return Task::none();
-		};
-		let data = task.details.task_data.as_mut().unwrap();
-		match change {
-			Change::Color(v) => data.metadata.color = v,
-			Change::Estimate(v) => {
-				data.metadata.minutes = v;
-				state.timeblocking.estimate_task = None;
-			}
-			Change::Projects(v) => data.metadata.projects = v,
-			Change::Labels(v) => data.metadata.labels = v,
-			Change::Priority(v) => data.metadata.priority = v,
-			Change::Location(v) => data.metadata.location = v,
-			Change::Deadline(v) => {
-				draft.deadline = v.map(|v| v.value()).unwrap_or_default();
-			}
-			Change::Day(day) => {
-				task.start = calendar::at_clock(day, 0, 0);
-				task.end = task.start + chrono::Duration::days(1);
-				task.all_day = true;
-			}
-			Change::ClearSchedule => {
-				task.start = calendar::at_clock(UNDATED, 0, 0);
-				task.end = task.start + chrono::Duration::days(1);
-				task.all_day = true;
-			}
-			Change::Time(start, end) => {
-				task.start = start;
-				task.end = end;
-				task.all_day = false;
-				state.timeblocking.start_time = calendar::clock_label(start);
-				state.timeblocking.end_time = calendar::clock_label(end);
-			}
-			_ => {}
-		}
-		return Task::none();
-	}
-	if !state.timeblocking.busy.is_empty() {
-		return Task::none();
-	}
-	let Some(task) = event(state, &id).filter(|e| e.is_task()).cloned() else {
-		return Task::none();
-	};
-	if matches!(change, Change::Title(_)) {
-		state.timeblocking.renaming = Some(id.clone());
-	}
-	if matches!(
-		change,
-		Change::Description(_)
-			| Change::Color(_)
-			| Change::Projects(_)
-			| Change::Labels(_)
-			| Change::BacklogSection(_)
-			| Change::Priority(_)
-			| Change::Location(_)
-			| Change::Title(_)
-			| Change::Deadline(_)
-			| Change::Day(_)
-			| Change::Time(_, _)
-			| Change::ClearSchedule
-	) {
-		state.timeblocking.keep_open = Some(id.clone());
-	}
-	let settings = state.config.calendar.clone();
-	let order = state
-		.calendar
-		.events
-		.iter()
-		.filter(|e| e.is_task())
-		.map(|e| metadata(e).order)
-		.max()
-		.unwrap_or(0)
-		.saturating_add(1_i64 << 32);
-	state.timeblocking.revision += 1;
-	state.timeblocking.busy.insert(id.clone());
-	let blocks: Vec<_> = state
-		.calendar
-		.events
-		.iter()
-		.filter(|e| is_block(e, &settings))
-		.cloned()
-		.collect();
-	let related: Vec<_> = state
-		.calendar
-		.events
-		.iter()
-		.filter(|e| e.is_task())
-		.cloned()
-		.collect();
-	blocking::run(move || {
-		let changed = save_and_reflow(task, settings.clone(), change, order, blocks, related)?;
-		join_series(changed, &settings, join)
-	})
-	.map(move |result| Message::TimeBlocking(Action::SavedMany(id.clone().into(), result)))
-}
-
-/// Fills the schedule fields from the task they describe.
-pub(crate) fn seed_schedule(state: &mut State, task: &Event) {
-	let schedule = &mut state.timeblocking;
-	schedule.date = if task.start.date_naive() == UNDATED {
-		String::new()
-	} else {
-		task.start.date_naive().to_string()
-	};
-	schedule.deadline = calendar::deadline::input_text(task);
-	schedule.start_time = if task.all_day {
-		"09:00".into()
-	} else {
-		calendar::clock_label(task.start)
-	};
-	schedule.end_time = if task.all_day {
-		"09:30".into()
-	} else {
-		calendar::clock_label(task.end)
-	};
-}
-
-/// Another write holds the queue, so a change to this existing task could not
-/// be sent. Leaving the field alone keeps it saying what the task says.
-fn schedule_locked(state: &State, id: &str) -> bool {
-	id != crate::inbox::DRAFT_ID && !state.timeblocking.busy.is_empty()
-}
-
-fn due_is_timed(state: &State, id: &str) -> bool {
-	let task = if id == crate::inbox::DRAFT_ID {
-		state.inbox.draft.as_ref().and_then(|d| d.event.as_ref())
-	} else {
-		event(state, id)
-	};
-	task.is_some_and(|task| !task.all_day)
-}
-
-/// What the due fields say now, as a change to the task. A problem with them is
-/// reported, and leaves the task as it is.
-fn due_change(state: &mut State, timed: bool) -> Option<Change> {
-	let schedule = &state.timeblocking;
-	let date = schedule.date.trim();
-	let change = if date.is_empty() {
-		Ok(Change::ClearSchedule)
-	} else {
-		match NaiveDate::parse_from_str(date, "%Y-%m-%d") {
-			Err(_) => Err("Enter a date as YYYY-MM-DD".to_owned()),
-			Ok(day) if !timed => Ok(Change::Day(day)),
-			Ok(_) => task_edit::schedule_range(date, &schedule.start_time, &schedule.end_time)
-				.and_then(|(start, end)| {
-					if end > start {
-						Ok(Change::Time(start, end))
-					} else {
-						Err("The task must end after it starts".to_owned())
-					}
-				}),
-		}
-	};
-	change
-		.map_err(|error| state.calendar.error = Some(error))
-		.ok()
-}
-
-/// The end time that keeps a task's length when its start moves to `moved`.
-fn end_keeping_length(start: &str, end: &str, moved: &str) -> Option<String> {
-	const DAY: i64 = 24 * 60;
-	let minutes = |clock: &str| {
-		calendar::parse_clock(clock).map(|(hour, minute)| i64::from(hour) * 60 + i64::from(minute))
-	};
-	let length = (minutes(end)? - minutes(start)?).rem_euclid(DAY);
-	let total = (minutes(moved)? + length).rem_euclid(DAY);
-	Some(format!("{:02}:{:02}", total / 60, total % 60))
+	crate::task_operations::edit(state, id, change, join)
 }
 
 /// Timed tasks and calendar events, with locally saved board placement applied.
@@ -1916,90 +948,6 @@ pub fn weekly_list_events(state: &State, day: NaiveDate) -> Vec<&Event> {
 		});
 	}
 	events
-}
-
-fn place_week_card(state: &mut State, id: &str, day: NaiveDate, target: Option<&str>, after: bool) {
-	let mut order: Vec<_> = weekly_list_events(state, day)
-		.iter()
-		.filter(|event| event.id != id)
-		.map(|event| event.id.clone())
-		.collect();
-	let index = target
-		.and_then(|target| order.iter().position(|id| id == target))
-		.map_or(order.len(), |index| index + usize::from(after));
-	order.insert(index, id.to_owned());
-	for other in state.config.calendar.weekly_task_order.values_mut() {
-		other.retain(|other| other != id);
-	}
-	state
-		.config
-		.calendar
-		.weekly_task_order
-		.insert(day.to_string(), order);
-	let _ = crate::app::queue_save(state);
-}
-
-fn drop_week_list(state: &mut State, target: Option<String>, after: bool) -> Task<Message> {
-	let Some(id) = take_drag(state) else {
-		return Task::none();
-	};
-	if !state.timeblocking.busy.is_empty() || target.as_deref() == Some(&id) {
-		return Task::none();
-	}
-	let day = state.calendar.day;
-	if target
-		.as_ref()
-		.is_some_and(|id| !weekly_list_events(state, day).iter().any(|e| &e.id == id))
-	{
-		return Task::none();
-	}
-	let Some(task) = event(state, &id).filter(|task| task.is_task()).cloned() else {
-		return Task::none();
-	};
-	if !task.all_day && calendar::day_at(task.start, state.config.calendar.day_start_hour()) == day
-	{
-		place_week_card(state, &id, day, target.as_deref(), after);
-		return Task::none();
-	}
-	let Some((start, end)) = week_drop_times(&task, day, state.config.calendar.day_start_hour())
-	else {
-		state.calendar.error = Some("This time does not exist on the destination day".into());
-		return Task::none();
-	};
-	state.timeblocking.pending_week_drop = Some(WeekListPlacement {
-		task: id.clone(),
-		day,
-		target,
-		after,
-	});
-	update(state, Action::Schedule(id, start, end))
-}
-
-/// Keep local clock time and elapsed duration when crossing days, including
-/// the small hours assigned to the previous planning day.
-pub(crate) fn week_drop_times(
-	task: &Event,
-	day: NaiveDate,
-	boundary: u32,
-) -> Option<(DateTime<Local>, DateTime<Local>)> {
-	let (start, duration) = if task.all_day {
-		let minutes = metadata(task).minutes;
-		(
-			calendar::at_clock(day, 9, 0),
-			chrono::Duration::minutes(i64::from(if minutes == 0 { 30 } else { minutes })),
-		)
-	} else {
-		let source_day = calendar::day_at(task.start, boundary);
-		let offset = task.start.date_naive().signed_duration_since(source_day);
-		let date = day.checked_add_signed(offset)?;
-		(
-			date.and_time(task.start.time())
-				.and_local_timezone(Local)
-				.earliest()?,
-			task.end - task.start,
-		)
-	};
-	Some((start, start + duration))
 }
 
 /// Saves the typed line as a Google Task and assigns it to the open block.
@@ -2034,7 +982,7 @@ type Deletion = (String, String, calendar::SaveScope);
 /// Creates a task in the block, repeating with it when `repeat` and the
 /// block repeats, then deletes `deletions`: the recurring occurrences it
 /// replaces.
-fn add_block_item(
+pub(crate) fn add_block_item(
 	state: &mut State,
 	block_id: &str,
 	title: String,
@@ -2051,7 +999,7 @@ fn add_block_item(
 	} else {
 		BusyKey::AddingTodo
 	};
-	if !state.timeblocking.busy.is_empty() {
+	if !state.task_operations.busy.is_empty() {
 		return Task::none();
 	}
 	let Some(block) = event(state, block_id)
@@ -2089,8 +1037,8 @@ fn add_block_item(
 		.cloned()
 		.collect();
 	state.timeblocking.todo_error = None;
-	state.timeblocking.revision += 1;
-	state.timeblocking.busy.insert(busy_key.clone());
+	state.task_operations.revision += 1;
+	crate::task_operations::begin(state, busy_key.clone());
 	for (calendar_id, id, scope) in &deletions {
 		forget_occurrences(state, calendar_id, id, *scope);
 	}
@@ -2113,7 +1061,12 @@ fn add_block_item(
 		}
 		Ok(changed)
 	})
-	.map(move |result| Message::TimeBlocking(Action::SavedMany(busy_key.clone(), result)))
+	.map(move |result| {
+		Message::TaskOperations(crate::task_operations::Action::SavedMany(
+			busy_key.clone(),
+			result,
+		))
+	})
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2210,10 +1163,14 @@ fn refresh_block(state: &mut State, id: &str) -> Task<Message> {
 		return Task::none();
 	};
 	let settings = state.config.calendar.clone();
-	state.timeblocking.revision += 1;
-	state.timeblocking.busy.insert(first.clone());
-	blocking::run(move || reflow(&block, &tasks, &settings))
-		.map(move |result| Message::TimeBlocking(Action::SavedMany(first.clone().into(), result)))
+	state.task_operations.revision += 1;
+	crate::task_operations::begin(state, first.clone());
+	blocking::run(move || reflow(&block, &tasks, &settings)).map(move |result| {
+		Message::TaskOperations(crate::task_operations::Action::SavedMany(
+			first.clone().into(),
+			result,
+		))
+	})
 }
 
 /// Record task edits locally; only the operations worker sends them to Google.
@@ -2226,7 +1183,7 @@ fn save(
 	Ok(task_edit::save(task, settings, change, order)?)
 }
 
-fn save_and_reflow(
+pub(crate) fn save_and_reflow(
 	task: Event,
 	settings: CalendarSettings,
 	change: Change,
@@ -2238,7 +1195,7 @@ fn save_and_reflow(
 }
 
 /// Has the task saved first in `changed` repeat with its block's series.
-fn join_series(
+pub(crate) fn join_series(
 	mut changed: Vec<Event>,
 	settings: &CalendarSettings,
 	join: Option<Change>,
@@ -2252,243 +1209,6 @@ fn join_series(
 	Ok(changed)
 }
 
-/// Moves the recurring task or habit awaiting confirmation into its block.
-/// Either way the block gets a new task and the occurrence it replaces is
-/// deleted. With `future` the ones after it are deleted too, and the new
-/// task repeats with the block when the block repeats; otherwise it is a
-/// one-off in this occurrence.
-fn move_recurring(state: &mut State, future: bool) -> Task<Message> {
-	if !state.timeblocking.busy.is_empty() {
-		return Task::none();
-	}
-	let Some(PendingRecurring { item, block }) = state.timeblocking.pending_recurring.take() else {
-		return Task::none();
-	};
-	let Some((day, repeats)) = event(state, &block)
-		.filter(|event| is_block(event, &state.config.calendar))
-		.map(|event| (event.start.date_naive(), block_repeats(event)))
-	else {
-		return Task::none();
-	};
-	let repeat = future && repeats;
-	let scope = if future {
-		calendar::SaveScope::CurrentAndFuture
-	} else {
-		calendar::SaveScope::Current
-	};
-	match item {
-		RecurringItem::Task(id) => {
-			let Some(task) = event(state, &id).filter(|task| task.is_task()).cloned() else {
-				return Task::none();
-			};
-			let mut copy = metadata(&task);
-			copy.block = None;
-			copy.block_series = None;
-			copy.repeat_source = None;
-			copy.created_at = None;
-			add_block_item(
-				state,
-				&block,
-				task.title.clone(),
-				calendar::task_metadata::prose(&task.details.description).to_owned(),
-				Some(copy),
-				vec![(task.calendar_id, task.id, scope)],
-				repeat,
-			)
-		}
-		RecurringItem::Habit(habit_id) => {
-			let Some(habit) = state.habits.library.habit(&habit_id).cloned() else {
-				return Task::none();
-			};
-			let deletions = habit_occurrences(state, &habit_id, day, future)
-				.into_iter()
-				.map(|event| (event.calendar_id.clone(), event.id.clone(), scope))
-				.collect();
-			add_block_item(
-				state,
-				&block,
-				habit.name,
-				habit.notes,
-				Some(Metadata {
-					habit_id: Some(habit_id),
-					minutes: 30,
-					..Default::default()
-				}),
-				deletions,
-				repeat,
-			)
-		}
-	}
-}
-
-/// Ends a task repeating with its block at this occurrence: it and the
-/// later ones are deleted, the earlier ones stay as they were.
-fn stop_repeating(state: &mut State, id: &str) -> Task<Message> {
-	if !state.timeblocking.busy.is_empty() {
-		return Task::none();
-	}
-	let Some(task) = event(state, id).filter(|task| is_follower(task)).cloned() else {
-		return Task::none();
-	};
-	let scope = calendar::SaveScope::CurrentAndFuture;
-	// The occurrences deleted stay in view, locked, until Google confirms
-	// (see `Overlay::apply`), as for any other delete.
-	state.timeblocking.revision += 1;
-	state.timeblocking.busy.insert(task.id.clone());
-	let key = BusyKey::from(task.id.clone());
-	blocking::run(move || {
-		calendar::delete_event_scope(&task.calendar_id, &task.id, scope, false)?;
-		Ok(Vec::new())
-	})
-	.map(move |result| Message::TimeBlocking(Action::SavedMany(key.clone(), result)))
-}
-
-/// Has a one-off task or habit in a repeating block repeat with the block
-/// from this occurrence on. A habit that also repeats on its own is asked
-/// about first: once `confirmed`, its own repeat ends from this day, so it
-/// is not on the calendar twice.
-fn repeat_with_block(
-	state: &mut State,
-	task_id: &str,
-	block_id: &str,
-	confirmed: bool,
-) -> Task<Message> {
-	if !state.timeblocking.busy.is_empty() {
-		return Task::none();
-	}
-	let hour = day_start_hour(state);
-	let Some(block) = event(state, block_id)
-		.filter(|block| is_block(block, &state.config.calendar))
-		.cloned()
-	else {
-		return Task::none();
-	};
-	let Some(task) = event(state, task_id)
-		.filter(|task| can_repeat_with(task, &block, hour))
-		.cloned()
-	else {
-		return Task::none();
-	};
-	let Some(join) = Change::join_block_series(&block) else {
-		return Task::none();
-	};
-	let habit = metadata(&task).habit_id;
-	if !confirmed
-		&& let Some(habit) = &habit
-		&& repeats_on_its_own(state, habit)
-	{
-		state.timeblocking.pending_join = Some(PendingJoin {
-			task: task.id.clone(),
-			block: block.id.clone(),
-		});
-		return Task::none();
-	}
-	let ended = habit.filter(|_| confirmed);
-	let from = calendar::at_clock(membership::planning_day(block.start, hour), hour.min(23), 0);
-	let settings = state.config.calendar.clone();
-	let order = metadata(&task).order;
-	state.timeblocking.revision += 1;
-	state.timeblocking.busy.insert(task.id.clone());
-	let key = BusyKey::from(task.id.clone());
-	blocking::run(move || {
-		// Found before anything is written, so failing to look leaves the
-		// habit as it was rather than on the calendar twice.
-		let ended = match ended {
-			Some(habit) => calendar::habit_repeats_from(&settings, &habit, from)?,
-			None => Vec::new(),
-		};
-		let saved = save(task, &settings, join, order)?;
-		for (calendar_id, occurrence) in ended {
-			calendar::delete_event_scope(
-				&calendar_id,
-				&occurrence,
-				calendar::SaveScope::CurrentAndFuture,
-				false,
-			)?;
-		}
-		Ok(vec![saved])
-	})
-	.map(move |result| Message::TimeBlocking(Action::SavedMany(key.clone(), result)))
-}
-
-/// Whether the habit has a repeating event of its own on the calendar.
-pub fn repeats_on_its_own(state: &State, habit_id: &str) -> bool {
-	state.habits.series.iter().any(|series| {
-		series.habit_id.as_deref() == Some(habit_id) && !series.recurrence.lines().is_empty()
-	})
-}
-
-/// Per repeating event of the habit, the occurrence a block on `day` takes
-/// the place of: the one that day, or with `future` the first from then on.
-fn habit_occurrences<'a>(
-	state: &'a State,
-	habit_id: &str,
-	day: NaiveDate,
-	future: bool,
-) -> Vec<&'a Event> {
-	let mut chosen: Vec<&Event> = Vec::new();
-	let mut occurrences: Vec<_> = state
-		.calendar
-		.events
-		.iter()
-		.filter(|event| {
-			event.details.habit
-				&& event.details.recurring_event_id.is_some()
-				&& event.details.habit_id.as_deref() == Some(habit_id)
-				&& if future {
-					event.start.date_naive() >= day
-				} else {
-					event.start.date_naive() == day
-				}
-		})
-		.collect();
-	occurrences.sort_by_key(|event| event.start);
-	for event in occurrences {
-		if !chosen.iter().any(|other| {
-			other.calendar_id == event.calendar_id
-				&& other.details.recurring_event_id == event.details.recurring_event_id
-		}) {
-			chosen.push(event);
-		}
-	}
-	chosen
-}
-
-/// Drops a deleted occurrence, and with "this and following" the later ones
-/// of its series, from view. The next sync reconciles the cache.
-fn forget_occurrences(state: &mut State, calendar_id: &str, id: &str, scope: calendar::SaveScope) {
-	let Some(occurrence) = state
-		.calendar
-		.events
-		.iter()
-		.find(|event| event.id == id && event.calendar_id == calendar_id)
-		.cloned()
-	else {
-		return;
-	};
-	let gone: Vec<String> = state
-		.calendar
-		.events
-		.iter()
-		.filter(|event| {
-			event.id == id
-				|| (scope == calendar::SaveScope::CurrentAndFuture
-					&& event.calendar_id == calendar_id
-					&& event.details.recurring_event_id.is_some()
-					&& event.details.recurring_event_id == occurrence.details.recurring_event_id
-					&& event.start >= occurrence.start)
-		})
-		.map(|event| event.id.clone())
-		.collect();
-	for id in gone {
-		if state.range_view_active() {
-			state.calendar.forget_event(&id);
-		} else {
-			state.calendar.events.retain(|event| event.id != id);
-		}
-	}
-}
-
 fn reflow(
 	block: &Event,
 	tasks: &[Event],
@@ -2500,6 +1220,108 @@ fn reflow(
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use chrono::TimeZone;
+
+	#[test]
+	fn save_feedback_reaches_its_editor_while_creation_owns_another_form() {
+		for success in [false, true] {
+			let mut state = estimate_state();
+			let id = "task:deep";
+			state.calendar.open_event = Some(id.into());
+			state.task_editor.title = "Edited title".into();
+			state.task_editor.editing_title = true;
+			state.task_editor.renaming = Some(id.into());
+			state.task_editor.keep_open = Some(id.into());
+			crate::task_operations::begin(&mut state, id);
+			let _ = crate::inbox::update(&mut state, crate::inbox::Action::NewTask);
+			state.task_editor_mut().date = "2026-12-01".into();
+			state.task_editor_mut().title = "Creation title".into();
+			let creation_id = state.task_editor().id;
+			let revision = state.task_operations.revision;
+			let mut saved = state.calendar.event(id).unwrap().clone();
+			saved.title = "Edited title".into();
+			let result = if success {
+				Ok(vec![saved])
+			} else {
+				Err("Offline".into())
+			};
+			let _ = crate::task_operations::saved_many(&mut state, id.into(), result);
+			assert!(state.inbox.draft.is_some());
+			assert_eq!(state.task_editor().id, creation_id);
+			assert_eq!(state.task_editor().title, "Creation title");
+			assert_eq!(state.task_editor().date, "2026-12-01");
+			assert!(state.task_editor().title_error.is_none());
+			assert!(state.task_operations.busy.is_empty());
+			assert_eq!(state.task_operations.revision, revision + 1);
+			assert_eq!(state.timeblocking.focus.as_deref(), Some("standup"));
+			assert_eq!(state.calendar.open_event.as_deref(), Some(id));
+			assert!(state.task_editor.renaming.is_none());
+			if success {
+				assert_eq!(state.calendar.event(id).unwrap().title, "Edited title");
+				assert!(!state.task_editor.editing_title);
+			} else {
+				assert_eq!(state.task_editor.title_error.as_deref(), Some("Offline"));
+			}
+			let _ = crate::inbox::update(&mut state, crate::inbox::Action::Cancel);
+			assert_eq!(state.task_editor().title, "Edited title");
+		}
+	}
+
+	#[test]
+	fn a_late_save_updates_data_without_changing_a_newer_editor() {
+		let mut state = estimate_state();
+		let id = "task:deep";
+		crate::task_operations::begin(&mut state, id);
+		let mut saved = state.calendar.event(id).unwrap().clone();
+		saved.title = "Saved in background".into();
+		// Reopening even the same task creates a distinct editor instance.
+		let _ = crate::app::update(
+			&mut state,
+			Message::Event(crate::app::EventMessage::EventOpened(id.into())),
+		);
+		state.task_editor.title = "New unsaved title".into();
+		state.task_editor.editing_title = true;
+		let _ = crate::task_operations::saved(&mut state, id.into(), Ok(saved));
+		assert_eq!(
+			state.calendar.event(id).unwrap().title,
+			"Saved in background"
+		);
+		assert_eq!(state.calendar.open_event.as_deref(), Some(id));
+		assert_eq!(state.task_editor.title, "New unsaved title");
+		assert!(state.task_editor.editing_title);
+		assert!(state.task_operations.busy.is_empty());
+	}
+
+	#[test]
+	fn reflow_results_do_not_close_an_unrelated_details_pane() {
+		let mut state = estimate_state();
+		state.calendar.open_event = Some("standup".into());
+		let saved = state.calendar.event("task:deep").unwrap().clone();
+		let related = state.calendar.event("lunch").unwrap().clone();
+		crate::task_operations::begin(&mut state, "task:deep");
+		let _ = crate::task_operations::saved_many(
+			&mut state,
+			"task:deep".into(),
+			Ok(vec![saved, related]),
+		);
+		assert_eq!(state.calendar.open_event.as_deref(), Some("standup"));
+	}
+
+	#[test]
+	fn creation_does_not_suspend_the_focused_block_or_work_clock() {
+		let mut state = estimate_state();
+		state.timeblocking.block = Some("standup".into());
+		state.timeblocking.dragging = Some("task:deep".into());
+		let _ = crate::inbox::update(&mut state, crate::inbox::Action::NewTask);
+		let _ = crate::focus::update(&mut state, crate::focus::Action::WorkTick);
+		let tick = state.work_tracking.work_now;
+		assert!(tick.is_some());
+		assert_eq!(state.timeblocking.focus.as_deref(), Some("standup"));
+		assert_eq!(state.timeblocking.block.as_deref(), Some("standup"));
+		let _ = crate::inbox::update(&mut state, crate::inbox::Action::Cancel);
+		assert_eq!(state.work_tracking.work_now, tick);
+		assert_eq!(state.timeblocking.dragging.as_deref(), Some("task:deep"));
+	}
 
 	#[test]
 	fn week_list_moves_keep_clock_duration_and_the_planning_day_boundary() {
@@ -2541,7 +1363,7 @@ mod tests {
 				.calendar
 				.weekly_task_order
 				.insert(source.to_string(), vec![id.clone()]);
-			state.timeblocking.pending_week_drop = Some(WeekListPlacement {
+			state.task_operations.pending_week_drop = Some(WeekListPlacement {
 				task: id.clone(),
 				day: destination,
 				target: None,
@@ -2559,7 +1381,7 @@ mod tests {
 				Err("Could not save".to_owned())
 			};
 			let _ = update(&mut state, Action::Saved(id.clone().into(), result));
-			assert!(state.timeblocking.pending_week_drop.is_none());
+			assert!(state.task_operations.pending_week_drop.is_none());
 			if success {
 				assert_eq!(
 					state.config.calendar.weekly_task_order[&destination.to_string()],
@@ -2626,7 +1448,7 @@ mod tests {
 		let mut state = estimate_state();
 		// The fixture has an estimate but neither a project nor a priority.
 		let _ = update(&mut state, Action::Triage("task:deep".into()));
-		assert!(state.timeblocking.busy.is_empty());
+		assert!(state.task_operations.busy.is_empty());
 		let error = state.inbox.error.as_deref().unwrap();
 		assert!(error.contains("a project"), "{error}");
 		assert!(error.contains("a priority"), "{error}");
@@ -2638,7 +1460,7 @@ mod tests {
 		let _ = update(&mut state, Action::RequireEstimate(false));
 		let _ = update(&mut state, Action::Triage("task:deep".into()));
 		assert!(state.inbox.error.is_none());
-		assert!(state.timeblocking.busy.contains_task("task:deep"));
+		assert!(state.task_operations.busy.contains_task("task:deep"));
 	}
 
 	#[test]
@@ -2658,38 +1480,38 @@ mod tests {
 			&mut state,
 			Action::Deadline("task:deep".into(), "2026-10-29 14:45".into()),
 		);
-		assert_eq!(state.timeblocking.deadline, "2026-10-29 14:45");
-		assert!(state.timeblocking.busy.contains_task("task:deep"));
-		assert_eq!(state.timeblocking.keep_open.as_deref(), Some("task:deep"));
+		assert_eq!(state.task_editor().deadline, "2026-10-29 14:45");
+		assert!(state.task_operations.busy.contains_task("task:deep"));
+		assert_eq!(state.task_editor().keep_open.as_deref(), Some("task:deep"));
 	}
 
 	#[test]
 	fn the_due_fields_save_a_day_or_a_time_as_they_change() {
 		let mut state = estimate_state();
 		let task = state.calendar.event("task:deep").unwrap().clone();
-		seed_schedule(&mut state, &task);
+		state.task_editor_mut().seed_schedule(&task);
 		let _ = update(
 			&mut state,
 			Action::DueDate("task:deep".into(), "2026-10-29".into()),
 		);
 		assert!(state.calendar.error.is_none());
-		assert!(state.timeblocking.busy.contains_task("task:deep"));
-		assert_eq!(state.timeblocking.keep_open.as_deref(), Some("task:deep"));
+		assert!(state.task_operations.busy.contains_task("task:deep"));
+		assert_eq!(state.task_editor().keep_open.as_deref(), Some("task:deep"));
 
 		// A second change waits for the first, and does not claim to have happened.
 		let _ = update(
 			&mut state,
 			Action::DueDate("task:deep".into(), "2026-11-01".into()),
 		);
-		assert_eq!(state.timeblocking.date, "2026-10-29");
+		assert_eq!(state.task_editor().date, "2026-10-29");
 
 		let mut state = estimate_state();
-		state.timeblocking.date = "2026-10-29".into();
-		state.timeblocking.start_time = String::new();
+		state.task_editor_mut().date = "2026-10-29".into();
+		state.task_editor_mut().start_time = String::new();
 		let _ = update(&mut state, Action::DueAllDay("task:deep".into(), false));
-		assert_eq!(state.timeblocking.start_time, "09:00");
-		assert_eq!(state.timeblocking.end_time, "09:30");
-		assert!(state.timeblocking.busy.contains_task("task:deep"));
+		assert_eq!(state.task_editor().start_time, "09:00");
+		assert_eq!(state.task_editor().end_time, "09:30");
+		assert!(state.task_operations.busy.contains_task("task:deep"));
 	}
 
 	#[test]
@@ -2713,18 +1535,18 @@ mod tests {
 			Action::DueDate("task:deep".into(), String::new()),
 		);
 		assert!(state.calendar.error.is_none());
-		assert!(state.timeblocking.busy.contains_task("task:deep"));
-		assert_eq!(state.timeblocking.keep_open.as_deref(), Some("task:deep"));
+		assert!(state.task_operations.busy.contains_task("task:deep"));
+		assert_eq!(state.task_editor().keep_open.as_deref(), Some("task:deep"));
 	}
 
 	#[test]
 	fn invalid_deadline_input_leaves_the_task_untouched() {
 		let mut state = estimate_state();
-		state.timeblocking.deadline = "2026-02-30".into();
+		state.task_editor_mut().deadline = "2026-02-30".into();
 		let before = state.calendar.event("task:deep").unwrap().clone();
 		let _ = update(&mut state, Action::SaveDeadline("task:deep".into()));
 		assert_eq!(state.calendar.event("task:deep"), Some(&before));
-		assert!(state.timeblocking.busy.is_empty());
+		assert!(state.task_operations.busy.is_empty());
 		assert!(
 			state
 				.calendar
@@ -2817,7 +1639,7 @@ mod tests {
 				block: "standup".into(),
 			})
 		);
-		assert!(state.timeblocking.busy.is_empty());
+		assert!(state.task_operations.busy.is_empty());
 		let _ = update(&mut state, Action::CancelRecurring);
 		assert!(state.timeblocking.pending_recurring.is_none());
 		assert!(state.calendar.event("deep").is_some());
@@ -2870,14 +1692,14 @@ mod tests {
 		let mut state = following_state();
 		let _ = update(&mut state, Action::Assign("deep".into(), "standup".into()));
 		assert!(state.timeblocking.pending_recurring.is_none());
-		assert!(state.timeblocking.busy.is_empty());
+		assert!(state.task_operations.busy.is_empty());
 	}
 
 	#[test]
 	fn stopping_a_repeating_task_deletes_this_and_later_occurrences() {
 		let mut state = following_state();
 		let _ = update(&mut state, Action::StopRepeating("deep".into()));
-		assert!(state.timeblocking.busy.contains_task("deep"));
+		assert!(state.task_operations.busy.contains_task("deep"));
 		// They stay in view, locked by the local edits, until Google
 		// confirms the delete.
 		assert!(state.calendar.event("deep").is_some());
@@ -2885,7 +1707,7 @@ mod tests {
 		// Only a task repeating with a block can be stopped this way.
 		let mut state = recurring_state();
 		let _ = update(&mut state, Action::StopRepeating("deep".into()));
-		assert!(state.timeblocking.busy.is_empty());
+		assert!(state.task_operations.busy.is_empty());
 	}
 
 	/// `recurring_state`, with the block repeating and "deep" a one-off in
@@ -2917,7 +1739,7 @@ mod tests {
 		let mut state = one_off_state();
 		repeat_deep(&mut state);
 		assert!(state.timeblocking.pending_join.is_none());
-		assert!(state.timeblocking.busy.contains_task("deep"));
+		assert!(state.task_operations.busy.contains_task("deep"));
 
 		// Not a task repeating with the block already, nor one in a block
 		// that does not repeat.
@@ -2932,7 +1754,7 @@ mod tests {
 			.recurring_event_id = None;
 		repeat_deep(&mut single);
 		for state in [following, single] {
-			assert!(state.timeblocking.busy.is_empty());
+			assert!(state.task_operations.busy.is_empty());
 			assert!(state.timeblocking.pending_join.is_none());
 		}
 	}
@@ -2949,7 +1771,7 @@ mod tests {
 		let mut plain = habit_one_off();
 		repeat_deep(&mut plain);
 		assert!(plain.timeblocking.pending_join.is_none());
-		assert!(plain.timeblocking.busy.contains_task("deep"));
+		assert!(plain.task_operations.busy.contains_task("deep"));
 
 		let mut state = habit_one_off();
 		let occurrence = habit_occurrence(&state, "read_1", 1);
@@ -2970,15 +1792,15 @@ mod tests {
 			block: "standup".into(),
 		});
 		assert_eq!(state.timeblocking.pending_join, pending);
-		assert!(state.timeblocking.busy.is_empty());
+		assert!(state.task_operations.busy.is_empty());
 		let _ = update(&mut state, Action::CancelRepeatWithBlock);
 		assert!(state.timeblocking.pending_join.is_none());
-		assert!(state.timeblocking.busy.is_empty());
+		assert!(state.task_operations.busy.is_empty());
 
 		repeat_deep(&mut state);
 		let _ = update(&mut state, Action::ConfirmRepeatWithBlock);
 		assert!(state.timeblocking.pending_join.is_none());
-		assert!(state.timeblocking.busy.contains_task("deep"));
+		assert!(state.task_operations.busy.contains_task("deep"));
 	}
 
 	#[test]
@@ -2996,7 +1818,7 @@ mod tests {
 		task.details.recurring_event_id = None;
 		let _ = update(&mut state, Action::Assign("deep".into(), "standup".into()));
 		assert!(state.timeblocking.pending_recurring.is_none());
-		assert!(state.timeblocking.busy.contains_task("deep"));
+		assert!(state.task_operations.busy.contains_task("deep"));
 	}
 
 	#[test]
@@ -3007,7 +1829,7 @@ mod tests {
 		assert!(state.timeblocking.pending_recurring.is_none());
 		assert!(state.calendar.event("deep").is_none());
 		assert!(state.calendar.event("deep_next").is_some());
-		assert!(!state.timeblocking.busy.is_empty());
+		assert!(!state.task_operations.busy.is_empty());
 	}
 
 	#[test]
@@ -3046,12 +1868,12 @@ mod tests {
 				block: "standup".into(),
 			})
 		);
-		assert!(only.timeblocking.busy.is_empty());
+		assert!(only.task_operations.busy.is_empty());
 		let _ = update(&mut only, Action::MoveRecurring(false));
 		assert!(only.calendar.event("read_today").is_none());
 		assert!(only.calendar.event("read_earlier").is_some());
 		assert!(only.calendar.event("read_later").is_some());
-		assert!(only.timeblocking.busy.adding_habit);
+		assert!(only.task_operations.busy.adding_habit());
 
 		let mut future = habit_state();
 		let _ = update(
@@ -3077,7 +1899,7 @@ mod tests {
 			Action::AddHabit("read".into(), "standup".into()),
 		);
 		assert!(state.timeblocking.pending_recurring.is_none());
-		assert!(state.timeblocking.busy.adding_habit);
+		assert!(state.task_operations.busy.adding_habit());
 	}
 
 	#[test]
@@ -3085,15 +1907,15 @@ mod tests {
 		let mut state = estimate_state();
 		let key = block_key(state.calendar.event("standup").unwrap());
 		let _ = update(&mut state, Action::OpenDistraction);
-		assert!(state.timeblocking.distraction_open);
+		assert!(state.work_tracking.distraction_open);
 		let _ = update(&mut state, Action::CloseDistraction);
-		assert!(!state.timeblocking.distraction_open);
+		assert!(!state.work_tracking.distraction_open);
 		assert!(state.config.task_work.distractions.is_empty());
 
 		for minutes in [5, 10] {
 			let _ = update(&mut state, Action::OpenDistraction);
 			let _ = update(&mut state, Action::AddDistraction(minutes));
-			assert!(!state.timeblocking.distraction_open);
+			assert!(!state.work_tracking.distraction_open);
 		}
 		assert_eq!(state.config.task_work.distracted(&key), (2, 15));
 
@@ -3120,11 +1942,11 @@ mod tests {
 			&mut state,
 			Action::ChooseDistraction(DistractionCause::Habit("phone".into())),
 		);
-		assert!(state.timeblocking.distraction_open);
+		assert!(state.work_tracking.distraction_open);
 		assert!(state.habits.day_dialog.is_none());
 
 		let _ = update(&mut state, Action::AddDistraction(10));
-		assert!(!state.timeblocking.distraction_open);
+		assert!(!state.work_tracking.distraction_open);
 		assert_eq!(state.config.task_work.distracted(&key), (1, 10));
 		let dialog = state.habits.day_dialog.as_ref().unwrap();
 		assert_eq!(dialog.habit_id, "phone");
@@ -3169,7 +1991,7 @@ mod tests {
 		);
 		let _ = update(&mut state, Action::CloseDistraction);
 		let _ = update(&mut state, Action::OpenDistraction);
-		assert_eq!(state.timeblocking.distraction_cause, None);
+		assert_eq!(state.work_tracking.distraction_cause, None);
 	}
 
 	#[test]
@@ -3177,10 +1999,10 @@ mod tests {
 		let mut state = estimate_state();
 		let _ = update(&mut state, Action::OpenDistraction);
 		let _ = update(&mut state, Action::CloseView);
-		assert!(!state.timeblocking.distraction_open);
+		assert!(!state.work_tracking.distraction_open);
 		// Without a focused block there is nothing to ask about or record against.
 		let _ = update(&mut state, Action::OpenDistraction);
-		assert!(!state.timeblocking.distraction_open);
+		assert!(!state.work_tracking.distraction_open);
 		let _ = update(&mut state, Action::AddDistraction(5));
 		assert!(state.config.task_work.distractions.is_empty());
 	}
@@ -3243,14 +2065,14 @@ mod tests {
 			});
 
 		let _ = update(&mut state, Action::EditSession(0));
-		assert_eq!(state.timeblocking.session_start, "09:00");
-		assert_eq!(state.timeblocking.session_end, "10:00");
-		assert_eq!(state.timeblocking.session_date, Some(day));
+		assert_eq!(state.work_tracking.session_start, "09:00");
+		assert_eq!(state.work_tracking.session_end, "10:00");
+		assert_eq!(state.work_tracking.session_date, Some(day));
 
 		let _ = update(&mut state, Action::SessionStart("08:30".into()));
 		let _ = update(&mut state, Action::SessionEnd("09:15".into()));
 		let _ = update(&mut state, Action::SaveSession);
-		assert!(state.timeblocking.session_edit.is_none());
+		assert!(state.work_tracking.session_edit.is_none());
 		let session = &state.config.task_work.sessions[0];
 		assert_eq!(
 			session
@@ -3279,10 +2101,10 @@ mod tests {
 	fn estimate_dialog_prefills_and_cancel_preserves_the_view_and_task() {
 		let mut state = estimate_state();
 		let _ = update(&mut state, Action::EditEstimate("task:deep".into()));
-		assert_eq!(state.timeblocking.estimate, "35");
+		assert_eq!(state.task_editor().estimate, "35");
 		let _ = update(&mut state, Action::Estimate("90".into()));
 		let _ = update(&mut state, Action::CloseEstimate);
-		assert!(state.timeblocking.estimate_task.is_none());
+		assert!(state.task_editor().estimate_task.is_none());
 		assert_eq!(state.timeblocking.focus.as_deref(), Some("standup"));
 		assert_eq!(
 			metadata(state.calendar.event("task:deep").unwrap()).minutes,
@@ -3298,9 +2120,9 @@ mod tests {
 		for invalid in ["abc", "-1", "10081"] {
 			let _ = update(&mut state, Action::Estimate(invalid.into()));
 			let _ = update(&mut state, Action::SaveEstimate("task:deep".into()));
-			assert!(state.timeblocking.estimate_error.is_some());
-			assert!(state.timeblocking.estimate_task.is_some());
-			assert!(!state.timeblocking.busy.contains_task("task:deep"));
+			assert!(state.task_editor().estimate_error.is_some());
+			assert!(state.task_editor().estimate_task.is_some());
+			assert!(!state.task_operations.busy.contains_task("task:deep"));
 			assert!(state.calendar.error.is_none());
 		}
 		let _ = update(&mut state, Action::Estimate("60".into()));
@@ -3309,7 +2131,7 @@ mod tests {
 			Action::Saved("task:deep".into(), Err("Could not save".into())),
 		);
 		assert_eq!(
-			state.timeblocking.estimate_error.as_deref(),
+			state.task_editor().estimate_error.as_deref(),
 			Some("Could not save")
 		);
 		let mut saved = state.calendar.event("task:deep").unwrap().clone();
@@ -3317,8 +2139,8 @@ mod tests {
 		meta.minutes = 60;
 		saved.details.task_data.as_mut().unwrap().metadata = meta;
 		let _ = update(&mut state, Action::Saved("task:deep".into(), Ok(saved)));
-		assert!(state.timeblocking.estimate_task.is_none());
-		assert!(state.timeblocking.estimate_error.is_none());
+		assert!(state.task_editor().estimate_task.is_none());
+		assert!(state.task_editor().estimate_error.is_none());
 		assert_eq!(state.calendar.open_event.as_deref(), Some("task:deep"));
 		assert_eq!(state.timeblocking.focus.as_deref(), Some("standup"));
 		assert_eq!(
@@ -3332,12 +2154,12 @@ mod tests {
 		let mut state = estimate_state();
 		state.timeblocking.todo_draft = "   ".into();
 		let _ = update(&mut state, Action::AddTodo("standup".into()));
-		assert!(state.timeblocking.busy.is_empty());
+		assert!(state.task_operations.busy.is_empty());
 		assert!(state.timeblocking.todo_error.is_none());
 
 		state.timeblocking.todo_draft = "x".repeat(MAX_TODO_CHARS + 1);
 		let _ = update(&mut state, Action::AddTodo("standup".into()));
-		assert!(state.timeblocking.busy.is_empty());
+		assert!(state.task_operations.busy.is_empty());
 		assert!(state.timeblocking.todo_error.is_some());
 		assert_eq!(
 			state.timeblocking.todo_draft.chars().count(),
@@ -3359,53 +2181,53 @@ mod tests {
 		let mut state = estimate_state();
 		let original = state.calendar.event("task:deep").unwrap().title.clone();
 		state.calendar.open_event = Some("task:deep".into());
-		state.timeblocking.title = "   ".into();
+		state.task_editor_mut().title = "   ".into();
 		let _ = update(&mut state, Action::SaveTitle("task:deep".into()));
 		assert_eq!(
-			state.timeblocking.title_error.as_deref(),
+			state.task_editor().title_error.as_deref(),
 			Some("A task needs a name")
 		);
-		assert!(state.timeblocking.busy.is_empty());
+		assert!(state.task_operations.busy.is_empty());
 		assert_eq!(state.calendar.event("task:deep").unwrap().title, original);
 
-		state.timeblocking.title = "x".repeat(MAX_TODO_CHARS + 1);
+		state.task_editor_mut().title = "x".repeat(MAX_TODO_CHARS + 1);
 		let _ = update(&mut state, Action::SaveTitle("task:deep".into()));
-		assert!(state.timeblocking.title_error.is_some());
-		assert!(state.timeblocking.busy.is_empty());
+		assert!(state.task_editor().title_error.is_some());
+		assert!(state.task_operations.busy.is_empty());
 		assert_eq!(state.calendar.event("task:deep").unwrap().title, original);
 
 		let _ = update(&mut state, Action::Title(original.clone()));
-		assert!(state.timeblocking.title_error.is_none());
+		assert!(state.task_editor().title_error.is_none());
 		let _ = update(&mut state, Action::SaveTitle("task:deep".into()));
-		assert!(state.timeblocking.renaming.is_none());
-		assert!(state.timeblocking.busy.is_empty());
+		assert!(state.task_editor().renaming.is_none());
+		assert!(state.task_operations.busy.is_empty());
 
-		state.timeblocking.title = format!("  {original} revised  ");
-		state.timeblocking.renaming = Some("task:deep".into());
-		state.timeblocking.busy.insert("task:deep");
+		state.task_editor_mut().title = format!("  {original} revised  ");
+		state.task_editor_mut().renaming = Some("task:deep".into());
+		crate::task_operations::begin(&mut state, "task:deep");
 		let _ = update(
 			&mut state,
 			Action::Saved("task:deep".into(), Err("Not connected to Google".into())),
 		);
 		assert_eq!(state.calendar.event("task:deep").unwrap().title, original);
 		assert_eq!(
-			state.timeblocking.title_error.as_deref(),
+			state.task_editor().title_error.as_deref(),
 			Some("Not connected to Google")
 		);
 		assert!(state.calendar.error.is_none());
 		assert_eq!(state.calendar.open_event.as_deref(), Some("task:deep"));
-		assert!(state.timeblocking.renaming.is_none());
+		assert!(state.task_editor().renaming.is_none());
 
 		let mut saved = state.calendar.event("task:deep").unwrap().clone();
 		saved.title = format!("{original} revised");
-		state.timeblocking.renaming = Some("task:deep".into());
+		state.task_editor_mut().renaming = Some("task:deep".into());
 		let _ = update(&mut state, Action::Saved("task:deep".into(), Ok(saved)));
 		assert_eq!(
 			state.calendar.event("task:deep").unwrap().title,
 			format!("{original} revised")
 		);
-		assert!(state.timeblocking.title_error.is_none());
-		assert!(state.timeblocking.renaming.is_none());
+		assert!(state.task_editor().title_error.is_none());
+		assert!(state.task_editor().renaming.is_none());
 	}
 
 	#[test]
@@ -3413,7 +2235,7 @@ mod tests {
 		let mut state = estimate_state();
 		state.timeblocking.todo_open = true;
 		state.timeblocking.todo_draft = "Call the client".into();
-		state.timeblocking.busy.insert(BusyKey::AddingTodo);
+		crate::task_operations::begin(&mut state, BusyKey::AddingTodo);
 		let event = new_todo_event(
 			"has-time",
 			&calendar::api::CreatedTask {
@@ -3428,7 +2250,7 @@ mod tests {
 		let _ = update(&mut state, Action::Saved(BusyKey::AddingTodo, Ok(event)));
 		assert!(state.timeblocking.todo_draft.is_empty());
 		assert!(!state.timeblocking.todo_open);
-		assert!(state.timeblocking.busy.is_empty());
+		assert!(state.task_operations.busy.is_empty());
 		assert_eq!(
 			state.calendar.event("task:fresh").unwrap().title,
 			"Call the client"
@@ -3436,7 +2258,7 @@ mod tests {
 
 		state.timeblocking.todo_open = true;
 		state.timeblocking.todo_draft = "Call the client".into();
-		state.timeblocking.busy.insert(BusyKey::AddingTodo);
+		crate::task_operations::begin(&mut state, BusyKey::AddingTodo);
 		let _ = update(
 			&mut state,
 			Action::Saved(BusyKey::AddingTodo, Err("Not connected to Google".into())),
@@ -3448,5 +2270,11 @@ mod tests {
 			Some("Not connected to Google")
 		);
 		assert!(state.calendar.error.is_none());
+	}
+}
+
+impl From<Action> for Message {
+	fn from(action: Action) -> Self {
+		Self::TimeBlocking(action)
 	}
 }

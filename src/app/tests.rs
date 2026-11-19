@@ -1318,7 +1318,7 @@ fn an_empty_range_result_does_not_fetch_forever() {
 	);
 	let dates = state.calendar_dates();
 	snapshot.events.clear();
-	let revision = state.timeblocking.revision;
+	let revision = state.task_operations.revision;
 	let _ = update(
 		&mut state,
 		Message::Calendar(CalendarMessage::CalendarRangeSynced(
@@ -1343,7 +1343,7 @@ fn the_footer_returns_to_logs_as_soon_as_a_day_sync_result_arrives() {
 
 	// The result has landed: the data is in, so the label must say Logs in
 	// this very update, not one deferred message later.
-	let revision = state.timeblocking.revision;
+	let revision = state.task_operations.revision;
 	let _ = update(
 		&mut state,
 		Message::Calendar(CalendarMessage::CalendarSyncedAt(
@@ -1402,7 +1402,7 @@ fn calendar_sync_refreshes_habit_links_for_a_new_series_without_opening_habits()
 
 		let message = if range {
 			CalendarMessage::CalendarRangeSynced(
-				state.timeblocking.revision,
+				state.task_operations.revision,
 				vec![day, day.succ_opt().unwrap()],
 				Ok(snapshot),
 			)
@@ -2097,14 +2097,14 @@ fn a_task_time_change_uses_task_scheduling_instead_of_a_calendar_event_write() {
 	);
 
 	assert!(state.calendar.pending_time("task:deep").is_none());
-	assert!(state.timeblocking.busy.contains_task("task:deep"));
+	assert!(state.task_operations.busy.contains_task("task:deep"));
 	assert_ne!(state.calendar.event("task:deep").unwrap().start, start);
 }
 #[test]
 fn estimate_popup_takes_keyboard_priority_over_the_time_block_view() {
 	let mut state = State::blank();
 	state.timeblocking.focus = Some("standup".into());
-	state.timeblocking.estimate_task = Some("task:deep".into());
+	state.task_editor_mut().estimate_task = Some("task:deep".into());
 	assert!(
 		key_message(
 			&mut state,
@@ -2119,8 +2119,8 @@ fn estimate_popup_takes_keyboard_priority_over_the_time_block_view() {
 			Key::Named(keyboard::key::Named::Escape),
 			keyboard::Modifiers::default()
 		),
-		Some(Message::TimeBlocking(
-			crate::timeblocking::Action::CloseEstimate
+		Some(Message::TaskEditor(
+			crate::task_editor::Action::CloseEstimate
 		))
 	));
 }
@@ -2129,15 +2129,15 @@ fn estimate_popup_takes_keyboard_priority_over_the_time_block_view() {
 fn escape_closes_the_distraction_choice_before_the_time_block_view() {
 	let mut state = State::blank();
 	state.timeblocking.focus = Some("standup".into());
-	state.timeblocking.distraction_open = true;
+	state.work_tracking.distraction_open = true;
 	assert!(matches!(
 		key_message(
 			&mut state,
 			Key::Named(keyboard::key::Named::Escape),
 			keyboard::Modifiers::default()
 		),
-		Some(Message::TimeBlocking(
-			crate::timeblocking::Action::CloseDistraction
+		Some(Message::WorkTracking(
+			crate::focus::Action::CloseDistraction
 		))
 	));
 }

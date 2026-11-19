@@ -58,7 +58,7 @@ pub(crate) fn select(state: &mut State, kind: DraftKind) -> Task<Message> {
 		common
 	};
 	state.picker = None;
-	state.timeblocking.estimate_task = None;
+	state.task_editor_mut().estimate_task = None;
 	state.calendar.error = None;
 	state.inbox.draft.as_mut().unwrap().error = None;
 	if kind == DraftKind::Task {

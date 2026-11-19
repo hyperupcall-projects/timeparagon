@@ -3142,9 +3142,9 @@ fn a_compact_task_checkbox_captures_the_click_inside_the_event_button() {
 	for completed in [false, true] {
 		event.completed = completed;
 		for busy in [false, true] {
-			state.timeblocking.busy.remove_task(&event.id);
+			state.task_operations.busy.remove_task(&event.id);
 			if busy {
-				state.timeblocking.busy.insert(event.id.clone());
+				state.task_operations.busy.insert(event.id.clone());
 			}
 			let mut ui = iced_test::Simulator::with_size(
 				Default::default(),

@@ -1093,11 +1093,11 @@ mod tests {
 	#[test]
 	fn a_written_location_outdates_a_sync_already_running() {
 		let (mut state, ..) = day_with_a_trip_to_lunch();
-		let before = state.timeblocking.revision;
+		let before = state.task_operations.revision;
 
 		let _ = update(&mut state, Action::EventLocationSaved(Ok(())));
 
-		assert_ne!(state.timeblocking.revision, before);
+		assert_ne!(state.task_operations.revision, before);
 	}
 
 	#[test]

@@ -229,7 +229,7 @@ pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message>
 				return Task::none();
 			}
 			for event in added {
-				state.timeblocking.revision += 1;
+				state.task_operations.revision += 1;
 				state.calendar.replace_task(&event.id, &event);
 			}
 			Task::done(Message::Calendar(CalendarMessage::CalendarSyncRequested))

@@ -527,7 +527,7 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
 			if let Some(draft) = state.calendar.edit_draft.as_mut().filter(|d| d.id == id) {
 				draft.saving = true;
 			}
-			state.timeblocking.revision += 1;
+			state.task_operations.revision += 1;
 			state.calendar.error = None;
 			let settings = state.config.calendar.clone();
 			blocking::run(move || calendar::sleep::save(&settings, event, false)).map(
@@ -616,7 +616,7 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
 			event.end = draft.end;
 			event.details.sleep = Some(record);
 			state.calendar.edit_draft.as_mut().unwrap().saving = true;
-			state.timeblocking.revision += 1;
+			state.task_operations.revision += 1;
 			state.calendar.error = None;
 			let settings = state.config.calendar.clone();
 			blocking::run(move || calendar::sleep::save(&settings, event, new))

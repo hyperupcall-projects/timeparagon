@@ -58,7 +58,6 @@ pub struct Inbox {
 	/// brought that list's name back.
 	created_list: Option<String>,
 	lookups: u64,
-	pub(crate) workspace: Option<Box<tb::Workspace>>,
 }
 
 /// A task being written in the popup.
@@ -66,6 +65,7 @@ pub struct Inbox {
 pub struct Draft {
 	/// None is the default Task tab.
 	pub kind: Option<calendar::DraftKind>,
+	pub editor: crate::task_editor::Editor,
 	pub title: String,
 	pub event: Option<Event>,
 	/// The event, time block or habit being created, as the form that edits
@@ -300,9 +300,10 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			state.inbox.error = None;
 			if state.inbox.draft.is_none() {
 				state.inbox.previous_calendar_draft = state.calendar.draft.take();
-				state.inbox.workspace = Some(Box::new(std::mem::take(&mut state.timeblocking)));
+				let editor = crate::task_editor::Editor::new(&mut state.task_operations);
 				state.inbox.draft = Some(Draft {
 					event: Some(blank_event()),
+					editor,
 					..Draft::default()
 				});
 				state.calendar.error = None;
@@ -329,22 +330,12 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			if let Some(draft) = state.inbox.draft.as_mut().filter(|d| !d.saving) {
 				let tokens = draft.quick_tokens(&state.config.projects);
 				if let Some(token) = tokens.into_iter().find(|t| t.range == range) {
-					preview(
-						draft,
-						&mut state.timeblocking.date,
-						&mut state.timeblocking.deadline,
-						&state.config.projects,
-					);
+					preview(draft, &state.config.projects);
 					if let Some((metadata, due, deadline)) = draft.quick_base.as_mut() {
 						apply_value(metadata, due, deadline, token.value);
 					}
 					draft.set_title(crate::task_input::remove(&draft.title, [range]));
-					preview(
-						draft,
-						&mut state.timeblocking.date,
-						&mut state.timeblocking.deadline,
-						&state.config.projects,
-					);
+					preview(draft, &state.config.projects);
 				}
 			}
 			Task::none()
@@ -357,12 +348,7 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 					.any(|t| t.range == range)
 			{
 				draft.quick_ignored.push(range);
-				preview(
-					draft,
-					&mut state.timeblocking.date,
-					&mut state.timeblocking.deadline,
-					&state.config.projects,
-				);
+				preview(draft, &state.config.projects);
 			}
 			Task::none()
 		}
@@ -377,11 +363,11 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			Task::none()
 		}
 		Action::Deadline(value) => {
-			state.timeblocking.deadline = value.clone();
+			state.task_editor_mut().deadline = value.clone();
 			edit(state, |draft| draft.deadline = value)
 		}
 		Action::Due(value) => {
-			state.timeblocking.date = value.clone();
+			state.task_editor_mut().date = value.clone();
 			edit(state, |draft| draft.due = value)
 		}
 		Action::ClearSource => edit(state, |draft| draft.source = None),
@@ -495,9 +481,6 @@ fn close_draft(state: &mut State) {
 	state.inbox.draft = None;
 	state.travel.picker = None;
 	state.picker = None;
-	if let Some(workspace) = state.inbox.workspace.take() {
-		state.timeblocking = *workspace;
-	}
 }
 
 fn edit(state: &mut State, change: impl FnOnce(&mut Draft)) -> Task<Message> {
@@ -518,12 +501,7 @@ fn title_changed(state: &mut State, value: String) -> Task<Message> {
 	let pasted = value.len() >= draft.title.len() + 2;
 	draft.set_title(value);
 	draft.error = None;
-	preview(
-		draft,
-		&mut state.timeblocking.date,
-		&mut state.timeblocking.deadline,
-		&state.config.projects,
-	);
+	preview(draft, &state.config.projects);
 	let Some(source) = integrations::recognize(&draft.title) else {
 		return Task::none();
 	};
@@ -543,12 +521,7 @@ fn title_changed(state: &mut State, value: String) -> Task<Message> {
 		.map(move |result| Message::Inbox(Action::Fetched(lookup, result)))
 }
 
-fn preview(
-	draft: &mut Draft,
-	due: &mut String,
-	deadline: &mut String,
-	projects: &crate::config::ProjectsSettings,
-) {
+fn preview(draft: &mut Draft, projects: &crate::config::ProjectsSettings) {
 	let tokens = draft.quick_tokens(projects);
 	let Some(data) = draft
 		.event
@@ -557,6 +530,8 @@ fn preview(
 	else {
 		return;
 	};
+	let due = &mut draft.editor.date;
+	let deadline = &mut draft.editor.deadline;
 	let current = (data.metadata.clone(), due.clone(), deadline.clone());
 	let mut base = draft.quick_base.take().unwrap_or_else(|| current.clone());
 	if let Some(applied) = draft.quick_applied.take() {
@@ -644,17 +619,14 @@ fn fetched(state: &mut State, lookup: u64, result: Result<integrations::Details,
 			}
 			if let Some(deadline) = details
 				.deadline
-				.filter(|_| state.timeblocking.deadline.trim().is_empty())
+				.filter(|_| draft.editor.deadline.trim().is_empty())
 			{
 				draft.deadline = deadline.value();
-				state.timeblocking.deadline = draft.deadline.clone();
+				draft.editor.deadline = draft.deadline.clone();
 			}
-			if let Some(due) = details
-				.due
-				.filter(|_| state.timeblocking.date.trim().is_empty())
-			{
+			if let Some(due) = details.due.filter(|_| draft.editor.date.trim().is_empty()) {
 				draft.due = due.to_string();
-				state.timeblocking.date = draft.due.clone();
+				draft.editor.date = draft.due.clone();
 			}
 		}
 		Err(error) => draft.error = Some(error),
@@ -741,8 +713,8 @@ fn prepare_create(state: &mut State) -> Option<(crate::config::CalendarSettings,
 		draft.quick_base = None;
 		draft.quick_applied = None;
 	}
-	let deadline = state.timeblocking.deadline.clone();
-	let due = state.timeblocking.date.clone();
+	let deadline = state.task_editor().deadline.clone();
+	let due = state.task_editor().date.clone();
 	let draft = state.inbox.draft.as_mut()?;
 	draft.deadline = deadline;
 	draft.due = due;
@@ -847,7 +819,7 @@ fn created(state: &mut State, result: Result<Event, String>) -> Task<Message> {
 			if let Some(link) = zoom {
 				crate::app::open_zoom_setup(state, &link);
 			}
-			state.timeblocking.revision += 1;
+			state.task_operations.revision += 1;
 			if event.is_task() {
 				state.calendar.replace_task(&event.id, &event);
 			} else {
@@ -907,9 +879,9 @@ pub(crate) fn new_something_at(
 	let day = start.date_naive().to_string();
 	draft.set_title(title);
 	draft.due = day.clone();
-	state.timeblocking.date = day;
-	state.timeblocking.start_time = start.format("%H:%M").to_string();
-	state.timeblocking.end_time = end.format("%H:%M").to_string();
+	draft.editor.date = day;
+	draft.editor.start_time = start.format("%H:%M").to_string();
+	draft.editor.end_time = end.format("%H:%M").to_string();
 	if let Some(event) = draft.event.as_mut() {
 		event.start = start;
 		event.end = end;
@@ -973,23 +945,23 @@ pub(crate) fn apply_voice(state: &mut State, patch: crate::voice::Patch) {
 	}
 	if let Some(value) = patch.due {
 		draft.due = value.clone();
-		state.timeblocking.date = value;
+		draft.editor.date = value;
 	}
 	if let Some(value) = patch.deadline {
 		draft.deadline = value.clone();
-		state.timeblocking.deadline = value;
+		draft.editor.deadline = value;
 	}
 	if let Some(event) = draft.event.as_mut() {
 		if let Some((start, end, all_day)) = schedule {
 			event.start = start;
 			event.end = end;
 			event.all_day = all_day;
-			state.timeblocking.start_time = if all_day {
+			draft.editor.start_time = if all_day {
 				String::new()
 			} else {
 				start.format("%H:%M").to_string()
 			};
-			state.timeblocking.end_time = if all_day {
+			draft.editor.end_time = if all_day {
 				String::new()
 			} else {
 				end.format("%H:%M").to_string()
@@ -1064,10 +1036,10 @@ mod tests {
 		let _ = update(&mut state, Action::NewTask);
 		let _ = update(&mut state, Action::Title("Call tomorrow {oct 8}".into()));
 		assert_eq!(
-			state.timeblocking.date,
+			state.task_editor().date,
 			(crate::clock::now().date_naive() + Duration::days(1)).to_string()
 		);
-		assert!(state.timeblocking.deadline.ends_with("-10-08"));
+		assert!(state.task_editor().deadline.ends_with("-10-08"));
 		let title = &state.inbox.draft.as_ref().unwrap().title;
 		let range = crate::task_input::detect(
 			title,
@@ -1079,8 +1051,8 @@ mod tests {
 		.range;
 		let _ = update(&mut state, Action::AcceptToken(range));
 		let _ = update(&mut state, Action::Title("Call".into()));
-		assert!(state.timeblocking.date.is_empty());
-		assert!(state.timeblocking.deadline.ends_with("-10-08"));
+		assert!(state.task_editor().date.is_empty());
+		assert!(state.task_editor().deadline.ends_with("-10-08"));
 		let mut draft = state.inbox.draft.as_ref().unwrap().clone();
 		draft.due = "tomorrow".into();
 		assert_eq!(
@@ -1096,7 +1068,7 @@ mod tests {
 		let _ = update(&mut state, Action::Title("Plan @home !1 tomorrow".into()));
 		let draft = state.inbox.draft.as_ref().unwrap();
 		assert_eq!(tb::metadata(draft.event.as_ref().unwrap()).labels, ["home"]);
-		assert!(!state.timeblocking.date.is_empty());
+		assert!(!state.task_editor().date.is_empty());
 		let _ = update(&mut state, Action::AcceptToken(5..10));
 		assert_eq!(
 			state.inbox.draft.as_ref().unwrap().title,
@@ -1107,7 +1079,7 @@ mod tests {
 		let metadata = tb::metadata(draft.event.as_ref().unwrap());
 		assert_eq!(metadata.labels, ["home"]);
 		assert_eq!(metadata.priority, None);
-		assert!(state.timeblocking.date.is_empty());
+		assert!(state.task_editor().date.is_empty());
 		let _ = update(&mut state, Action::Title("Plan !2".into()));
 		let _ = update(&mut state, Action::Title("Plan !1".into()));
 		assert_eq!(
@@ -1135,7 +1107,7 @@ mod tests {
 				.labels
 				.is_empty()
 		);
-		assert!(state.timeblocking.date.is_empty());
+		assert!(state.task_editor().date.is_empty());
 		assert_eq!(draft.quick_tokens(&state.config.projects).len(), 1);
 
 		let _ = update(
@@ -1180,14 +1152,14 @@ mod tests {
 			1
 		);
 		let _ = update(&mut state, Action::DismissToken(14..22));
-		assert!(state.timeblocking.date.is_empty());
+		assert!(state.task_editor().date.is_empty());
 		let _ = update(&mut state, Action::Title("Plan today tomorrow".into()));
 		let draft = state.inbox.draft.as_ref().unwrap();
 		let tokens = draft.quick_tokens(&state.config.projects);
 		assert_eq!(tokens.len(), 1);
 		assert_eq!(&draft.title[tokens[0].range.clone()], "today");
 		assert_eq!(
-			state.timeblocking.date,
+			state.task_editor().date,
 			crate::clock::now().date_naive().to_string()
 		);
 	}
@@ -1214,8 +1186,8 @@ mod tests {
 	fn full_editor_stages_metadata_and_times_without_touching_calendar_tasks() {
 		let mut state = state();
 		let original = state.calendar.events.clone();
-		state.timeblocking.date = "2026-10-01".into();
-		state.timeblocking.busy.insert("task:previous");
+		state.task_editor_mut().date = "2026-10-01".into();
+		state.task_operations.busy.insert("task:previous");
 		let project = state.config.projects.add("Work".into());
 		let _ = update(&mut state, Action::NewTask);
 		let _ = update(&mut state, Action::Title("Prepare exam".into()));
@@ -1251,24 +1223,24 @@ mod tests {
 		assert_eq!(metadata.location, Some(7));
 		assert_eq!(task.details.description, "!");
 		let mut ready = state.inbox.draft.as_ref().unwrap().clone();
-		ready.due = state.timeblocking.date.clone();
-		ready.deadline = state.timeblocking.deadline.clone();
+		ready.due = state.task_editor().date.clone();
+		ready.deadline = state.task_editor().deadline.clone();
 		let ready = validate(&ready).unwrap();
 		assert_eq!(tb::metadata(ready.event.as_ref().unwrap()), metadata);
 		assert_eq!(ready.deadline.unwrap().value(), "2026-11-04 14:00");
 		assert!(!task.all_day);
 		assert_eq!(task.end - task.start, Duration::hours(1));
-		assert_eq!(state.timeblocking.deadline, "2026-11-04 14:00");
+		assert_eq!(state.task_editor().deadline, "2026-11-04 14:00");
 		assert_eq!(state.calendar.events, original);
-		assert!(state.timeblocking.busy.is_empty());
+		assert!(state.task_operations.busy.contains_task("task:previous"));
 		let _ = tb::update(
 			&mut state,
 			tb::Action::SavedMany("task:previous".into(), Err("Offline".into())),
 		);
 		let _ = update(&mut state, Action::Cancel);
 		assert!(state.inbox.draft.is_none());
-		assert!(state.timeblocking.busy.is_empty());
-		assert_eq!(state.timeblocking.date, "2026-10-01");
+		assert!(state.task_operations.busy.is_empty());
+		assert_eq!(state.task_editor().date, "2026-10-01");
 		assert_eq!(state.calendar.events, original);
 	}
 
@@ -1716,10 +1688,10 @@ mod tests {
 	fn a_created_task_joins_the_inbox_and_closes_the_popup() {
 		let mut state = state();
 		let _ = update(&mut state, Action::NewTask);
-		let revision = state.timeblocking.revision;
+		let revision = state.task_operations.revision;
 		let _ = created(&mut state, Ok(task("new", "inbox", UNDATED)));
 		assert!(state.inbox.draft.is_none());
-		assert_eq!(state.timeblocking.revision, revision + 1);
+		assert_eq!(state.task_operations.revision, revision + 1);
 		assert_eq!(tasks(&state).len(), 1);
 
 		let _ = update(&mut state, Action::NewTask);
@@ -1757,7 +1729,7 @@ mod tests {
 		);
 		assert_eq!(state.inbox.scheduling, None);
 		// The write is in flight, so the task is held until Google answers.
-		assert!(state.timeblocking.busy.contains_task("task:a"));
+		assert!(state.task_operations.busy.contains_task("task:a"));
 	}
 
 	#[test]
@@ -1809,7 +1781,7 @@ mod tests {
 			Action::ScheduleOn("task:a".into(), day("2026-11-12")),
 		);
 		assert_eq!(state.inbox.picker, None);
-		assert!(state.timeblocking.busy.contains_task("task:a"));
+		assert!(state.task_operations.busy.contains_task("task:a"));
 	}
 
 	#[test]

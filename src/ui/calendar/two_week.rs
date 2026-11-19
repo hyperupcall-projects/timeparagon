@@ -408,7 +408,7 @@ fn task_row<'a>(state: &'a State, task: &Event, metrics: &Metrics) -> Element<'a
 	)
 	.padding(0)
 	.style(crate::ui::controls::ghost);
-	if state.timeblocking.busy.is_empty() && !hidden {
+	if state.task_operations.busy.is_empty() && !hidden {
 		check = check.on_press(Message::Task(TaskMessage::TaskToggled(task.id.clone())));
 	}
 	let label = if hidden {

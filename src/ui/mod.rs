@@ -230,10 +230,10 @@ fn push_dialogs<'a>(layers: &mut Vec<Element<'a, Message>>, state: &'a State, me
 	if state.timeblocking.pending_join.is_some() {
 		layers.push(timeblocking::join_confirmation(state, metrics));
 	}
-	if state.timeblocking.session_edit.is_some() {
+	if state.work_tracking.session_edit.is_some() {
 		layers.push(timeblocking::session_editor(state, metrics));
 	}
-	if state.timeblocking.distraction_open {
+	if state.work_tracking.distraction_open {
 		layers.push(timeblocking::distraction_overlay(state, metrics));
 	}
 	if state.brain_dump.open.is_some() {
@@ -242,7 +242,7 @@ fn push_dialogs<'a>(layers: &mut Vec<Element<'a, Message>>, state: &'a State, me
 	if state.inbox.draft.is_some() {
 		layers.push(inbox::add_something_overlay(state, metrics));
 	}
-	if state.timeblocking.estimate_task.is_some() {
+	if state.task_editor().estimate_task.is_some() {
 		layers.push(timeblocking::estimate_overlay(state, metrics));
 	}
 	if state.calendar.pending_delete.is_some() {
@@ -302,7 +302,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
 
 		if state.task_creation_window {
 			let mut layers = vec![inbox::add_something_overlay(state, &metrics)];
-			if state.timeblocking.estimate_task.is_some() {
+			if state.task_editor().estimate_task.is_some() {
 				layers.push(timeblocking::estimate_overlay(state, &metrics));
 			}
 			if state.description_popup.is_some() {

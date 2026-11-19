@@ -77,10 +77,10 @@ pub(super) fn update(state: &mut State, message: TaskMessage) -> Task<Message> {
 			if state.calendar.pending_delete.as_deref() != Some(id.as_str()) {
 				return Task::none();
 			}
-			if !state.timeblocking.busy.is_empty() {
+			if !state.task_operations.busy.is_empty() {
 				return Task::none();
 			}
-			state.timeblocking.revision += 1;
+			state.task_operations.revision += 1;
 			let Some(task) = state
 				.calendar
 				.event(&id)
@@ -93,14 +93,14 @@ pub(super) fn update(state: &mut State, message: TaskMessage) -> Task<Message> {
 
 			let app_calendar = state.config.calendar.app_calendar.clone();
 			state.calendar.error = None;
-			state.timeblocking.busy.insert(id.clone());
+			state.task_operations.busy.insert(id.clone());
 
 			blocking::run(move || calendar::delete_task(&task, app_calendar.as_deref()))
 				.map(move |result| Message::Task(TaskMessage::TaskDeleted(id.clone(), result)))
 		}
 		TaskMessage::TaskDeleted(id, Ok(())) => {
-			state.timeblocking.busy.remove_task(&id);
-			state.timeblocking.revision += 1;
+			state.task_operations.busy.remove_task(&id);
+			state.task_operations.revision += 1;
 			state.calendar.pending_delete = None;
 			if let Some(task) = state.calendar.event(&id) {
 				state
@@ -116,8 +116,8 @@ pub(super) fn update(state: &mut State, message: TaskMessage) -> Task<Message> {
 			Task::batch([save, refresh_week_after_write(state)])
 		}
 		TaskMessage::TaskDeleted(id, Err(error)) => {
-			state.timeblocking.busy.remove_task(&id);
-			state.timeblocking.revision += 1;
+			state.task_operations.busy.remove_task(&id);
+			state.task_operations.revision += 1;
 			state.calendar.pending_delete = None;
 			log::warn!("could not delete the task: {error}");
 			state.calendar.error = Some(error);
@@ -129,10 +129,10 @@ pub(super) fn update(state: &mut State, message: TaskMessage) -> Task<Message> {
 			else {
 				unreachable!()
 			};
-			if !state.timeblocking.busy.is_empty() {
+			if !state.task_operations.busy.is_empty() {
 				return Task::none();
 			}
-			state.timeblocking.revision += 1;
+			state.task_operations.revision += 1;
 			let Some(task) = state
 				.calendar
 				.event(&id)
@@ -156,14 +156,14 @@ pub(super) fn update(state: &mut State, message: TaskMessage) -> Task<Message> {
 
 			// Update the chip straight away, then put it back if Google
 			// refuses the write.
-			state.timeblocking.busy.insert(id.clone());
+			state.task_operations.busy.insert(id.clone());
 			let completed = status != timeblocking::TaskStatus::Active;
 			if completed && let Some(task) = state.calendar.event(&id) {
 				state.config.task_work.stop(
 					&crate::timeblocking::task_key(task),
 					crate::clock::utc_now(),
 				);
-				state.timeblocking.work_now = Some(crate::clock::utc_now());
+				state.work_tracking.work_now = Some(crate::clock::utc_now());
 				let _ = queue_save(state);
 			}
 			if let Some(event) = state.calendar.event_mut(&id) {
@@ -186,8 +186,8 @@ pub(super) fn update(state: &mut State, message: TaskMessage) -> Task<Message> {
 			if let Some(event) = state.calendar.event_mut(&id) {
 				*event = task.clone();
 			}
-			state.timeblocking.busy.remove_task(&id);
-			state.timeblocking.revision += 1;
+			state.task_operations.busy.remove_task(&id);
+			state.task_operations.revision += 1;
 			state.calendar.replace_task(&id, &task);
 			let record = if (previous == timeblocking::TaskStatus::Completed)
 				!= (timeblocking::task_status(&task) == timeblocking::TaskStatus::Completed)
@@ -202,8 +202,8 @@ pub(super) fn update(state: &mut State, message: TaskMessage) -> Task<Message> {
 			])
 		}
 		TaskMessage::TaskCompletionSaved(id, previous, Err(error)) => {
-			state.timeblocking.busy.remove_task(&id);
-			state.timeblocking.revision += 1;
+			state.task_operations.busy.remove_task(&id);
+			state.task_operations.revision += 1;
 			if let Some(event) = state.calendar.event_mut(&id) {
 				timeblocking::apply_status(event, previous);
 			}

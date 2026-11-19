@@ -488,7 +488,7 @@ fn card<'a>(state: &'a State, event: &CalendarEvent, preview: bool) -> Element<'
 					..Default::default()
 				}
 			});
-		if state.timeblocking.busy.is_empty() {
+		if state.task_operations.busy.is_empty() {
 			check = check.on_press(Message::Task(TaskMessage::TaskToggled(event.id.clone())));
 		}
 		footer = footer.push(check);
