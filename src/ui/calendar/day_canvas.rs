@@ -1530,8 +1530,8 @@ pub(super) fn draw_pill(frame: &mut Frame, bounds: Rectangle, label: &str, color
 	);
 }
 
-/// A time block is split into the label on the left, with Focus stacked over
-/// Plan on the right, inset from the edges and each other. Anything outside
+/// A time block is split into the label on the left, with Plan stacked over
+/// Focus on the right, inset from the edges and each other. Anything outside
 /// the two buttons opens the details card through the usual click/drag
 /// handling. Returns (label, focus, plan).
 pub(super) fn block_actions(bounds: Rectangle) -> (Rectangle, Rectangle, Rectangle) {
@@ -1539,15 +1539,15 @@ pub(super) fn block_actions(bounds: Rectangle) -> (Rectangle, Rectangle, Rectang
 		width: bounds.width * TIME_BLOCK_LABEL_SHARE,
 		..bounds
 	};
-	let focus = Rectangle {
+	let plan = Rectangle {
 		x: bounds.x + label.width,
 		width: bounds.width - label.width,
 		height: bounds.height / 2.0,
 		..bounds
 	};
-	let plan = Rectangle {
-		y: bounds.y + focus.height,
-		..focus
+	let focus = Rectangle {
+		y: bounds.y + plan.height,
+		..plan
 	};
 	(label, inset_action(focus), inset_action(plan))
 }

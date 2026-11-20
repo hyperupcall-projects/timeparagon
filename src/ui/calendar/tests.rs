@@ -1020,7 +1020,7 @@ fn task_visibility_keeps_time_block_actions_in_place() {
 			day_grid(&state, &metrics, crate::clock::now()),
 		);
 		// The block action uses the space previously occupied by task rows.
-		ui.point_at(Point::new(400.0, state.calendar.hour_height + 10.0));
+		ui.point_at(Point::new(400.0, state.calendar.hour_height * 2.0 - 10.0));
 		ui.simulate([
 			iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
 			iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
@@ -1037,14 +1037,14 @@ fn task_visibility_keeps_time_block_actions_in_place() {
 fn time_block_regions_dispatch_different_actions() {
 	// (x fraction, y fraction, expected: 0 = focus, 1 = plan, 2 = details)
 	for (width, columns, x, y, expected) in [
-		(600.0, 1, 0.8, 0.2, 0),
-		(600.0, 1, 0.8, 0.8, 1),
+		(600.0, 1, 0.8, 0.2, 1),
+		(600.0, 1, 0.8, 0.8, 0),
 		(600.0, 1, 0.8, 0.5, 2),
 		(600.0, 1, 0.997, 0.25, 2),
 		(600.0, 1, 0.2, 0.1, 2),
 		(600.0, 1, 0.2, 0.9, 2),
-		(240.0, 3, 0.9, 0.2, 0),
-		(240.0, 3, 0.9, 0.8, 1),
+		(240.0, 3, 0.9, 0.2, 1),
+		(240.0, 3, 0.9, 0.8, 0),
 		(240.0, 3, 0.1, 0.5, 2),
 	] {
 		let mut canvas = canvas_with_one_block();
@@ -1056,11 +1056,11 @@ fn time_block_regions_dispatch_different_actions() {
 		assert_eq!(label.x, bounds.x);
 		assert_eq!(focus.x, plan.x);
 		assert!(focus.x > label.x + label.width);
-		assert!(focus.y > bounds.y);
-		assert!(focus.height < bounds.height / 2.0);
-		assert!(plan.y > focus.y + focus.height);
-		assert!(plan.y + plan.height < bounds.y + bounds.height);
-		assert!(plan.x + plan.width < bounds.x + bounds.width);
+		assert!(plan.y > bounds.y);
+		assert!(plan.height < bounds.height / 2.0);
+		assert!(focus.y > plan.y + plan.height);
+		assert!(focus.y + focus.height < bounds.y + bounds.height);
+		assert!(focus.x + focus.width < bounds.x + bounds.width);
 		let element: Element<'_, Message> = canvas_widget(canvas).width(width).height(1440).into();
 		let mut ui = iced_test::Simulator::with_size(
 			iced_test::core::Settings::default(),
