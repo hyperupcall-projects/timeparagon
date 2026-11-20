@@ -346,8 +346,8 @@ pub fn CreateSheet(
 								if let Some(value) = patch.description { description.set(value); }
 								task_details.set(draft); on_day.set(false);
 							},
-							on_images: move |found: Vec<timeparagon_core::ai_input::image::Found>| {
-								match found.into_iter().map(picture_draft).collect::<Result<Vec<_>,_>>() {
+							on_events: move |(found, source): (Vec<timeparagon_core::ai_input::events::Found>, &'static str)| {
+								match found.into_iter().map(|found| found_draft(found, source)).collect::<Result<Vec<_>,_>>() {
 									Ok(events) => {
 										if kind() == Kind::Event { review.stash(); }
 										selected.set(None);
@@ -578,15 +578,19 @@ impl Review {
 	}
 }
 
-fn picture_draft(found: timeparagon_core::ai_input::image::Found) -> Result<NewEvent, String> {
+/// An event read from a `source` ("picture" or "text"), as a proposal to review.
+fn found_draft(
+	found: timeparagon_core::ai_input::events::Found,
+	source: &str,
+) -> Result<NewEvent, String> {
 	use chrono::{NaiveDate, NaiveTime};
 	let parse_date = |v: &str| {
 		NaiveDate::parse_from_str(v, "%Y-%m-%d")
-			.map_err(|_| "Image model returned an invalid date".to_owned())
+			.map_err(|_| "The model returned an invalid date".to_owned())
 	};
 	let parse_time = |v: &str| {
 		NaiveTime::parse_from_str(v, "%H:%M")
-			.map_err(|_| "Image model returned an invalid time".to_owned())
+			.map_err(|_| "The model returned an invalid time".to_owned())
 	};
 	let date = found.date.as_deref().map(parse_date).transpose()?;
 	let end_date = found
@@ -609,12 +613,14 @@ fn picture_draft(found: timeparagon_core::ai_input::image::Found) -> Result<NewE
 				.single()
 				.is_none()
 			{
-				return Err("Picture contains an ambiguous or nonexistent local time; review the source or try another image".into());
+				return Err(format!(
+					"The {source} has an ambiguous or nonexistent local time; edit it and try again"
+				));
 			}
 		}
 		if let (Some(start), Some(end)) = (start, end) {
 			if end_date.unwrap_or(date).and_time(end) <= date.and_time(start) {
-				return Err("Image model returned an event ending before it starts".into());
+				return Err("The model returned an event ending before it starts".into());
 			}
 		}
 	}
@@ -623,7 +629,9 @@ fn picture_draft(found: timeparagon_core::ai_input::image::Found) -> Result<NewE
 		description.push_str(&format!("\nLocation: {location}"));
 	}
 	if date.is_none() {
-		description.push_str("\nDate not found in picture; enter a date before adding.");
+		description.push_str(&format!(
+			"\nDate not found in {source}; enter a date before adding."
+		));
 	}
 	let mut draft = NewEvent {
 		title: found.title,
@@ -702,26 +710,29 @@ mod media_tests {
 	}
 	#[test]
 	fn pictures_require_missing_dates_and_default_to_all_day_or_one_hour() {
-		let draft = picture_draft(found()).unwrap();
+		let draft = found_draft(found(), "picture").unwrap();
 		assert!(draft.date.is_empty() && draft.all_day);
 		assert!(draft.description.contains("Library"));
+		assert!(draft.description.contains("Date not found in picture"));
+		let from_text = found_draft(found(), "text").unwrap();
+		assert!(from_text.description.contains("Date not found in text"));
 		assert!(draft.range().is_err());
 		let mut event = found();
 		event.date = Some("2026-11-17".into());
 		event.start_time = Some("23:30".into());
-		let draft = picture_draft(event).unwrap();
+		let draft = found_draft(event, "picture").unwrap();
 		assert_eq!(draft.end_date, "2026-11-18");
 		assert_eq!(draft.end, "00:30");
 		let (start, end) = draft.range().unwrap();
 		assert_eq!(end - start, chrono::Duration::hours(1));
 		let mut invalid = found();
 		invalid.date = Some("2026-02-30".into());
-		assert!(picture_draft(invalid).is_err());
+		assert!(found_draft(invalid, "picture").is_err());
 		let mut backwards = found();
 		backwards.date = Some("2026-11-17".into());
 		backwards.start_time = Some("10:00".into());
 		backwards.end_time = Some("09:00".into());
-		assert!(picture_draft(backwards).is_err());
+		assert!(found_draft(backwards, "picture").is_err());
 	}
 	#[test]
 	fn switching_and_removing_proposals_preserves_edits() {
@@ -746,11 +757,14 @@ mod media_tests {
 			};
 			let proposals = use_signal(|| {
 				vec![
-					picture_draft(found()).unwrap(),
-					picture_draft(Found {
-						title: "Concert".into(),
-						..found()
-					})
+					found_draft(found(), "picture").unwrap(),
+					found_draft(
+						Found {
+							title: "Concert".into(),
+							..found()
+						},
+						"picture",
+					)
 					.unwrap(),
 				]
 			});

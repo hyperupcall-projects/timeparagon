@@ -72,6 +72,7 @@ Of course, there's also week, 2-week, and month views:
 			- Supports pasting Gmail URLs
 		- By speaking.
 		- By uploading, pasting, or taking a picture.
+		- By pasting text, such as an email or message, to find every event in it.
 		- From the browser extension, when on a web page
 		- From the Slack app, for a specific message
 	- Inbox section for new tasks that have yet to be triaged.

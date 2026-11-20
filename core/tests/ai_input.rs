@@ -158,3 +158,48 @@ fn picture_requests_use_the_configured_vision_model_and_validate_the_response() 
 	);
 	server.join().unwrap();
 }
+
+#[test]
+fn text_requests_use_the_configured_extraction_model_and_return_every_event() {
+	use serde_json::json;
+	use timeparagon_core::ai_input::{Settings, text};
+	let events = json!({"events":[
+		{"title":"Dentist","date":"2026-11-20","start_time":"09:00"},
+		{"title":"Book club","date":"2026-11-24","start_time":"19:30","location":"Library"}
+	]});
+	let (url, server) = model_server(json!({"message":{"content":events.to_string()}}));
+	let settings = Settings {
+		ollama_url: url,
+		model: "selected-text".into(),
+		..Default::default()
+	};
+	let message = "Dentist tomorrow at 9.\nBook club next Tuesday 7:30pm at the library.";
+	let found = text::extract(&format!("  {message}\n"), &settings).unwrap();
+	assert_eq!(found.len(), 2);
+	assert_eq!(found[1].title, "Book club");
+	assert_eq!(found[1].location.as_deref(), Some("Library"));
+	let request = server.join().unwrap();
+	assert!(request.starts_with("POST /api/chat "));
+	let body: serde_json::Value =
+		serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+	assert_eq!(body["model"], "selected-text");
+	assert_eq!(body["messages"][1]["content"], message);
+	assert_eq!(body["think"], false);
+	assert!(body["options"]["num_ctx"].as_u64().unwrap() >= 8192);
+	assert!(body["format"]["properties"]["events"].is_object());
+
+	// Nothing is sent without text or a model for the chosen provider.
+	assert!(text::extract("   ", &settings).is_err());
+	assert!(text::extract(&"x".repeat(text::MAX_CHARS + 1), &settings).is_err());
+	for settings in [
+		Settings::default(),
+		Settings {
+			extraction_provider: "openrouter".into(),
+			model: "selected-text".into(),
+			..Default::default()
+		},
+	] {
+		let error = text::extract(message, &settings).unwrap_err().to_string();
+		assert!(error.contains("Text extraction"), "{error}");
+	}
+}

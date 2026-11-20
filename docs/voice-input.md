@@ -201,7 +201,7 @@ suite does not capture real microphone audio or measure speech recognition accur
 
 ## Pictures to calendar events
 
-The picture button to the right of the microphone opens **Take picture**,
+The picture button to the right of the text button opens **Take picture**,
 **Paste image**, and **Choose image file**. Event creation also has a picture
 button. Choose the active provider and vision model in **Settings → AI → Image
 input**. Ollama uses its image server/model settings; OpenRouter uses its image
@@ -221,10 +221,27 @@ for review. Cancel discards the remaining proposals. A missing date must be
 entered before adding; missing start times use an all-day draft and missing end
 times use a one-hour duration. Location text is retained in the editable notes.
 
+## Text to calendar events
+
+The text button, right beside the microphone, opens a box for typing or pasting
+text such as an email, a chat message or a schedule. Event creation also has a
+text button. **Find events** sends the text to the provider chosen in **Settings →
+AI → Text extraction**: Ollama uses the extraction server and model (the same
+model voice input uses); OpenRouter uses its text model and saved API token. The
+provider selection persists across restarts. Voice input always uses the Ollama
+extraction model.
+
+Up to 50,000 characters are read at once. The request uses the same prompt rules,
+JSON schema and validation as pictures, so a single text can yield many events
+(up to 100). They join the same review list as picture proposals, and the text box
+closes and clears once they arrive; if nothing is found, the text stays for
+editing. Ollama's context window is enlarged for long texts so they are not
+silently cut off.
+
 ## Android input
 
-The mobile Add sheet has the same microphone and picture controls beside the
-title. Voice input is available for tasks. Tap once to record, then again to
+The mobile Add sheet has the same microphone, text and picture controls beside
+the title. Voice input is available for tasks. Tap once to record, then again to
 finish; the input meter, two-minute limit, transcription/extraction states,
 in-memory model debug log and explicit Add step follow the desktop flow. Task
 metadata remains editable under **Task details**, and later recordings refine
@@ -236,10 +253,11 @@ uses Android's camera app at full resolution; clipboard import reads a copied
 image URI. PNG, JPEG and WebP images up to 20 MB use the same recognition request,
 provider selection and validation as desktop. Proposals retain edits as you switch
 between them. Add saves the selected event and keeps the remaining proposals open.
-A missing date must be entered before saving.
+A missing date must be entered before saving. The text button opens a box for
+pasted text; **Find events** proposes its events in the same review list.
 
-Configure **Settings → AI** with the same Ollama extraction model and
-Ollama/OpenRouter image model as desktop. Both apps use the same settings type,
+Configure **Settings → AI** with the same Ollama/OpenRouter text extraction model
+and Ollama/OpenRouter image model as desktop. Both apps use the same settings type,
 model parameters, schemas and extraction code. As before, these settings and the
 OpenRouter token are stored per device; they are not copied by database sync.
 
@@ -260,5 +278,6 @@ and model file. See the [whisper.cpp server documentation](https://github.com/gg
 
 Audio and image files stay in the private cache only while being processed and
 are removed afterward. The configured Whisper server receives audio, Ollama
-receives transcript and draft context, and the image provider receives pictures.
+receives transcript and draft context, the image provider receives pictures, and
+the text extraction provider receives text you ask it to read.
 Use servers you trust. No recording or image is attached to the saved item.

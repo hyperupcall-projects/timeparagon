@@ -75,7 +75,6 @@ pub enum Action {
 #[derive(Default)]
 pub struct Session {
 	voice_tab: Provider,
-	extraction_tab: Option<Provider>,
 	openrouter_token: Token,
 	token_status: Option<&'static str>,
 	rx: Option<mpsc::Receiver<Progress>>,
@@ -171,7 +170,15 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 					.into();
 					return crate::app::queue_save(state);
 				}
-				InputSection::Extraction => session.extraction_tab = Some(provider),
+				InputSection::Extraction => {
+					state.config.voice.extraction_provider = if provider == Provider::OpenRouter {
+						"openrouter"
+					} else {
+						"ollama"
+					}
+					.into();
+					return crate::app::queue_save(state);
+				}
 			}
 			return Task::none();
 		}
@@ -643,6 +650,7 @@ pub fn input<'a>(
 		row![
 			title,
 			iced::widget::container(mic).id("voice-record"),
+			crate::image_input::text_button(state),
 			crate::image_input::input_button(state)
 		]
 		.spacing(6)
@@ -818,9 +826,17 @@ pub fn settings<'a>(
 				.into(),
 		]);
 	}
-	let extraction_tab = voice.extraction_tab.unwrap_or(Provider::Ollama);
+	let extraction_tab = if settings.extraction_provider == "openrouter" {
+		Provider::OpenRouter
+	} else {
+		Provider::Ollama
+	};
 	let mut extraction = column![
-		heading("Text extraction"),
+		with_info(
+			heading("Text extraction").width(Fill),
+			"Reads events from typed or pasted text. Voice input always uses the Ollama extraction model.",
+			info,
+		),
 		provider_tabs(InputSection::Extraction, extraction_tab)
 	]
 	.spacing(6);

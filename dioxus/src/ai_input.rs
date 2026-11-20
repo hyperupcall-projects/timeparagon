@@ -158,16 +158,60 @@ pub fn Controls(
 	disabled: bool,
 	mut active: Signal<bool>,
 	on_patch: EventHandler<Patch>,
-	on_images: EventHandler<Vec<ai_input::image::Found>>,
+	/// Events read from a picture or text, and which of the two ("picture", "text").
+	on_events: EventHandler<(Vec<ai_input::events::Found>, &'static str)>,
 ) -> Element {
 	let capture = use_hook(|| Arc::new(Capture::new()));
 	let mut phase = use_signal(String::new);
 	let mut level = use_signal(|| 0.0f64);
 	let mut menu = use_signal(|| false);
+	let mut text_open = use_signal(|| false);
+	let mut text = use_signal(String::new);
 	let mut error = use_signal(|| None::<String>);
 	let mut log = use_signal(String::new);
 	let mut debug = use_signal(|| false);
 	let id = capture.id.clone();
+	let text_settings = settings.clone();
+	let mut read_text = move || {
+		if active() || disabled || text().trim().is_empty() {
+			return;
+		}
+		let settings = text_settings.clone();
+		let missing = if settings.extraction_provider == "openrouter" {
+			settings.extraction_openrouter_model.trim().is_empty()
+		} else {
+			settings.model.trim().is_empty()
+		};
+		if missing {
+			error.set(Some(
+				"Set the text extraction model in Settings → AI → Text extraction".into(),
+			));
+			return;
+		}
+		error.set(None);
+		phase.set("Reading text…".into());
+		active.set(true);
+		let input = text();
+		spawn(async move {
+			let result = worker(move || {
+				ai_input::text::extract(&input, &settings).map_err(|e| e.to_string())
+			})
+			.await;
+			match result {
+				Ok(events) if events.is_empty() => {
+					error.set(Some("No calendar events found in this text".into()))
+				}
+				Ok(events) => {
+					text_open.set(false);
+					text.set(String::new());
+					on_events.call((events, "text"));
+				}
+				Err(message) => error.set(Some(message)),
+			}
+			active.set(false);
+			phase.set(String::new());
+		});
+	};
 	let mut run = move |source: &'static str| {
 		if active() || disabled {
 			return;
@@ -197,6 +241,7 @@ pub fn Controls(
 		error.set(None);
 		log.set(String::new());
 		menu.set(false);
+		text_open.set(false);
 		phase.set("Opening input".into());
 		active.set(true);
 		spawn(async move {
@@ -269,7 +314,7 @@ pub fn Controls(
 					if events.is_empty() {
 						return Err("No calendar events found in this picture".to_owned());
 					}
-					on_images.call(events);
+					on_events.call((events, "picture"));
 				}
 				Ok::<_, String>(Some(()))
 			}
@@ -301,7 +346,12 @@ pub fn Controls(
 						}
 					}
 				}
-				button { class:"btn", r#type:"button", aria_label:"Picture input", aria_expanded: menu().to_string(), disabled: disabled || active(), onclick:move |_| menu.set(!menu()),
+				button { class:"btn", r#type:"button", aria_label:"Text input", aria_expanded: text_open().to_string(), disabled: disabled || active(), onclick:move |_| { text_open.set(!text_open()); menu.set(false); },
+					svg { width:"20",height:"20",view_box:"0 0 24 24",fill:"none",stroke:"currentColor",stroke_width:"2","aria-hidden":"true",
+						path { d:"M5 3h10l4 4v14H5zM15 3v4h4M8 11h8M8 14h8M8 17h5" }
+					}
+				}
+				button { class:"btn", r#type:"button", aria_label:"Picture input", aria_expanded: menu().to_string(), disabled: disabled || active(), onclick:move |_| { menu.set(!menu()); text_open.set(false); },
 					svg { width:"20",height:"20",view_box:"0 0 24 24",fill:"none",stroke:"currentColor",stroke_width:"2","aria-hidden":"true",
 						rect { x:"3",y:"3",width:"18",height:"18",rx:"2" } circle { cx:"8",cy:"8",r:"1" } path { d:"m3 17 6-6 4 4 3-3 5 5" }
 					}
@@ -315,6 +365,13 @@ pub fn Controls(
 					button {class:"btn",r#type:"button",onclick:move |_| paste_run("clipboard"),"Paste image"}
 					button {class:"btn",r#type:"button",onclick:move |_| run("file"),"Choose image file"}
 					p {class:"hint","Choose a screenshot or picture (PNG, JPEG or WebP, up to 20 MB)."}
+				}
+			}
+			if text_open() {
+				div { class:"ai-sources",
+					textarea { class:"client-input", aria_label:"Text to read events from", placeholder:"Paste an email, message or schedule…", rows:"6", value:"{text}", disabled: active(), oninput:move |event| text.set(event.value()) }
+					button { class:"btn primary", r#type:"button", disabled: disabled || active() || text().trim().is_empty(), onclick:move |_| read_text(), "Find events" }
+					p {class:"hint","Each event found is proposed for review; nothing is added until you add it."}
 				}
 			}
 			if let Some(message) = error() { p {class:"editor-error",role:"alert","{message}"} }
@@ -342,6 +399,7 @@ fn setting<'a>(settings: &'a mut Settings, key: &str) -> &'a mut String {
 		"image_ollama_url" => &mut settings.image_ollama_url,
 		"image_ollama_model" => &mut settings.image_ollama_model,
 		"image_openrouter_model" => &mut settings.image_openrouter_model,
+		"extraction_openrouter_model" => &mut settings.extraction_openrouter_model,
 		_ => unreachable!(),
 	}
 }
@@ -364,10 +422,14 @@ pub fn ModelSettings(mut config: Signal<Config>) -> Element {
 			.unwrap_or_default()
 	});
 	let mut token_changed = use_signal(|| false);
-	let fields: Vec<(&str, &str)> = vec![
-		("ollama_url", "Ollama extraction server"),
-		("model", "Ollama extraction model"),
-	];
+	let fields: Vec<(&str, &str)> = if draft().extraction_provider == "openrouter" {
+		vec![("extraction_openrouter_model", "OpenRouter text model")]
+	} else {
+		vec![
+			("ollama_url", "Ollama extraction server"),
+			("model", "Ollama extraction model"),
+		]
+	};
 	let image_fields = if draft().image_provider == "openrouter" {
 		vec![("image_openrouter_model", "OpenRouter image model")]
 	} else {
@@ -396,7 +458,15 @@ pub fn ModelSettings(mut config: Signal<Config>) -> Element {
 			}
 			{image_fields.into_iter().map(field)}
 			h4 {"Text extraction"}
+			div {class:"sheet-tabs",
+				for provider in ["ollama", "openrouter"] {
+					button {class:"nav-tab",r#type:"button",disabled:busy(),aria_pressed:(draft().extraction_provider == provider).to_string(),onclick:move |_|draft.write().extraction_provider = provider.into(),
+						if provider == "ollama" { "Ollama" } else { "OpenRouter" }
+					}
+				}
+			}
 			{fields.into_iter().map(field)}
+			p {class:"hint","Reads events from typed or pasted text. Voice input always uses the Ollama extraction model."}
 			label {"OpenRouter API token" input {class:"client-input",r#type:"password",value:"{token}",placeholder:"Saved privately on this device",autocomplete:"off",disabled:busy(),oninput:move |event|{token.set(event.value());token_changed.set(true);} } }
 			p {class:"hint","Model names and providers use the desktop settings format. Server addresses and credentials are configured on each device. An edited token is saved privately; clear it to remove it."}
 			button {class:"btn primary",r#type:"button",disabled:busy(),onclick:move |_| {

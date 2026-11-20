@@ -26,6 +26,7 @@ pub(crate) fn creation_title<'a>(
 		crate::ui::controls::field_label("Title", metrics.label()),
 		row![
 			input.id(iced::widget::Id::new(crate::inbox::TITLE_FIELD)),
+			crate::image_input::text_button(state),
 			crate::image_input::input_button(state)
 		]
 		.spacing(6)

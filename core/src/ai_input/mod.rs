@@ -1,6 +1,8 @@
 //! Shared model settings and validated AI input contracts for both apps.
 use serde::{Deserialize, Serialize};
+pub mod events;
 pub mod image;
+pub mod text;
 pub mod voice;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -17,6 +19,8 @@ pub struct Settings {
 	pub image_ollama_model: String,
 	pub image_openrouter_model: String,
 	pub extraction_openrouter_model: String,
+	/// "ollama" or "openrouter": which reads events out of typed or pasted text.
+	pub extraction_provider: String,
 }
 impl Default for Settings {
 	fn default() -> Self {
@@ -32,6 +36,7 @@ impl Default for Settings {
 			image_ollama_model: String::new(),
 			image_openrouter_model: String::new(),
 			extraction_openrouter_model: String::new(),
+			extraction_provider: "ollama".into(),
 		}
 	}
 }
