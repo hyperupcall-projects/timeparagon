@@ -78,6 +78,7 @@ fn screen(item: Item) -> Option<Screen> {
 		Item::People => Some(Screen::People),
 		Item::Travel => Some(Screen::Travel),
 		Item::BrainDump => Some(Screen::BrainDump),
+		Item::Routines => Some(Screen::Routines),
 		Item::Alarms => Some(Screen::Alarms),
 		Item::Logs => None,
 	}

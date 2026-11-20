@@ -543,58 +543,199 @@ fn the_calendar_menu_lists_calendars_without_website_or_dock_buttons() {
 	}
 }
 
-/// The tab label at `index` (Do, Plan Day, Routines, Life, More,
-/// Settings) for a window of `width`.
-fn tab_label(width: f32, index: usize) -> &'static str {
-	timeparagon::ui::tab_labels(width)[index]
+/// The bounds of the navigation element with `id`.
+fn nav(ui: &mut Simulator<'_>, id: &'static str) -> iced::Rectangle {
+	ui.find(iced::widget::Id::from(id))
+		.unwrap_or_else(|_| panic!("{id} is missing"))
+		.bounds()
 }
 
-/// Navigation is one row in three groups at every width, never overflowing:
-/// Do/Plan/Routines, then Life, then More/Settings.
+/// Whether Do and Plan are folded behind the calendar icon.
+fn folded(ui: &mut Simulator<'_>) -> bool {
+	ui.find(iced::widget::Id::from("nav-do-plan")).is_ok()
+}
+
+/// Navigation is one row in two groups at every width, never overflowing:
+/// Do and Plan on the left, then Life, More and Settings as icons on the
+/// right. When Do and Plan do not fit they fold behind a calendar icon.
 #[test]
-fn the_tabs_are_one_row_in_three_groups() {
-	let state = state();
-	for width in [180.0, 200.0, 260.0, 420.0, 640.0, 900.0] {
-		let mut ui = render(&state, Size::new(width, 500.0));
-		let labels = timeparagon::ui::tab_labels(width);
-		let mut bounds = Vec::new();
-		for (index, label) in labels.into_iter().enumerate() {
-			let found = match index {
-				4 => ui
-					.find(iced::widget::Id::from("nav-more"))
-					.unwrap()
-					.bounds(),
-				5 => ui
-					.find(iced::widget::Id::from("nav-settings"))
-					.unwrap()
-					.bounds(),
-				_ => ui.find(label).unwrap().bounds(),
+fn the_tabs_are_one_row_in_two_groups() {
+	use timeparagon::app::CalendarView;
+	for view in [
+		CalendarView::Day,
+		CalendarView::Week,
+		CalendarView::TwoWeek,
+		CalendarView::Month,
+		CalendarView::Schedule,
+	] {
+		for width in [180.0, 200.0, 260.0, 420.0, 640.0, 900.0] {
+			let mut state = state();
+			state.plan_view = view;
+			let plan = timeparagon::ui::plan_view_label(&state);
+			let mut ui = render(&state, Size::new(width, 500.0));
+			let mut bounds = if folded(&mut ui) {
+				assert!(ui.find("Do").is_err(), "{plan}: Do is doubled at {width}px");
+				assert!(ui.find(plan).is_err(), "{plan} is doubled at {width}px");
+				vec![nav(&mut ui, "nav-do-plan")]
+			} else {
+				vec![
+					ui.find("Do").unwrap().bounds(),
+					ui.find(plan).unwrap().bounds(),
+					nav(&mut ui, "plan-menu-toggle"),
+				]
 			};
+			let left = bounds.len();
+			for id in ["nav-life", "nav-more", "nav-settings"] {
+				bounds.push(nav(&mut ui, id));
+			}
+			for found in &bounds {
+				assert!(
+					found.x >= 0.0 && found.x + found.width <= width,
+					"{plan}: {found:?} extends beyond the window at {width}px"
+				);
+			}
+			for pair in bounds.windows(2) {
+				assert!(
+					pair[0].x + pair[0].width <= pair[1].x,
+					"{plan}: order at {width}px"
+				);
+				assert!(
+					(pair[0].center().y - pair[1].center().y).abs() < 1.0,
+					"{plan}: not one row at {width}px"
+				);
+			}
+			// A bit of margin above the menu, away from the window edge.
 			assert!(
-				found.x >= 0.0 && found.x + found.width <= width,
+				bounds[0].y > 0.0,
+				"the menu touches the top edge at {width}px"
+			);
+			// Space separates the groups more than it separates icons within one.
+			let gap = |a: usize, b: usize| bounds[b].x - (bounds[a].x + bounds[a].width);
+			assert!(
+				gap(left - 1, left) > gap(left, left + 1),
+				"{plan}: groups at {width}px"
+			);
+			// Wide windows always have room for Do and Plan.
+			assert!(left > 1 || width < 260.0, "{plan} folded at {width}px");
+		}
+	}
+	// The narrowest window has no room for the longest Plan label.
+	let mut state = state();
+	state.plan_view = CalendarView::Schedule;
+	assert!(folded(&mut render(&state, Size::new(180.0, 500.0))));
+}
+
+/// Narrowing the window never shrinks the navigation's text.
+#[test]
+fn the_tab_text_keeps_its_size() {
+	let mut state = state();
+	state.screen = timeparagon::app::Screen::Inbox;
+	for widths in [[180.0, 220.0, 258.0], [300.0, 420.0, 900.0]] {
+		let sizes: Vec<(f32, f32)> = widths
+			.iter()
+			.map(|&width| {
+				let mut ui = render(&state, Size::new(width, 500.0));
+				let plan = ui.find("Plan Day").unwrap().bounds();
+				let inbox = ui.find("Unfinished").unwrap().bounds();
+				(plan.width, inbox.width)
+			})
+			.collect();
+		assert!(
+			sizes.windows(2).all(|pair| pair[0] == pair[1]),
+			"text size changes across {widths:?}: {sizes:?}"
+		);
+	}
+}
+
+/// The calendar icon shows Do and Plan in a popup, and they work as they do
+/// in the bar.
+#[test]
+fn the_calendar_icon_shows_do_and_plan() -> Result<(), Error> {
+	use timeparagon::app::CalendarView;
+	let size = Size::new(180.0, 500.0);
+	let mut state = state();
+	state.plan_view = CalendarView::Schedule;
+	let mut ui = render(&state, size);
+	ui.click(iced::widget::Id::from("nav-do-plan"))?;
+	for message in ui.into_messages() {
+		let _ = app::update(&mut state, message);
+	}
+	assert_eq!(state.popup, Some(Popup::DoPlanMenu));
+
+	let mut ui = render(&state, size);
+	let icon = nav(&mut ui, "nav-do-plan");
+	let menu = nav(&mut ui, "do-plan-menu");
+	assert!(menu.y >= icon.y + icon.height, "the popup covers the bar");
+	assert!(menu.x >= 0.0 && menu.x + menu.width <= size.width);
+	ui.click("Plan Schedule")?;
+	for message in ui.into_messages() {
+		let _ = app::update(&mut state, message);
+	}
+	assert_eq!(state.view, CalendarView::Schedule);
+	assert_eq!(state.popup, None, "choosing Plan puts the popup away");
+
+	let _ = app::update(
+		&mut state,
+		Message::Navigation(NavigationMessage::DoPlanMenuToggled),
+	);
+	let mut ui = render(&state, size);
+	ui.click("Do")?;
+	for message in ui.into_messages() {
+		let _ = app::update(&mut state, message);
+	}
+	assert_eq!(state.screen, Screen::Calendar);
+	assert!(!state.range_view_active());
+	assert_eq!(state.popup, None, "choosing Do puts the popup away");
+
+	// The arrow opens the Plan menu in the popup's place.
+	let _ = app::update(
+		&mut state,
+		Message::Navigation(NavigationMessage::DoPlanMenuToggled),
+	);
+	let mut ui = render(&state, size);
+	ui.click(iced::widget::Id::from("plan-menu-toggle"))?;
+	for message in ui.into_messages() {
+		let _ = app::update(&mut state, message);
+	}
+	assert_eq!(state.popup, Some(Popup::ViewMenu));
+	Ok(())
+}
+
+/// When the window is too narrow for the planning submenus on one row, they
+/// take another rather than shrinking, and the menus open below them.
+#[test]
+fn the_planning_submenus_wrap_instead_of_shrinking() -> Result<(), Error> {
+	use timeparagon::app::CalendarView;
+	let mut state = state();
+	state.view = CalendarView::Week;
+	state.plan_view = CalendarView::Week;
+	for width in [180.0, 260.0, 420.0, 900.0] {
+		let mut ui = render(&state, Size::new(width, 500.0));
+		let labels = ["Schedule", "Unfinished", "Inbox", "Today", "Backlog"];
+		let tabs: Vec<_> = labels
+			.iter()
+			.map(|label| ui.find(*label).unwrap().bounds())
+			.collect();
+		for (label, tab) in labels.iter().zip(&tabs) {
+			assert!(
+				tab.x >= 0.0 && tab.x + tab.width <= width,
 				"{label} extends beyond the window at {width}px"
 			);
-			bounds.push(found);
 		}
-		// Order: Do, Plan Day, Routines, Life, More, Settings.
-		for pair in bounds.windows(2) {
-			assert!(pair[0].x + pair[0].width <= pair[1].x, "order at {width}px");
-			assert!(
-				(pair[0].center().y - pair[1].center().y).abs() < 1.0,
-				"not one row at {width}px"
-			);
-		}
-		// A bit of margin above the menu, away from the window edge.
-		assert!(
-			bounds[0].y > 0.0,
-			"the menu touches the top edge at {width}px"
-		);
-		// Space separates the groups more than it separates tabs within one.
-		let gap = |a: usize, b: usize| bounds[b].x - (bounds[a].x + bounds[a].width);
-		assert!(gap(2, 3) > gap(0, 1), "first group at {width}px");
-		assert!(gap(3, 4) > gap(0, 1), "middle group at {width}px");
-		assert!(gap(4, 5) < gap(3, 4), "right group at {width}px");
+		let bottom = tabs
+			.iter()
+			.map(|tab| tab.y + tab.height)
+			.fold(0.0, f32::max);
+		drop(ui);
+
+		state.popup = Some(Popup::MoreMenu);
+		let mut ui = render(&state, Size::new(width, 500.0));
+		let notepad = ui.find("Notepad")?.bounds();
+		assert!(notepad.y > bottom, "More covers the submenus at {width}px");
+		drop(ui);
+		state.popup = None;
 	}
+	Ok(())
 }
 
 /// Editors are drawn by a separate window; navigation keeps its normal width.
@@ -668,7 +809,7 @@ fn plan_day_has_task_tabs_and_more_opens_a_menu() -> Result<(), Error> {
 fn life_shows_its_pages_and_opens_an_area_in_a_side_panel() -> Result<(), Error> {
 	let mut state = state();
 	let mut ui = render(&state, Size::new(200.0, 500.0));
-	ui.click(tab_label(200.0, 3))?;
+	ui.click(iced::widget::Id::from("nav-life"))?;
 	let message = ui
 		.into_messages()
 		.find(|message| {
@@ -687,7 +828,7 @@ fn life_shows_its_pages_and_opens_an_area_in_a_side_panel() -> Result<(), Error>
 		assert!(ui.find(page).is_ok(), "{page:?} is missing from the pages");
 	}
 	assert!(ui.find("Actions").is_err());
-	assert!(ui.find(tab_label(200.0, 0)).is_ok());
+	assert!(ui.find("Do").is_ok());
 	drop(ui);
 
 	let _ = app::update(
@@ -736,6 +877,11 @@ fn the_settings_tab_opens_the_settings() -> Result<(), Error> {
 		let state = state();
 		let mut ui = render(&state, Size::new(width, 600.0));
 		assert!(ui.find("More").is_err(), "More is still text at {width}px");
+		assert!(ui.find("Life").is_err(), "Life is still text at {width}px");
+		assert!(
+			ui.find("Routines").is_err(),
+			"Routines is still in the bar at {width}px"
+		);
 		assert!(ui.find("Set").is_err(), "Set is still text at {width}px");
 		assert!(
 			ui.find("Settings").is_err(),
@@ -1082,9 +1228,8 @@ fn the_notepad_is_first_under_more() {
 		assert!(ui.find("Note").is_err(), "Note is still a tab at {width}px");
 		assert!(ui.find("Notepad").is_err(), "Notepad is a tab at {width}px");
 
-		let calendar = tab_label(width, 0);
 		assert!(
-			ui.find(calendar).is_ok(),
+			ui.find("Do").is_ok(),
 			"the way back is missing at {width}px"
 		);
 		drop(ui);
@@ -1100,7 +1245,7 @@ fn the_notepad_is_first_under_more() {
 }
 
 /// More reads top to bottom as Notepad, Habits and Notes, People, Travel and
-/// Brain dump, then Alarms, and every tile stays inside the window.
+/// Brain dump, then Routines and Alarms, and every tile stays inside the window.
 #[test]
 fn the_more_menu_is_laid_out_in_rows_of_tiles() {
 	for width in WIDTHS {
@@ -1113,7 +1258,7 @@ fn the_more_menu_is_laid_out_in_rows_of_tiles() {
 			vec![at("Habits"), at("Notes")],
 			vec![at("People")],
 			vec![at("Travel"), at("Brain dump")],
-			vec![at("Alarms")],
+			vec![at("Routines"), at("Alarms")],
 		];
 		for pair in rows.windows(2) {
 			let bottom = pair[0].iter().map(|b| b.y + b.height).fold(0.0, f32::max);
@@ -1187,7 +1332,7 @@ fn the_notepad_screen_is_usable_at_two_hundred_pixels() {
 
 	let mut ui = render(&state, Size::new(200.0, 600.0));
 
-	for label in ["Notepad", tab_label(200.0, 0), "A-", "A+", "100%"] {
+	for label in ["Notepad", "Do", "A-", "A+", "100%"] {
 		assert!(ui.find(label).is_ok(), "{label:?} is missing at 200px");
 	}
 }

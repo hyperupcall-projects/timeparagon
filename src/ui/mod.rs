@@ -414,6 +414,10 @@ pub fn view(state: &State) -> Element<'_, Message> {
 		let mut layers = vec![base.into()];
 		match state.popup {
 			Some(Popup::ViewMenu) => layers.push(view_menu(state, &nav_metrics)),
+			// The bar may have widened enough to show Do and Plan itself.
+			Some(Popup::DoPlanMenu) if nav_fit(state, &nav_metrics).folded => {
+				layers.push(do_plan_menu(state, &nav_metrics));
+			}
 			Some(Popup::MoreMenu) => layers.push(more_menu::view(state, &nav_metrics)),
 			_ => {}
 		}
@@ -603,15 +607,6 @@ fn drag_ghost<'a>(
 		.into()
 }
 
-/// The six main navigation items.
-const TAB_COUNT: usize = 6;
-const TAB_LABELS: [&str; TAB_COUNT] = ["Do", "Plan Day", "Routines", "Life", "More", "Settings"];
-const TAB_SHORT_LABELS: [&str; TAB_COUNT] = ["Do", "Plan Day", "Rtn", "Life", "More", "Settings"];
-const TAB_WIDEST_LABELS: [&str; TAB_COUNT] =
-	["Do", "Plan 2 Weeks", "Routines", "Life", "More", "Settings"];
-const TAB_WIDEST_SHORT_LABELS: [&str; TAB_COUNT] =
-	["Do", "Plan 2 Weeks", "Rtn", "Life", "More", "Settings"];
-
 /// Height of the bottom add-task button.
 const PANEL_ACTION_HEIGHT: f32 = 22.0;
 /// The part of the footer the add-task button takes; what the app is doing
@@ -638,13 +633,14 @@ pub fn plan_view_label(state: &State) -> &'static str {
 pub const TASKS_LABELS: [&str; 4] = ["Unfinished", "Inbox", "Today", "Backlog"];
 
 /// The destinations kept inside the More menu.
-pub const MORE_LABELS: [&str; 7] = [
+pub const MORE_LABELS: [&str; 8] = [
 	"Notepad",
 	"Habits",
 	"Notes",
 	"People",
 	"Travel",
 	"Brain dump",
+	"Routines",
 	"Alarms",
 ];
 
@@ -653,87 +649,144 @@ const TAB_TOP_MARGIN: f32 = 6.0;
 /// The gap between the top menu and the planning submenus.
 const TASKS_ROW_GAP: f32 = 2.0;
 
-/// Average glyph width as a fraction of the font size, with some slack.
-const TAB_GLYPH_WIDTH: f32 = 0.6;
-/// The smallest tab text that is still worth showing in full.
-const TAB_FULL_MIN_SIZE: f32 = 9.0;
-const TAB_MIN_SIZE: f32 = 7.0;
+/// The bar's left and right margins when it is short of room.
+const TAB_TIGHT_MARGIN: f32 = 2.0;
+/// The least space between the left and right groups of the bar.
+const TAB_GROUP_GAP: f32 = 8.0;
 
-/// How the tab row is laid out at a given width.
+/// How the navigation fits its width. Text keeps its size: the margins
+/// narrow first, then Do and Plan fold behind a calendar icon, and the
+/// planning submenus take more rows.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TabFit {
-	pub short: bool,
-	pub size: f32,
-	pad: f32,
-	gap: f32,
+struct NavFit {
+	folded: bool,
+	/// Left and right margins, shared by the bar and its submenus so they
+	/// line up.
+	margin: f32,
 }
 
-/// Destination names at `width`; More and Settings are shown as icons.
-pub fn tab_labels(width: f32) -> [&'static str; TAB_COUNT] {
-	if tab_fit(Metrics::of(Size::new(width, 0.0))).short {
-		TAB_SHORT_LABELS
-	} else {
-		TAB_LABELS
+fn nav_fit(state: &State, metrics: &Metrics) -> NavFit {
+	let side = tab_height(metrics);
+	// Life, More and Settings.
+	let right = 3.0 * side + 2.0 * tab_gap(metrics);
+	let bar_fits = |folded: bool, margin: f32| {
+		let left = if folded {
+			side
+		} else {
+			do_plan_width(state, metrics)
+		};
+		left + TAB_GROUP_GAP + right + 2.0 * margin <= metrics.size.width
+	};
+	let folded = !bar_fits(false, TAB_TIGHT_MARGIN);
+	let roomy = bar_fits(folded, metrics.padding)
+		&& subtab_rows(&subtab_labels(state), metrics, metrics.padding).len() <= 1;
+	NavFit {
+		folded,
+		margin: if roomy {
+			metrics.padding
+		} else {
+			TAB_TIGHT_MARGIN
+		},
 	}
 }
 
-/// Choose the longest labels and largest text that fit on a single row.
-fn tab_fit(metrics: Metrics) -> TabFit {
-	let available = (metrics.size.width - metrics.padding * 2.0).max(1.0);
-	let max_size = metrics.label();
-	let (pad, gap) = if metrics.size.width < 300.0 {
-		(1.0, 1.0)
+/// Space to each side of a tab's label.
+fn tab_pad(metrics: &Metrics) -> f32 {
+	if metrics.breakpoint.is_compact() {
+		4.0
 	} else {
-		(5.0, metrics.spacing.min(6.0))
-	};
-	let size_for = |labels: &[&str; TAB_COUNT]| {
-		let chars: usize = labels
-			.iter()
-			.take(4)
-			.map(|label| label.chars().count())
-			.sum::<usize>();
-		// Four text tabs, two square icon buttons, and the gaps between groups.
-		let fixed =
-			10.0 * pad + 2.0 * tab_height(&metrics) + 3.0 * gap + 4.0 * (gap * 2.0).max(4.0) + 7.0;
-		((available - fixed) / ((chars + 1) as f32 * TAB_GLYPH_WIDTH)).min(max_size)
-	};
-	let full = size_for(&TAB_WIDEST_LABELS);
-	if full >= TAB_FULL_MIN_SIZE.min(max_size) {
-		TabFit {
-			short: false,
-			size: full,
-			pad,
-			gap,
-		}
-	} else {
-		TabFit {
-			short: true,
-			size: size_for(&TAB_WIDEST_SHORT_LABELS).max(TAB_MIN_SIZE),
-			pad,
-			gap,
-		}
+		6.0
 	}
 }
 
-/// A single row of navigation in three groups with space between them:
-/// Do/Plan/Routines, then Life, then More/Settings.
-/// Labels shrink (and shorten, when very narrow) rather than wrapping.
+/// Space between neighbouring tabs.
+fn tab_gap(metrics: &Metrics) -> f32 {
+	if metrics.breakpoint.is_compact() {
+		2.0
+	} else {
+		4.0
+	}
+}
+
+/// The width a tab labelled `label` takes.
+fn tab_width(label: &str, metrics: &Metrics) -> f32 {
+	calendar::text_width_of(label, metrics.label()) + 2.0 * tab_pad(metrics)
+}
+
+/// The width Do and Plan take side by side.
+fn do_plan_width(state: &State, metrics: &Metrics) -> f32 {
+	// The arrow may come from a fallback font, which the measurement does not
+	// look in, so it gets at least a generous glyph's width.
+	let size = metrics.label();
+	let arrow = calendar::text_width_of("▾", size).max(size * 0.6) + 2.0 * (tab_pad(metrics) + 2.0);
+	tab_width(calendar_view_label(state), metrics)
+		+ tab_gap(metrics)
+		+ tab_width(plan_view_label(state), metrics)
+		+ 1.0 + arrow
+}
+
+fn is_task_screen(screen: Screen) -> bool {
+	matches!(
+		screen,
+		Screen::Overdue | Screen::Inbox | Screen::Today | Screen::Triaged | Screen::Backlog
+	)
+}
+
+/// The planning submenus on show beneath the bar, if any.
+fn plan_subtabs(state: &State) -> Vec<(&'static str, PlanTab, Screen)> {
+	let planning = state.range_view_active();
+	if !planning && !is_task_screen(state.screen) {
+		return Vec::new();
+	}
+	[
+		("Schedule", PlanTab::Schedule, Screen::Calendar),
+		("Unfinished", PlanTab::Overdue, Screen::Overdue),
+		("Inbox", PlanTab::Inbox, Screen::Inbox),
+		("Today", PlanTab::Today, Screen::Today),
+		("Backlog", PlanTab::Backlog, Screen::Backlog),
+	]
+	.into_iter()
+	.filter(|(_, target, _)| planning || *target != PlanTab::Schedule)
+	.collect()
+}
+
+fn subtab_labels(state: &State) -> Vec<&'static str> {
+	plan_subtabs(state)
+		.into_iter()
+		.map(|(label, _, _)| label)
+		.collect()
+}
+
+/// How many submenus go on each row, so none runs past the window.
+fn subtab_rows(labels: &[&str], metrics: &Metrics, margin: f32) -> Vec<usize> {
+	let available = metrics.size.width - 2.0 * margin;
+	let gap = tab_gap(metrics);
+	let mut rows: Vec<usize> = Vec::new();
+	let mut used = f32::INFINITY;
+	for label in labels {
+		let width = tab_width(label, metrics);
+		match rows.last_mut() {
+			Some(count) if used + gap + width <= available => {
+				*count += 1;
+				used += gap + width;
+			}
+			_ => {
+				rows.push(1);
+				used = width;
+			}
+		}
+	}
+	rows
+}
+
+/// A single row of navigation: Do and Plan on the left, then Life, More and
+/// Settings as icons on the right. Text never shrinks; when Do and Plan do not
+/// fit they fold behind a calendar icon that shows them in a popup.
 ///
 /// Planning destinations show their submenus beneath the main row.
 pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
-	let fit = tab_fit(*metrics);
-	let mut labels = if fit.short {
-		TAB_SHORT_LABELS
-	} else {
-		TAB_LABELS
-	};
-	labels[1] = plan_view_label(state);
-	let planning = state.range_view_active();
-	let tasks_open = !planning
-		&& matches!(
-			state.screen,
-			Screen::Overdue | Screen::Inbox | Screen::Today | Screen::Triaged | Screen::Backlog
-		);
+	let fit = nav_fit(state, metrics);
+	let gap = tab_gap(metrics);
 	let more_active = state.popup == Some(Popup::MoreMenu)
 		|| matches!(
 			state.screen,
@@ -743,56 +796,33 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 				| Screen::Notes
 				| Screen::People
 				| Screen::BrainDump
+				| Screen::Routines
 				| Screen::Alarms
 		);
 
-	let view = tab(
-		labels[0],
-		!planning && state.screen == Screen::Calendar,
-		Message::Navigation(NavigationMessage::ScreenSelected(Screen::Calendar)),
-		metrics,
-		fit,
-	);
-	let plan_active = state.popup == Some(Popup::ViewMenu) || planning || tasks_open;
-	let plan = container(
-		row![
-			button(
-				text(labels[1])
-					.size(fit.size)
-					.wrapping(text::Wrapping::None)
-					.center()
-			)
-			.height(tab_height(metrics))
-			.padding(Padding::from([0.0, fit.pad]))
-			.on_press(plan_view_message(state.plan_view))
-			.style(view_half_style(plan_active)),
-			iced::widget::rule::vertical(1),
-			container(
-				button(text("▾").size(fit.size).center())
-					.height(tab_height(metrics))
-					.padding(Padding::from([0.0, fit.pad + 2.0]))
-					.on_press(Message::Navigation(NavigationMessage::ViewMenuToggled))
-					.style(view_half_style(plan_active)),
-			)
-			.id("plan-menu-toggle"),
-		]
-		.height(tab_height(metrics))
-		.align_y(Center),
-	)
-	.style(view_button_style(plan_active));
-	let routines = tab(
-		labels[2],
-		state.screen == Screen::Routines,
-		Message::Navigation(NavigationMessage::ScreenSelected(Screen::Routines)),
-		metrics,
-		fit,
-	);
-	let life = tab(
-		labels[3],
+	let left: Element<'a, Message> = if fit.folded {
+		let planning = state.range_view_active();
+		let active = state.popup == Some(Popup::DoPlanMenu)
+			|| (!planning && state.screen == Screen::Calendar)
+			|| plan_active(state);
+		icon_tab(
+			nav_icon::Icon::Calendar,
+			"Do and Plan",
+			"nav-do-plan",
+			active,
+			Message::Navigation(NavigationMessage::DoPlanMenuToggled),
+			metrics,
+		)
+	} else {
+		do_and_plan(state, metrics)
+	};
+	let life = icon_tab(
+		nav_icon::Icon::Tree,
+		"Life",
+		"nav-life",
 		state.screen == Screen::Life,
 		Message::Navigation(NavigationMessage::ScreenSelected(Screen::Life)),
 		metrics,
-		fit,
 	);
 	let more = icon_tab(
 		nav_icon::Icon::Menu,
@@ -811,21 +841,17 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 		metrics,
 	);
 
-	let group_gap = (fit.gap * 2.0).max(4.0);
 	let bar = container(
 		row![
-			row![view, plan, routines].spacing(fit.gap),
-			Space::new().width(Fill),
-			life,
-			Space::new().width(Fill),
-			row![more, settings].spacing(fit.gap),
+			container(left).width(Fill),
+			row![life, more, settings].spacing(gap),
 		]
-		.spacing(group_gap)
+		.spacing(TAB_GROUP_GAP)
 		.align_y(Center),
 	)
 	.padding(Padding {
-		left: metrics.padding,
-		right: metrics.padding,
+		left: fit.margin,
+		right: fit.margin,
 		top: TAB_TOP_MARGIN,
 		bottom: 0.0,
 	})
@@ -848,36 +874,34 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 			})
 			.into()
 	};
-	if !tasks_open && !planning {
+	let subtabs = plan_subtabs(state);
+	if subtabs.is_empty() {
 		return bar_card(bar.into());
 	}
 
-	let subtabs = row([
-		("Schedule", PlanTab::Schedule, Screen::Calendar),
-		("Unfinished", PlanTab::Overdue, Screen::Overdue),
-		("Inbox", PlanTab::Inbox, Screen::Inbox),
-		("Today", PlanTab::Today, Screen::Today),
-		("Backlog", PlanTab::Backlog, Screen::Backlog),
-	]
-	.into_iter()
-	.filter(|(_, target, _)| planning || *target != PlanTab::Schedule)
-	.map(|(label, target, screen)| {
-		tab(
-			label,
-			state.screen == screen,
-			Message::Navigation(NavigationMessage::PlanTabSelected(target)),
-			metrics,
-			fit,
-		)
-	}))
-	.spacing(fit.gap);
+	let labels: Vec<&str> = subtabs.iter().map(|(label, _, _)| *label).collect();
+	let mut rows = column![].spacing(TASKS_ROW_GAP);
+	let mut items = subtabs.into_iter();
+	for count in subtab_rows(&labels, metrics, fit.margin) {
+		rows = rows.push(
+			row(items.by_ref().take(count).map(|(label, target, screen)| {
+				tab(
+					label,
+					state.screen == screen,
+					Message::Navigation(NavigationMessage::PlanTabSelected(target)),
+					metrics,
+				)
+			}))
+			.spacing(gap),
+		);
+	}
 
 	bar_card(
 		column![
 			bar,
-			container(subtabs).id("plan-tabs").padding(Padding {
-				left: metrics.padding,
-				right: metrics.padding,
+			container(rows).id("plan-tabs").padding(Padding {
+				left: fit.margin,
+				right: fit.margin,
 				top: TASKS_ROW_GAP,
 				bottom: 0.0,
 			}),
@@ -887,18 +911,64 @@ pub(crate) fn tabs<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Messa
 	)
 }
 
+/// Whether Plan is lit: its menu is open, or a planning view is on show.
+fn plan_active(state: &State) -> bool {
+	state.popup == Some(Popup::ViewMenu)
+		|| state.range_view_active()
+		|| is_task_screen(state.screen)
+}
+
+/// Do, then Plan with the arrow that opens its menu.
+fn do_and_plan<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+	let do_tab = tab(
+		calendar_view_label(state),
+		!state.range_view_active() && state.screen == Screen::Calendar,
+		Message::Navigation(NavigationMessage::ScreenSelected(Screen::Calendar)),
+		metrics,
+	);
+	let active = plan_active(state);
+	let size = metrics.label();
+	let pad = tab_pad(metrics);
+	let plan = container(
+		row![
+			button(
+				text(plan_view_label(state))
+					.size(size)
+					.wrapping(text::Wrapping::None)
+					.center()
+			)
+			.height(tab_height(metrics))
+			.padding(Padding::from([0.0, pad]))
+			.on_press(plan_view_message(state.plan_view))
+			.style(view_half_style(active)),
+			iced::widget::rule::vertical(1),
+			container(
+				button(text("▾").size(size).center())
+					.height(tab_height(metrics))
+					.padding(Padding::from([0.0, pad + 2.0]))
+					.on_press(Message::Navigation(NavigationMessage::ViewMenuToggled))
+					.style(view_half_style(active)),
+			)
+			.id("plan-menu-toggle"),
+		]
+		.height(tab_height(metrics))
+		.align_y(Center),
+	)
+	.style(view_button_style(active));
+	row![do_tab, plan]
+		.spacing(tab_gap(metrics))
+		.align_y(Center)
+		.into()
+}
+
 /// The height `tabs` takes, including planning submenus when shown.
 fn tabs_height(state: &State, metrics: &Metrics) -> f32 {
-	let tasks_row = if state.range_view_active()
-		|| matches!(
-			state.screen,
-			Screen::Overdue | Screen::Inbox | Screen::Today | Screen::Triaged | Screen::Backlog
-		) {
-		TASKS_ROW_GAP + tab_height(metrics)
-	} else {
-		0.0
-	};
-	TAB_TOP_MARGIN + tab_height(metrics) + tasks_row + TAB_TOP_MARGIN
+	let margin = nav_fit(state, metrics).margin;
+	let rows = subtab_rows(&subtab_labels(state), metrics, margin).len() as f32;
+	TAB_TOP_MARGIN
+		+ tab_height(metrics)
+		+ rows * (TASKS_ROW_GAP + tab_height(metrics))
+		+ TAB_TOP_MARGIN
 }
 
 fn tab_height(metrics: &Metrics) -> f32 {
@@ -945,16 +1015,15 @@ fn tab<'a>(
 	active: bool,
 	message: Message,
 	metrics: &Metrics,
-	fit: TabFit,
 ) -> Element<'a, Message> {
 	button(
 		text(label)
-			.size(fit.size)
+			.size(metrics.label())
 			.wrapping(text::Wrapping::None)
 			.center(),
 	)
 	.height(tab_height(metrics))
-	.padding(Padding::from([0.0, fit.pad]))
+	.padding(Padding::from([0.0, tab_pad(metrics)]))
 	.on_press(message)
 	.style(controls::nav(active))
 	.into()
@@ -1050,20 +1119,46 @@ fn view_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 		.padding(6.0)
 		.style(crate::ui::controls::surface);
 
-	let aligned = column![
+	let layers: Vec<Element<'a, Message>> = vec![
+		dismiss.into(),
+		below_left_of_tabs(state, metrics, card.into()),
+	];
+	iced::widget::stack(layers).into()
+}
+
+/// Do and Plan, shown from the calendar icon when the bar has no room for them.
+fn do_plan_menu<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
+	let dismiss = mouse_area(container(Space::new()).width(Fill).height(Fill))
+		.on_press(Message::Navigation(NavigationMessage::DoPlanMenuToggled));
+	let card = container(do_and_plan(state, metrics))
+		.id("do-plan-menu")
+		.padding(6.0)
+		.style(crate::ui::controls::surface);
+	let layers: Vec<Element<'a, Message>> = vec![
+		dismiss.into(),
+		below_left_of_tabs(state, metrics, card.into()),
+	];
+	iced::widget::stack(layers).into()
+}
+
+/// Places a popup card under the left end of the navigation.
+fn below_left_of_tabs<'a>(
+	state: &State,
+	metrics: &Metrics,
+	card: Element<'a, Message>,
+) -> Element<'a, Message> {
+	column![
 		Space::new().height(tabs_height(state, metrics) + metrics.spacing),
 		container(row![iced::widget::opaque(card), Space::new().width(Fill)])
 			.padding(Padding {
-				left: metrics.padding,
+				left: nav_fit(state, metrics).margin,
 				..Default::default()
 			})
 			.width(Fill),
 	]
 	.width(Fill)
-	.align_x(Alignment::Start);
-
-	let layers: Vec<Element<'a, Message>> = vec![dismiss.into(), aligned.into()];
-	iced::widget::stack(layers).into()
+	.align_x(Alignment::Start)
+	.into()
 }
 
 /// The foot of the panel's left side: what is happening in the background,

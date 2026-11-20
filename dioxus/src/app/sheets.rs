@@ -204,6 +204,8 @@ pub(super) fn AuxiliarySheets() -> Element {
 						Item::BrainDump => show_scratch.set(Some(scratch::Page::BrainDump)),
 						Item::Alarms => show_alarms.set(true),
 						Item::Logs => show_log.set(true),
+						// The phone's More menu has no routines tile.
+						Item::Routines => {}
 					}
 				},
 			}

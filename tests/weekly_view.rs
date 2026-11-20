@@ -89,7 +89,27 @@ fn render_main(state: &State, size: Size) -> Simulator<'_, Message> {
 	)
 }
 
+/// When the window is too narrow for Do and Plan, opens the calendar icon's
+/// popup that holds them.
+fn show_do_and_plan(state: &mut State, size: Size) -> Result<(), Error> {
+	if state.popup == Some(Popup::DoPlanMenu) {
+		return Ok(());
+	}
+	let mut ui = render_main(state, size);
+	if ui.find(iced::widget::Id::new("nav-do-plan")).is_err() {
+		return Ok(());
+	}
+	ui.click(iced::widget::Id::new("nav-do-plan"))?;
+	let messages: Vec<_> = ui.into_messages().collect();
+	for message in messages {
+		let _ = app::update(state, message);
+	}
+	assert_eq!(state.popup, Some(Popup::DoPlanMenu));
+	Ok(())
+}
+
 fn open_plan(state: &mut State, size: Size) -> Result<(), Error> {
+	show_do_and_plan(state, size)?;
 	let mut ui = render_main(state, size);
 	ui.click(iced::widget::Id::new("plan-menu-toggle"))?;
 	let messages: Vec<_> = ui.into_messages().collect();
@@ -506,6 +526,7 @@ fn plan_split_button_remembers_and_opens_the_selected_period() -> Result<(), Err
 				&mut state,
 				Message::Navigation(NavigationMessage::ScreenSelected(Screen::Life)),
 			);
+			show_do_and_plan(&mut state, size)?;
 			let mut ui = render_main(&state, size);
 			let main = ui.find(label)?.bounds();
 			let arrow = ui.find(iced::widget::Id::new("plan-menu-toggle"))?.bounds();
@@ -524,7 +545,8 @@ fn plan_split_button_remembers_and_opens_the_selected_period() -> Result<(), Err
 					Screen::Calendar
 				}
 			);
-			assert_ne!(state.popup, Some(Popup::ViewMenu));
+			// Including the popup Plan was chosen from in a narrow window.
+			assert_eq!(state.popup, None);
 		}
 	}
 	Ok(())
@@ -592,6 +614,7 @@ fn plan_menu_selects_overviews_from_every_screen() -> Result<(), Error> {
 				assert_eq!(state.screen, expected_screen);
 				assert_eq!(state.view, view);
 				assert_ne!(state.popup, Some(Popup::ViewMenu));
+				show_do_and_plan(&mut state, size)?;
 				let mut panel = render_main(&state, size);
 				let selected = panel
 					.find(timeparagon::ui::plan_view_label(&state))?

@@ -331,6 +331,9 @@ impl Flash {
 pub enum Popup {
 	/// The Plan menu under the left-hand navigation group.
 	ViewMenu,
+	/// Do and Plan, shown from the calendar icon when the navigation is too
+	/// narrow to show them itself.
+	DoPlanMenu,
 	/// The More menu under the right-hand navigation group.
 	MoreMenu,
 	/// The Calendars tab of the calendar header's View sheet.
@@ -533,6 +536,8 @@ pub enum NavigationMessage {
 	PlanTabSelected(PlanTab),
 	PlanDaySelected,
 	ViewMenuToggled,
+	/// The calendar icon standing in for Do and Plan was pressed.
+	DoPlanMenuToggled,
 	MoreMenuToggled,
 	/// The log of background work, opened from the foot of the panel.
 	ActivityLogToggled,
@@ -1061,6 +1066,12 @@ impl State {
 		if self.popup == Some(popup) {
 			self.popup = None;
 		}
+	}
+
+	/// Closes the Plan menu, and the Do and Plan popup it can be chosen from.
+	pub fn close_plan_menus(&mut self) {
+		self.close_popup(Popup::ViewMenu);
+		self.close_popup(Popup::DoPlanMenu);
 	}
 
 	/// Closes the calendar's popup, leaving the navigation menus alone.

@@ -27,7 +27,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 			} else {
 				super::on_navigation::select_screen(state, Screen::Calendar)
 			};
-			state.close_popup(Popup::ViewMenu);
+			state.close_plan_menus();
 			state.habits.calendar_habit = None;
 			let was_weekly = state.range_view_active();
 			let view = if weekly {
@@ -60,7 +60,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 		}
 		CalendarMessage::CalendarMonthViewSelected => {
 			let navigation = planning_sidebar(state);
-			state.close_popup(Popup::ViewMenu);
+			state.close_plan_menus();
 			let was_wide = state.range_view_active();
 			let changed = !state.monthly();
 			state.week_hover = None;
@@ -74,7 +74,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 		}
 		CalendarMessage::CalendarScheduleViewSelected => {
 			let navigation = planning_sidebar(state);
-			state.close_popup(Popup::ViewMenu);
+			state.close_plan_menus();
 			state.habits.calendar_habit = None;
 			let was_wide = state.range_view_active();
 			if state.view != CalendarView::Schedule {
@@ -93,7 +93,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 		}
 		CalendarMessage::CalendarTwoWeekViewSelected => {
 			let navigation = planning_sidebar(state);
-			state.close_popup(Popup::ViewMenu);
+			state.close_plan_menus();
 			state.habits.calendar_habit = None;
 			let was_wide = state.range_view_active();
 			let changed = !state.two_weekly();

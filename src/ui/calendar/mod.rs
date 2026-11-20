@@ -22,6 +22,7 @@ mod two_week;
 mod week;
 mod zoom_wheel;
 
+pub(crate) use block_text::text_width_of;
 use block_text::*;
 pub use day::*;
 use day_canvas::*;

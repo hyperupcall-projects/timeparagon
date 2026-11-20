@@ -255,7 +255,7 @@ pub(super) fn line_height(size: f32) -> f32 {
 }
 
 /// The width a string takes on a single line.
-pub(super) fn text_width_of(content: &str, size: f32) -> f32 {
+pub(crate) fn text_width_of(content: &str, size: f32) -> f32 {
 	use iced::advanced::text::Paragraph as _;
 
 	paragraph(content, size, MEASURE_WIDTH).min_width()

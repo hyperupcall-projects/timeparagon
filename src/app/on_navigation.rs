@@ -42,6 +42,10 @@ pub(super) fn update(state: &mut State, message: NavigationMessage) -> Task<Mess
 			state.toggle_popup(Popup::ViewMenu);
 			Task::none()
 		}
+		NavigationMessage::DoPlanMenuToggled => {
+			state.toggle_popup(Popup::DoPlanMenu);
+			Task::none()
+		}
 		NavigationMessage::MoreMenuToggled => {
 			if state.toggle_popup(Popup::MoreMenu) {
 				state.activity.open = false;
@@ -51,7 +55,7 @@ pub(super) fn update(state: &mut State, message: NavigationMessage) -> Task<Mess
 		NavigationMessage::ActivityLogToggled => {
 			state.activity.open = !state.activity.open;
 			if state.activity.open {
-				state.close_popup(Popup::ViewMenu);
+				state.close_plan_menus();
 				state.close_popup(Popup::MoreMenu);
 			}
 			Task::none()

@@ -2964,6 +2964,10 @@ fn opening_a_popup_replaces_the_one_on_show() {
 			Popup::ViewMenu,
 		),
 		(
+			Message::Navigation(NavigationMessage::DoPlanMenuToggled),
+			Popup::DoPlanMenu,
+		),
+		(
 			Message::Navigation(NavigationMessage::MoreMenuToggled),
 			Popup::MoreMenu,
 		),
@@ -2993,6 +2997,7 @@ fn opening_a_popup_replaces_the_one_on_show() {
 fn escape_puts_away_the_popup_on_show() {
 	for popup in [
 		Popup::ViewMenu,
+		Popup::DoPlanMenu,
 		Popup::MoreMenu,
 		Popup::CalendarMenu,
 		Popup::CalendarSearch,
@@ -3073,8 +3078,8 @@ fn the_log_and_the_navigation_menus_keep_their_own_rules() {
 	let mut state = State::blank();
 	let logs = || Message::Navigation(NavigationMessage::ActivityLogToggled);
 
-	// The log puts both menus away.
-	for popup in [Popup::ViewMenu, Popup::MoreMenu] {
+	// The log puts the menus away.
+	for popup in [Popup::ViewMenu, Popup::DoPlanMenu, Popup::MoreMenu] {
 		state.popup = Some(popup);
 		state.activity.open = false;
 		let _ = update(&mut state, logs());

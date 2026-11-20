@@ -14,6 +14,7 @@ pub enum Item {
 	People,
 	Travel,
 	BrainDump,
+	Routines,
 	Alarms,
 	Logs,
 }
@@ -25,11 +26,19 @@ pub const ROWS: [&[Item]; 5] = [
 	&[Item::Habits, Item::Notes],
 	&[Item::People],
 	&[Item::Travel, Item::BrainDump],
-	&[Item::Alarms],
+	&[Item::Routines, Item::Alarms],
 ];
 
-/// The phone's tiles: the desktop's, then the logs.
-pub const PHONE_ROWS: [&[Item]; 6] = [ROWS[0], ROWS[1], ROWS[2], ROWS[3], ROWS[4], &[Item::Logs]];
+/// The phone's tiles: the desktop's without routines, which the phone does
+/// not have, then the logs.
+pub const PHONE_ROWS: [&[Item]; 6] = [
+	ROWS[0],
+	ROWS[1],
+	ROWS[2],
+	ROWS[3],
+	&[Item::Alarms],
+	&[Item::Logs],
+];
 
 /// One stroke of a picture, on a 24-unit square with y pointing down.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -69,6 +78,7 @@ impl Item {
 			Self::People => "People",
 			Self::Travel => "Travel",
 			Self::BrainDump => "Brain dump",
+			Self::Routines => "Routines",
 			Self::Alarms => "Alarms",
 			Self::Logs => "Logs",
 		}
@@ -83,6 +93,7 @@ impl Item {
 			Self::People => "people",
 			Self::Travel => "travel",
 			Self::BrainDump => "brain-dump",
+			Self::Routines => "routines",
 			Self::Alarms => "alarms",
 			Self::Logs => "logs",
 		}
@@ -97,6 +108,7 @@ impl Item {
 			Self::People => (0xB8_32_80, 0xF6_87_B3),
 			Self::Travel => (0x0F_76_6E, 0x4F_D1_C5),
 			Self::BrainDump => (0x6B_46_C1, 0xB7_94_F4),
+			Self::Routines => (0x43_38_CA, 0x81_8C_F8),
 			Self::Alarms => (0xC5_30_30, 0xFC_81_81),
 			Self::Logs => (0x4A_55_68, 0xA0_AE_C0),
 		};
@@ -113,6 +125,7 @@ impl Item {
 			Self::People => PEOPLE,
 			Self::Travel => TRAVEL,
 			Self::BrainDump => BRAIN_DUMP,
+			Self::Routines => ROUTINES,
 			Self::Alarms => ALARMS,
 			Self::Logs => LOGS,
 		}
@@ -241,6 +254,18 @@ const BRAIN_DUMP: &[Shape] = &[
 	},
 ];
 
+/// An arrow coming back around to where it started.
+const ROUTINES: &[Shape] = &[
+	Shape::Arc {
+		x: 12.0,
+		y: 12.0,
+		radius: 8.0,
+		from: 60.0,
+		to: 330.0,
+	},
+	Shape::Lines(&[(15.47, 6.0), (18.93, 8.0), (18.93, 4.0)]),
+];
+
 /// An alarm clock with two bells and two feet.
 const ALARMS: &[Shape] = &[
 	Shape::Circle {
@@ -304,9 +329,28 @@ mod tests {
 	}
 
 	#[test]
+	fn only_the_desktop_has_routines() {
+		let items: Vec<Item> = ROWS.iter().flat_map(|row| row.iter().copied()).collect();
+		assert_eq!(
+			items,
+			[
+				Item::Notepad,
+				Item::Habits,
+				Item::Notes,
+				Item::People,
+				Item::Travel,
+				Item::BrainDump,
+				Item::Routines,
+				Item::Alarms,
+			]
+		);
+		assert!(!PHONE_ROWS.iter().any(|row| row.contains(&Item::Routines)));
+	}
+
+	#[test]
 	fn every_picture_stays_on_its_square() {
 		let on_square = |(x, y): (f32, f32)| (0.0..=24.0).contains(&x) && (0.0..=24.0).contains(&y);
-		for item in PHONE_ROWS.iter().flat_map(|row| row.iter()) {
+		for item in ROWS.iter().chain(&PHONE_ROWS).flat_map(|row| row.iter()) {
 			assert!(!item.picture().is_empty(), "{item:?}");
 			for shape in item.picture() {
 				let inside = match *shape {

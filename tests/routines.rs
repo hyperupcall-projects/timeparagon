@@ -1,4 +1,4 @@
-//! The Routines screen, rendered headlessly: the tab reaches it, the overview
+//! The Routines screen, rendered headlessly: More reaches it, the overview
 //! lists every routine, and every step of every routine draws at the widths
 //! the panel is used at.
 
@@ -27,8 +27,14 @@ fn routines() -> State {
 }
 
 #[test]
-fn the_routines_tab_opens_the_overview() -> Result<(), Error> {
-	let state = State::blank();
+fn the_routines_item_in_more_opens_the_overview() -> Result<(), Error> {
+	let mut state = State::blank();
+	let mut ui = render(&state, Size::new(420.0, 700.0));
+	assert!(ui.find("Routines").is_err(), "Routines is still in the bar");
+	let _ = ui.click(iced::widget::Id::new("nav-more"))?;
+	for message in ui.into_messages() {
+		let _ = app::update(&mut state, message);
+	}
 	let mut ui = render(&state, Size::new(420.0, 700.0));
 	let _ = ui.click("Routines")?;
 	assert!(ui.into_messages().any(|message| matches!(
