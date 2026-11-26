@@ -3344,3 +3344,24 @@ fn an_editors_habit_follows_the_save_scope() {
 		);
 	}
 }
+
+#[test]
+fn the_sidebar_ipc_wake_hands_over_its_messages_once() {
+	let (wake, wakes) = iced::futures::channel::mpsc::unbounded();
+	let ipc = IpcWake::new(wakes);
+	wake.unbounded_send(Message::System(SystemMessage::PanelCommandPolled))
+		.unwrap();
+	wake.unbounded_send(Message::System(SystemMessage::InboxAddedPolled))
+		.unwrap();
+	drop(wake);
+	let messages: Vec<Message> = block_on(ipc.messages().collect());
+	assert!(matches!(
+		messages.as_slice(),
+		[
+			Message::System(SystemMessage::PanelCommandPolled),
+			Message::System(SystemMessage::InboxAddedPolled),
+		]
+	));
+	// A restarted subscription finds the receiver already taken.
+	assert!(block_on(ipc.clone().messages().collect::<Vec<_>>()).is_empty());
+}

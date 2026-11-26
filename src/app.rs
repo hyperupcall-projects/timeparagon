@@ -422,6 +422,9 @@ pub struct State {
 	/// Tasks added over IPC by the browser extension or the Slack app, waiting
 	/// to be folded into the calendar on the UI thread.
 	pub inbox_added_rx: Option<mpsc::Receiver<calendar::Event>>,
+	/// Says when either of the receivers above has something, so they are
+	/// read on demand rather than polled.
+	pub ipc_wake: Option<IpcWake>,
 	/// The panel config, kept so the window can be reopened after being closed.
 	pub panel_config: Option<crate::panel::PanelConfig>,
 	/// Set when the panel window is closed programmatically (to hide), so that
@@ -684,9 +687,9 @@ pub enum SystemMessage {
 	WindowClosed(window::Id),
 	WindowResized(window::Id, Size),
 	FlashFinished,
-	/// A poll tick that checks for show/hide commands from the panel daemon.
+	/// Show/hide commands from the panel daemon are waiting to be read.
 	PanelCommandPolled,
-	/// A poll tick that checks for tasks added over IPC.
+	/// Tasks added over IPC are waiting to be read.
 	InboxAddedPolled,
 
 	KeyPressed(Key, keyboard::Modifiers),
@@ -983,6 +986,7 @@ impl State {
 			monitor_size: None,
 			panel_command_rx: None,
 			inbox_added_rx: None,
+			ipc_wake: None,
 			panel_config: None,
 			panel_expected_close: false,
 			flash: None,
@@ -1332,6 +1336,8 @@ pub fn boot_sidebar() -> (State, Task<Message>) {
 	state.panel_command_rx = Some(rx);
 	let (inbox_tx, inbox_rx) = mpsc::channel();
 	state.inbox_added_rx = Some(inbox_rx);
+	let (wake, wakes) = iced::futures::channel::mpsc::unbounded();
+	state.ipc_wake = Some(IpcWake::new(wakes));
 
 	match crate::ipc::bind(crate::ipc::SIDEBAR) {
 		Ok(listener) => {
@@ -1339,7 +1345,7 @@ pub fn boot_sidebar() -> (State, Task<Message>) {
 			std::thread::Builder::new()
 				.name("panel-ipc".into())
 				.spawn(move || {
-					if let Err(error) = panel_ipc_listener(listener, tx, visible, inbox_tx) {
+					if let Err(error) = panel_ipc_listener(listener, tx, visible, inbox_tx, wake) {
 						log::error!("panel IPC listener stopped: {error:#}");
 					}
 				})
@@ -1869,12 +1875,12 @@ pub fn subscription(state: &State) -> Subscription<Message> {
 		);
 	}
 
-	// The side panel polls for show/hide commands from the panel daemon.
-	if state.panel_command_rx.is_some() {
-		subscriptions.push(
-			iced::time::every(Duration::from_millis(200))
-				.map(|_| Message::System(SystemMessage::PanelCommandPolled)),
-		);
+	// The side panel hears of show/hide commands from the panel daemon, and
+	// of tasks added by the extension or the Slack app, as they arrive. A
+	// timer here would rebuild every window several times a second for
+	// nothing.
+	if let Some(wake) = &state.ipc_wake {
+		subscriptions.push(Subscription::run_with(wake.clone(), IpcWake::messages));
 	}
 
 	if state.inbox.voice.active() {
@@ -1885,13 +1891,6 @@ pub fn subscription(state: &State) -> Subscription<Message> {
 				80
 			}))
 			.map(|_| Message::Inbox(crate::inbox::Action::Voice(crate::voice::Action::Poll))),
-		);
-	}
-	// The extension and the Slack app add tasks from their own processes.
-	if state.inbox_added_rx.is_some() {
-		subscriptions.push(
-			iced::time::every(Duration::from_millis(200))
-				.map(|_| Message::System(SystemMessage::InboxAddedPolled)),
 		);
 	}
 
@@ -2567,37 +2566,47 @@ fn launch_width(monitor_width: f32) -> f32 {
 
 /// Listens on the panel IPC socket and forwards show/hide commands to the
 /// main thread via `tx`. Runs in a background thread spawned by `boot_sidebar`.
+/// Each thing it forwards is followed by a message on `wake`, which is what
+/// gets the UI thread to read it.
 fn panel_ipc_listener(
 	listener: UnixListener,
 	tx: mpsc::Sender<PanelCommand>,
 	visible: Arc<AtomicBool>,
 	inbox: mpsc::Sender<calendar::Event>,
+	wake: iced::futures::channel::mpsc::UnboundedSender<Message>,
 ) -> AnyhowResult<()> {
 	log::info!("panel IPC socket listening");
 
+	let command_for_ui = |command: PanelCommand| {
+		if tx.send(command).is_ok() {
+			let _ = wake.unbounded_send(Message::System(SystemMessage::PanelCommandPolled));
+		}
+	};
 	crate::ipc::serve(listener, |command| {
 		if command.starts_with('{') {
 			let handled = crate::webextension::handle_ipc(command);
-			if let Some(event) = handled.event {
-				let _ = inbox.send(event);
+			if let Some(event) = handled.event
+				&& inbox.send(event).is_ok()
+			{
+				let _ = wake.unbounded_send(Message::System(SystemMessage::InboxAddedPolled));
 			}
 			return handled.reply;
 		}
 		match command {
 			"toggle-reservation" => {
-				let _ = tx.send(PanelCommand::ToggleReservation);
+				command_for_ui(PanelCommand::ToggleReservation);
 				crate::ipc::OK.to_owned()
 			}
 			"show" => {
 				// Answered from here rather than from the window, so that a
 				// `status` straight afterwards is already right.
 				visible.store(true, Ordering::Relaxed);
-				let _ = tx.send(PanelCommand::Show);
+				command_for_ui(PanelCommand::Show);
 				crate::ipc::OK.to_owned()
 			}
 			"hide" => {
 				visible.store(false, Ordering::Relaxed);
-				let _ = tx.send(PanelCommand::Hide);
+				command_for_ui(PanelCommand::Hide);
 				crate::ipc::OK.to_owned()
 			}
 			"status" if visible.load(Ordering::Relaxed) => crate::ipc::VISIBLE.to_owned(),
@@ -2608,6 +2617,33 @@ fn panel_ipc_listener(
 			}
 		}
 	})
+}
+
+/// The receiving end of the sidebar's IPC wake-ups, as a subscription.
+///
+/// It hashes by identity, so the subscription made from it lives as long as
+/// the panel and its receiver is taken once, when that subscription starts.
+#[derive(Clone)]
+pub struct IpcWake(
+	Arc<std::sync::Mutex<Option<iced::futures::channel::mpsc::UnboundedReceiver<Message>>>>,
+);
+
+impl IpcWake {
+	pub fn new(receiver: iced::futures::channel::mpsc::UnboundedReceiver<Message>) -> Self {
+		Self(Arc::new(std::sync::Mutex::new(Some(receiver))))
+	}
+
+	fn messages(&self) -> impl iced::futures::Stream<Item = Message> + use<> {
+		use iced::futures::StreamExt;
+		let receiver = self.0.lock().ok().and_then(|mut receiver| receiver.take());
+		iced::futures::stream::iter(receiver).flatten()
+	}
+}
+
+impl std::hash::Hash for IpcWake {
+	fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+		std::ptr::hash(Arc::as_ptr(&self.0), state);
+	}
 }
 
 impl State {

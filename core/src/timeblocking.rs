@@ -150,12 +150,13 @@ pub fn task_label(task: &Event) -> String {
 }
 
 pub fn metadata(event: &Event) -> Metadata {
-	event
-		.details
-		.task_data
-		.as_ref()
-		.map(|data| data.metadata.clone())
-		.unwrap_or_default()
+	metadata_ref(event).cloned().unwrap_or_default()
+}
+
+/// The task's metadata without copying it, for checks that run for every
+/// task on every day of a range view. `None` reads as the defaults.
+pub fn metadata_ref(event: &Event) -> Option<&Metadata> {
+	event.details.task_data.as_ref().map(|data| &data.metadata)
 }
 
 pub fn task_key(event: &Event) -> String {
@@ -206,7 +207,9 @@ pub fn on_today(event: &Event) -> bool {
 }
 
 pub fn overdue(event: &Event) -> bool {
-	past_due(event, crate::clock::now())
+	// Most tasks have no deadline, and those need no clock reading.
+	metadata_ref(event).is_some_and(|metadata| metadata.deadline.is_some())
+		&& past_due(event, crate::clock::now())
 }
 
 /// Whether an open task's explicit deadline has passed. A planned date or
@@ -214,10 +217,12 @@ pub fn overdue(event: &Event) -> bool {
 pub fn past_due(event: &Event, now: chrono::DateTime<chrono::Local>) -> bool {
 	event.is_task()
 		&& !event.completed
-		&& !metadata(event).ignored
-		&& metadata(event)
-			.deadline
-			.is_some_and(|deadline| deadline.is_past(now.naive_local()))
+		&& metadata_ref(event).is_some_and(|metadata| {
+			!metadata.ignored
+				&& metadata
+					.deadline
+					.is_some_and(|deadline| deadline.is_past(now.naive_local()))
+		})
 }
 
 /// Whether a task, from Google Tasks or on the calendar, is unfinished: not

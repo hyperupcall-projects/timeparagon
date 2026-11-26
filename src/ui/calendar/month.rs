@@ -24,6 +24,9 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
 		state.calendar.zoom_ratio(),
 	);
 	let cell_metrics = Metrics::of(Size::new(cell_width - 12.0, cell_height));
+	// Worked out once for the grid rather than once for each of its days.
+	let markers = state.calendar.deadline_markers(&state.config.calendar);
+	let day_start_hour = state.config.calendar.day_start_hour();
 	let weekdays = row(first_day.short_labels().map(|day| {
 		container(text(day).size(cell_metrics.label()).center().width(Fill))
 			.width(Length::Fixed(cell_width))
@@ -48,15 +51,16 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
 				} else {
 					button::text
 				});
-			let deadlines = state
-				.calendar
-				.deadline_markers_on(day, &state.config.calendar);
+			let deadlines: Vec<&Event> = markers
+				.iter()
+				.filter(|marker| calendar::deadline::on_day(marker, day, day_start_hour))
+				.collect();
 			use crate::ui::drop_preview::{self, Slot};
 			let mut rows: Vec<(Option<Slot>, Element<'a, Message>)> = Vec::new();
 			for event in state
 				.calendar
 				.all_day_events_on(day, &state.config.calendar)
-				.chain(deadlines.iter().filter(|event| event.all_day))
+				.chain(deadlines.iter().copied().filter(|event| event.all_day))
 			{
 				if !state.habits.matches_calendar_habit(event)
 					|| !state
@@ -107,7 +111,7 @@ pub fn monthly_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mess
 					),
 				));
 			}
-			for marker in deadlines.iter().filter(|event| !event.all_day) {
+			for marker in deadlines.iter().copied().filter(|event| !event.all_day) {
 				if !state.habits.matches_calendar_habit(marker) {
 					continue;
 				}

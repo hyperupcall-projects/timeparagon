@@ -1090,6 +1090,25 @@ pub const ZOOM_STEP: f32 = 1.25;
 
 /// Membership rule used by the repository and range selectors.
 fn event_on_day(event: &Event, day: NaiveDate, day_end_hour: u32) -> bool {
+	event_on_day_within(event, day, || day_bounds(day, day_end_hour))
+}
+
+/// Where `day` begins and ends, given the hour the day turns over.
+fn day_bounds(day: NaiveDate, day_end_hour: u32) -> (DateTime<Local>, DateTime<Local>) {
+	(
+		at_clock(day, day_end_hour, 0),
+		at_clock(day.succ_opt().unwrap_or(day), day_end_hour, 0),
+	)
+}
+
+/// [`event_on_day`] for loops over many events: the caller works out the
+/// day's bounds once, since turning a local clock reading into an instant is
+/// far dearer than the comparisons themselves.
+fn event_on_day_within(
+	event: &Event,
+	day: NaiveDate,
+	bounds: impl FnOnce() -> (DateTime<Local>, DateTime<Local>),
+) -> bool {
 	if event.is_task() {
 		return true;
 	}
@@ -1097,9 +1116,23 @@ fn event_on_day(event: &Event, day: NaiveDate, day_end_hour: u32) -> bool {
 		return event.start.date_naive() == day
 			|| (event.start.date_naive() < day && event.end.date_naive() > day);
 	}
-	let start = at_clock(day, day_end_hour, 0);
-	let end = at_clock(day.succ_opt().unwrap_or(day), day_end_hour, 0);
+	let (start, end) = bounds();
 	event.start < end && event.end > start
+}
+
+/// The days of a range, each with its bounds.
+type RangeBounds = Vec<(NaiveDate, (DateTime<Local>, DateTime<Local>))>;
+
+fn range_bounds(days: &[NaiveDate], day_end_hour: u32) -> RangeBounds {
+	days.iter()
+		.map(|&day| (day, day_bounds(day, day_end_hour)))
+		.collect()
+}
+
+/// Whether `event` is on any day of a range from [`range_bounds`].
+fn on_any_day(event: &Event, days: &RangeBounds) -> bool {
+	days.iter()
+		.any(|&(day, bounds)| event_on_day_within(event, day, || bounds))
 }
 
 /// A task list's color: the user's choice if there is one, otherwise Google's
@@ -1353,10 +1386,8 @@ impl Store {
 				Err(error) => self.error = Some(error),
 			}
 		} else {
-			self.events.retain(|event| {
-				days.iter()
-					.any(|&day| event_on_day(event, day, self.day_end_hour))
-			});
+			let bounds = range_bounds(&days, self.day_end_hour);
+			self.events.retain(|event| on_any_day(event, &bounds));
 			self.visible_days = days;
 		}
 	}
@@ -1544,22 +1575,42 @@ impl Store {
 	}
 
 	pub fn deadline_markers_on(&self, day: NaiveDate, settings: &CalendarSettings) -> Vec<Event> {
-		let mut seen = std::collections::HashSet::new();
+		let hour = settings.day_start_hour();
+		self.deadline_markers(settings)
+			.into_iter()
+			.filter(|marker| deadline::on_day(marker, day, hour))
+			.collect()
+	}
+
+	/// The deadline markers of every loaded task, whatever day they fall on.
+	/// The search does not depend on the day, so a view showing many days
+	/// works these out once and picks each day's with [`deadline::on_day`].
+	pub fn deadline_markers(&self, settings: &CalendarSettings) -> Vec<Event> {
 		self.events
 			.iter()
-			.filter(|event| seen.insert(event.id.clone()))
-			.filter(|event| {
-				self.event_enabled(event, settings) && self.search_shows(event, day, settings)
+			.enumerate()
+			// Only a task with a deadline has a marker. They are few, so the
+			// checks below run for a handful of events rather than all.
+			.filter(|(_, event)| event.is_task() && deadline::get(event).is_some())
+			// The first event with an id stands for it.
+			.filter(|&(index, event)| {
+				!self.events[..index]
+					.iter()
+					.any(|earlier| earlier.id == event.id)
 			})
-			.filter_map(deadline::marker)
-			.filter(|event| deadline::on_day(event, day, settings.day_start_hour()))
+			.filter(|(_, event)| {
+				self.event_enabled(event, settings)
+					&& self.search.shows(event, &self.events, settings)
+			})
+			.filter_map(|(_, event)| deadline::marker(event))
 			.collect()
 	}
 
 	pub fn events_on(&self, day: NaiveDate) -> Vec<&Event> {
+		let bounds = day_bounds(day, self.day_end_hour);
 		self.events
 			.iter()
-			.filter(|event| event_on_day(event, day, self.day_end_hour))
+			.filter(|event| event_on_day_within(event, day, || bounds))
 			.collect()
 	}
 
@@ -1597,33 +1648,29 @@ impl Store {
 		day: NaiveDate,
 		settings: &'a CalendarSettings,
 	) -> impl Iterator<Item = &'a Event> {
-		let events = &self.events;
-		let blocks: Vec<Event> = events
-			.iter()
-			.filter(|event| crate::timeblocking::is_block(event, settings))
-			.cloned()
-			.collect();
-		events
-			.iter()
-			.filter(|event| self.event_enabled(event, settings))
-			.filter(move |event| {
-				event_on_day(event, day, settings.day_start_hour())
-					&& event.all_day
-					&& (!event.is_task()
-						|| (event.start.date_naive() != crate::timeblocking::UNDATED
-							&& event.start.date_naive() == day)
-						|| (!settings.hide_overdue_tasks && crate::timeblocking::overdue(event)))
-					&& !omit_managed_tasks_event(event, &blocks, day, settings)
-			})
+		let blocks = self.blocks_on(day, settings);
+		// The cheap tests go first: most events are timed, and most tasks
+		// belong to another day. A range view asks this for every day.
+		self.events.iter().filter(move |event| {
+			event.all_day
+				&& event_on_day(event, day, settings.day_start_hour())
+				&& (!event.is_task()
+					|| (event.start.date_naive() != crate::timeblocking::UNDATED
+						&& event.start.date_naive() == day)
+					|| (!settings.hide_overdue_tasks && crate::timeblocking::overdue(event)))
+				&& self.event_enabled(event, settings)
+				&& !omit_managed_tasks_event(event, &blocks, settings)
+		})
 	}
 
 	pub fn visible_events<'a>(
 		&'a self,
 		settings: &'a CalendarSettings,
 	) -> impl Iterator<Item = &'a Event> {
+		let bounds = day_bounds(self.day, settings.day_start_hour());
 		self.events
 			.iter()
-			.filter(|event| event_on_day(event, self.day, settings.day_start_hour()))
+			.filter(move |event| event_on_day_within(event, self.day, || bounds))
 			.filter(|event| self.event_enabled(event, settings))
 	}
 
@@ -1845,14 +1892,14 @@ impl Store {
 		&'a self,
 		settings: &'a CalendarSettings,
 	) -> impl Iterator<Item = &'a Event> {
-		let blocks = self.time_blocks(settings);
+		let blocks = self.blocks_on(self.day, settings);
 		self.visible_events(settings).filter(move |event| {
 			event.all_day
 				&& (!event.is_task()
 					|| (event.start.date_naive() != crate::timeblocking::UNDATED
 						&& event.start.date_naive() == self.day)
 					|| (!settings.hide_overdue_tasks && crate::timeblocking::overdue(event)))
-				&& !omit_managed_tasks_event(event, &blocks, self.day, settings)
+				&& !omit_managed_tasks_event(event, &blocks, settings)
 		})
 	}
 
@@ -1862,7 +1909,7 @@ impl Store {
 	) -> impl Iterator<Item = &'a Event> {
 		timed_in(
 			self.visible_events(settings),
-			self.time_blocks(settings),
+			self.blocks_on(self.day, settings),
 			self.day,
 			settings,
 		)
@@ -1903,24 +1950,53 @@ impl Store {
 		day: NaiveDate,
 		settings: &'a CalendarSettings,
 	) -> Vec<&'a Event> {
-		let events = &self.events;
-
-		let blocks = events
-			.iter()
-			.filter(|event| crate::timeblocking::is_block(event, settings))
-			.cloned()
-			.collect();
+		// Which sources are shown is the dearest test, so it runs only for the
+		// events that are on the day at all.
 		let mut found: Vec<&Event> = timed_in(
-			events
-				.iter()
-				.filter(|event| self.event_enabled(event, settings)),
-			blocks,
+			self.events.iter(),
+			self.blocks_on(day, settings),
 			day,
 			settings,
 		)
+		.filter(|event| self.event_enabled(event, settings))
 		.collect();
 		found.sort_by_key(|event| (event.start, event.end));
 		found
+	}
+
+	/// [`Store::timed_events_on`] for each of `days`, in the same order. Which
+	/// events are timed, shown and time blocks is worked out once for the
+	/// whole range rather than again for every day.
+	pub fn timed_events_on_days<'a>(
+		&'a self,
+		days: &[NaiveDate],
+		settings: &'a CalendarSettings,
+	) -> Vec<Vec<&'a Event>> {
+		let timed: Vec<&Event> = self
+			.events
+			.iter()
+			.filter(|event| !event.all_day && self.event_enabled(event, settings))
+			.collect();
+		let blocks: Vec<&Event> = self
+			.events
+			.iter()
+			.filter(|event| crate::timeblocking::is_block(event, settings))
+			.collect();
+		let hour = settings.day_start_hour();
+		days.iter()
+			.map(|&day| {
+				let bounds = day_bounds(day, hour);
+				let blocks_on_day: Vec<&Event> = blocks
+					.iter()
+					.copied()
+					.filter(|block| event_on_day_within(block, day, || bounds))
+					.collect();
+				let mut found: Vec<&Event> =
+					timed_in(timed.iter().copied(), blocks_on_day, day, settings).collect();
+				found.sort_by_key(|event| (event.start, event.end));
+				found
+			})
+			.collect()
 	}
 
 	/// Every day whose events are in hand: the day in view and the days
@@ -1933,31 +2009,33 @@ impl Store {
 		days
 	}
 
-	/// Keys of the time blocks currently loaded, so a scheduled task can be
+	/// The time blocks loaded for `day`, so a scheduled task can be
 	/// recognized as already drawn beside its block.
-	fn time_blocks(&self, settings: &CalendarSettings) -> Vec<Event> {
+	fn blocks_on<'a>(&'a self, day: NaiveDate, settings: &CalendarSettings) -> Vec<&'a Event> {
+		let bounds = day_bounds(day, settings.day_start_hour());
 		self.events
 			.iter()
-			.filter(|event| crate::timeblocking::is_block(event, settings))
-			.cloned()
+			.filter(|event| {
+				crate::timeblocking::is_block(event, settings)
+					&& event_on_day_within(event, day, || bounds)
+			})
 			.collect()
 	}
 }
 
 /// The events of `events` that sit on the grid for `day`.
 fn timed_in<'a>(
-	events: impl Iterator<Item = &'a Event> + 'a,
-	blocks: Vec<Event>,
+	events: impl Iterator<Item = &'a Event>,
+	blocks: Vec<&'a Event>,
 	day: NaiveDate,
 	settings: &'a CalendarSettings,
 ) -> impl Iterator<Item = &'a Event> {
-	let start = at_clock(day, settings.day_start_hour(), 0);
-	let end = at_clock(day.succ_opt().unwrap_or(day), settings.day_start_hour(), 0);
+	let (start, end) = day_bounds(day, settings.day_start_hour());
 	events.filter(move |event| {
 		!event.all_day
 			&& event.start < end
 			&& event.end > start
-			&& !omit_managed_tasks_event(event, &blocks, day, settings)
+			&& !omit_managed_tasks_event(event, &blocks, settings)
 	})
 }
 
@@ -1968,10 +2046,12 @@ fn timed_in<'a>(
 /// does not draw it again. A plain event on the app calendar is a time block and
 /// is always drawn; a task given a time of its own, with no block, still
 /// occupies the grid because that chip is the only place its time is visible.
+///
+/// `blocks_on_day` are the time blocks on the day being drawn, from
+/// [`Store::blocks_on`].
 fn omit_managed_tasks_event(
 	event: &Event,
-	time_blocks: &[Event],
-	day: NaiveDate,
+	blocks_on_day: &[&Event],
 	settings: &CalendarSettings,
 ) -> bool {
 	let Some(managed) = settings.app_calendar.as_deref() else {
@@ -1981,9 +2061,7 @@ fn omit_managed_tasks_event(
 		&& event.calendar_id == managed
 		&& crate::timeblocking::block_of(
 			event,
-			time_blocks
-				.iter()
-				.filter(|block| event_on_day(block, day, settings.day_start_hour())),
+			blocks_on_day.iter().copied(),
 			settings.day_start_hour(),
 		)
 		.is_some()
@@ -4476,5 +4554,62 @@ mod tests {
 			.collect();
 		assert!(timed.contains(&"standup_1"));
 		assert!(!timed.contains(&"routine_1"), "{timed:?}");
+	}
+
+	#[test]
+	fn a_range_of_timed_events_matches_asking_day_by_day() {
+		let snapshot = sample_snapshot();
+		let day = snapshot.day;
+		let store = Store::with_snapshot(snapshot);
+		let mut settings = CalendarSettings::default();
+		// Makes the work events time blocks, so the block check runs too.
+		settings.app_calendar = Some("work".into());
+		let days: Vec<NaiveDate> = (-1..=2)
+			.map(|offset| day + chrono::Duration::days(offset))
+			.collect();
+		let ids = |events: &[&Event]| events.iter().map(|e| e.id.clone()).collect::<Vec<_>>();
+		let batched = store.timed_events_on_days(&days, &settings);
+		assert_eq!(batched.len(), days.len());
+		for (&day, events) in days.iter().zip(&batched) {
+			assert_eq!(ids(events), ids(&store.timed_events_on(day, &settings)));
+		}
+		assert!(batched.iter().any(|events| !events.is_empty()));
+	}
+
+	#[test]
+	fn deadline_markers_for_a_range_are_each_days_markers_together() {
+		let mut snapshot = sample_snapshot();
+		let day = snapshot.day;
+		let mut task = snapshot.events[0].clone();
+		task.id = "task-with-deadline".into();
+		task.details.task_data = Some(crate::task_db::TaskData {
+			id: 1,
+			metadata: crate::timeblocking::Metadata {
+				deadline: Some(deadline::Deadline {
+					date: day + chrono::Duration::days(1),
+					time: None,
+				}),
+				..Default::default()
+			},
+		});
+		assert!(task.is_task());
+		snapshot.events.push(task);
+		let task = snapshot.events.len() - 1;
+		// A second copy of the task under the same id is not marked twice.
+		snapshot.events.push(snapshot.events[task].clone());
+		let store = Store::with_snapshot(snapshot);
+		let settings = CalendarSettings::default();
+		let all = store.deadline_markers(&settings);
+		assert_eq!(all.len(), 1);
+		let days: Vec<NaiveDate> = (0..3)
+			.map(|offset| day + chrono::Duration::days(offset))
+			.collect();
+		let per_day: Vec<String> = days
+			.iter()
+			.flat_map(|&day| store.deadline_markers_on(day, &settings))
+			.map(|marker| marker.id)
+			.collect();
+		assert_eq!(per_day, vec![all[0].id.clone()]);
+		assert!(store.deadline_markers_on(day, &settings).is_empty());
 	}
 }

@@ -550,8 +550,12 @@ pub fn reconcile(state: &mut State) -> Task<Message> {
 
 	if state.travel.show {
 		if state.range_view_active() {
-			for day in state.calendar_dates() {
-				legs.extend(day_hops(state, day).into_iter().map(|hop| hop.leg));
+			let days = state.calendar_dates();
+			for events in state
+				.calendar
+				.timed_events_on_days(&days, &state.config.calendar)
+			{
+				legs.extend(hops_of(state, events).into_iter().map(|hop| hop.leg));
 			}
 		} else {
 			legs.extend(
@@ -718,9 +722,16 @@ pub fn hops(travel: &TravelSettings, stops: &[Stop]) -> Vec<Hop> {
 
 /// The trips of one day, from the events the grid draws for it.
 pub fn day_hops(state: &State, day: NaiveDate) -> Vec<Hop> {
-	let stops: Vec<Stop> = state
-		.calendar
-		.timed_events_on(day, &state.config.calendar)
+	hops_of(
+		state,
+		state.calendar.timed_events_on(day, &state.config.calendar),
+	)
+}
+
+/// The trips between a day's timed events, given in the order the grid
+/// draws them.
+fn hops_of(state: &State, events: Vec<&Event>) -> Vec<Hop> {
+	let stops: Vec<Stop> = events
 		.into_iter()
 		.map(|event| Stop {
 			id: event.id.clone(),

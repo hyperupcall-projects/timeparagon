@@ -42,7 +42,7 @@ impl fmt::Display for Deadline {
 
 /// Read the typed deadline from task metadata, never from the description.
 pub fn get(event: &super::Event) -> Option<Deadline> {
-	crate::timeblocking::metadata(event).deadline
+	crate::timeblocking::metadata_ref(event).and_then(|metadata| metadata.deadline)
 }
 
 pub fn input_text(event: &super::Event) -> String {

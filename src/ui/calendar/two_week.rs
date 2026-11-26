@@ -38,10 +38,12 @@ pub fn two_week_view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Mes
 		let width = size.width.max(MIN_GRID_WIDTH);
 		let height = two_week_height(size.height, zoom);
 		let cell = Size::new(width / 7.0, height / 2.0);
+		// Worked out once for the grid rather than once for each of its days.
+		let markers = state.calendar.deadline_markers(&state.config.calendar);
 		let weeks = dates.chunks(7).enumerate().map(|(index, week)| {
 			row(week
 				.iter()
-				.map(|&day| day_cell(state, day, index == 0, cell, &metrics)))
+				.map(|&day| day_cell(state, day, index == 0, cell, &markers, &metrics)))
 			.into()
 		});
 		let grid = crate::ui::controls::scrollable(column(weeks).width(width).height(height))
@@ -104,6 +106,7 @@ fn day_cell<'a>(
 	day: NaiveDate,
 	first_row: bool,
 	cell: Size,
+	markers: &[Event],
 	metrics: &Metrics,
 ) -> Element<'a, Message> {
 	let today = calendar::day_at(crate::clock::now(), state.config.calendar.day_start_hour());
@@ -143,7 +146,7 @@ fn day_cell<'a>(
 	let mut items = crate::ui::drop_preview::day_list(
 		state,
 		day,
-		day_items(state, day, metrics),
+		day_items(state, day, markers, metrics),
 		// The cell gives its messages their day.
 		|message| message,
 		|task| preview_row(state, task, metrics),
@@ -227,9 +230,12 @@ fn preview_row<'a>(state: &State, task: &Event, metrics: &Metrics) -> Element<'a
 
 /// A day's events in reading order: all-day ones first, then by start time.
 /// Each row comes with the slot it fills, for dropping a task between rows.
+/// `markers` are every deadline marker in view, from
+/// [`calendar::Store::deadline_markers`].
 fn day_items<'a>(
 	state: &'a State,
 	day: NaiveDate,
+	markers: &[Event],
 	metrics: &Metrics,
 ) -> Vec<(Option<crate::ui::drop_preview::Slot>, Element<'a, Message>)> {
 	let now = crate::clock::now();
@@ -239,14 +245,15 @@ fn day_items<'a>(
 		.calendar
 		.first_day_of_week
 		.week_start(state.week_anchor);
-	let deadlines = state
-		.calendar
-		.deadline_markers_on(day, &state.config.calendar);
+	let deadlines: Vec<&Event> = markers
+		.iter()
+		.filter(|marker| calendar::deadline::on_day(marker, day, day_start_hour))
+		.collect();
 	let mut items = Vec::new();
 	for event in state
 		.calendar
 		.all_day_events_on(day, &state.config.calendar)
-		.chain(deadlines.iter().filter(|event| event.all_day))
+		.chain(deadlines.iter().copied().filter(|event| event.all_day))
 	{
 		if !state
 			.calendar
@@ -280,7 +287,7 @@ fn day_items<'a>(
 		.calendar
 		.timed_events_on(day, &state.config.calendar)
 		.into_iter()
-		.chain(deadlines.iter().filter(|event| !event.all_day))
+		.chain(deadlines.iter().copied().filter(|event| !event.all_day))
 	{
 		if !state
 			.calendar
@@ -455,8 +462,9 @@ fn more_popup<'a>(state: &'a State, day: NaiveDate, metrics: &Metrics) -> Elemen
 	.width(Fill)
 	.on_press(Message::Calendar(CalendarMessage::CalendarDayOpened(day)))
 	.style(button::text);
+	let markers = state.calendar.deadline_markers(&state.config.calendar);
 	let items = column(
-		day_items(state, day, metrics)
+		day_items(state, day, &markers, metrics)
 			.into_iter()
 			.map(|(_, row)| row),
 	)

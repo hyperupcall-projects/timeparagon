@@ -1,7 +1,7 @@
 //! The only reader of calendar views. Confirmed source rows and local desired
 //! operations are kept separately; a view is assembled once in one read transaction.
 
-use super::{Calendar, Event, Snapshot, at_clock, event_on_day, operations};
+use super::{Calendar, Event, Snapshot, at_clock, on_any_day, operations, range_bounds};
 use crate::task_db::{Database, keys};
 use chrono::{DateTime, Local, NaiveDate};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
@@ -60,7 +60,8 @@ pub fn read(path: &Path, dates: &[NaiveDate], hour: u32) -> Result<Read, String>
 		.map_err(|e| e.to_string())?;
 	let state = state(&tx)?;
 	let mut events = events(&tx)?;
-	events.retain(|event| dates.iter().any(|&day| event_on_day(event, day, hour)));
+	let bounds = range_bounds(dates, hour);
+	events.retain(|event| on_any_day(event, &bounds));
 	let mut covered = Vec::new();
 	for &day in dates {
 		if super::api::incremental::covers(
