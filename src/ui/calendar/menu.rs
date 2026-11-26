@@ -268,27 +268,26 @@ pub(super) fn menu_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<'
 	for source in calendar::sources::TimeParagonSource::ALL {
 		let id = source.id().to_owned();
 		let editing = state.calendar.color_editor.as_deref() == Some(id.as_str());
-		section =
-			section.push(
-				row![
-					swatch_button(
-						source.color(&state.config.calendar),
-						editing,
-						Message::Settings(SettingsMessage::SourceColorEditorToggled(id.clone())),
-					),
-					text(source.label()).size(metrics.label()).width(Fill),
-					crate::ui::controls::toggler(
-						state
-							.calendar
-							.calendar_enabled(source.id(), &state.config.calendar)
-					)
-					.on_toggle(move |value| Message::Calendar(
-						CalendarMessage::CalendarToggled(source.id().into(), value)
-					)),
-				]
-				.spacing(8.0)
-				.align_y(Alignment::Center),
-			);
+		section = section.push(
+			row![
+				swatch_button(
+					source.color(&state.config.calendar),
+					editing,
+					Message::Settings(SettingsMessage::SourceColorEditorToggled(id.clone())),
+				),
+				text(source.label()).size(metrics.label()).width(Fill),
+				crate::ui::controls::toggler(
+					state
+						.calendar
+						.calendar_enabled(source.id(), &state.config.calendar)
+				)
+				.on_toggle(move |value| Message::Calendar(
+					CalendarMessage::CalendarToggled(source.id().into(), value)
+				)),
+			]
+			.spacing(8.0)
+			.align_y(Alignment::Center),
+		);
 		if editing {
 			section = section.push(time_paragon_color_picker(
 				source,

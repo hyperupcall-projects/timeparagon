@@ -1935,7 +1935,8 @@ fn on_key(state: &mut State, key: Key, modifiers: keyboard::Modifiers) -> Task<M
 		&& matches!(
 			key.as_ref(),
 			Key::Named(keyboard::key::Named::Enter) | Key::Named(keyboard::key::Named::Space)
-		) && let Some(kind) = state.draft_kind_focus
+		)
+		&& let Some(kind) = state.draft_kind_focus
 	{
 		return iced::widget::operation::is_focused("calendar-draft-title").map(move |focused| {
 			if focused {
@@ -2513,7 +2514,8 @@ fn sync_calendar(state: &mut State) -> Task<Message> {
 		|| state.calendar.pending_move.is_some()
 		|| state.calendar.events.iter().any(|event| {
 			event.details.sleep.is_some() && state.calendar.pending_time(&event.id).is_some()
-		}) || !state.task_operations.busy.is_empty()
+		})
+		|| !state.task_operations.busy.is_empty()
 		|| state
 			.calendar
 			.edit_draft

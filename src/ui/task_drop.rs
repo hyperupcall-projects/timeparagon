@@ -525,7 +525,8 @@ mod tests {
 				assert!(
 					range_position(&state, main, source)
 						.unwrap()
-						.distance(point) < 0.001
+						.distance(point)
+						< 0.001
 				);
 				let message = drop_at(&mut state, point);
 				assert!(
@@ -759,7 +760,8 @@ mod tests {
 			.find(day.day().to_string().as_str())
 			.unwrap()
 			.bounds()
-			.center() + Vector::new(0.0, 45.0);
+			.center()
+			+ Vector::new(0.0, 45.0);
 		drop(ui);
 		hover_at(&mut state, point);
 		let preview = crate::ui::drop_preview::on_day(&state, day).expect("a day preview");
@@ -787,7 +789,8 @@ mod tests {
 			.find(day.format("%B %-d").to_string().as_str())
 			.unwrap()
 			.bounds()
-			.center() + Vector::new(0.0, 45.0);
+			.center()
+			+ Vector::new(0.0, 45.0);
 		drop(ui);
 		hover_at(&mut state, point);
 		let (target, after, preview) =

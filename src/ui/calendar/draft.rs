@@ -107,7 +107,8 @@ pub(super) fn draft_overlay<'a>(state: &'a State, metrics: &Metrics) -> Element<
 		// Match the input, three button rows, gaps and both padding edges.
 		let height = (2.0 * metrics.padding
 			+ (metrics.label() + 2.0) * 1.3
-			+ 12.0 + 3.0 * control_height
+			+ 12.0
+			+ 3.0 * control_height
 			+ metrics.spacing
 			+ 12.0)
 			.min((size.height - 16.0).max(1.0));

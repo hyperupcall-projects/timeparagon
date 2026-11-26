@@ -128,7 +128,8 @@ pub(super) fn day_canvas<'a>(
 					event.display_color(&state.config.calendar, &state.calendar.calendars)
 				},
 				editable: !calendar::deadline::is_marker(event)
-					&& !hidden && (!event.is_task() || event.is_calendar_task()),
+					&& !hidden
+					&& (!event.is_task() || event.is_calendar_task()),
 				pending: event.details.sending
 					|| state.calendar.pending_time(&event.id).is_some()
 					|| state.task_operations.busy.contains_task(&event.id)

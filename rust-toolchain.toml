@@ -1,4 +1,8 @@
 [toolchain]
-channel = "stable"
+# Pinned, not "stable": rustfmt's output changes between releases, so a local
+# toolchain that differs from CI's fails the formatting check (or the
+# pre-commit hook undoes CI's formatting). Bump it here and in the
+# `toolchain:` inputs under .github/workflows/ together, then run `cargo fmt`.
+channel = "1.100.0"
 components = ["rustfmt", "clippy", "rust-src"]
 profile = "default"

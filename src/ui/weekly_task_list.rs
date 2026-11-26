@@ -667,7 +667,8 @@ impl Widget<Message, Theme, Renderer> for DropTarget<'_> {
 			&& matches!(
 				event,
 				Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
-			) && cursor.is_over(layout.bounds())
+			)
+			&& cursor.is_over(layout.bounds())
 			&& cursor.is_over(*viewport)
 		{
 			shell.publish(Message::TimeBlocking(Action::DropWeekList {

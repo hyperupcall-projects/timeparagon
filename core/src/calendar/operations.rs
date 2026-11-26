@@ -1724,7 +1724,8 @@ fn leaves_series(task: &Event, change: &task_edit::Change) -> bool {
 					| Change::Time(..)
 					| Change::ClearSchedule
 					| Change::Backlog(_)
-					| Change::Inbox | Change::Triaged
+					| Change::Inbox
+					| Change::Triaged
 			)
 	} else {
 		block

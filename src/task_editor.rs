@@ -571,7 +571,8 @@ impl Editor {
 			}
 			Err(error) => {
 				if showing
-					&& keep_open && let Some(task) = previous
+					&& keep_open
+					&& let Some(task) = previous
 				{
 					self.seed_schedule(task);
 				}

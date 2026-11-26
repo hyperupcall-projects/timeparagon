@@ -722,7 +722,8 @@ fn do_plan_width(state: &State, metrics: &Metrics) -> f32 {
 	tab_width(calendar_view_label(state), metrics)
 		+ tab_gap(metrics)
 		+ tab_width(plan_view_label(state), metrics)
-		+ 1.0 + arrow
+		+ 1.0
+		+ arrow
 }
 
 fn is_task_screen(screen: Screen) -> bool {

@@ -22,7 +22,10 @@ jobs:
       TIMEPARAGON_KEYSTORE_PASSWORD: ${{ secrets.TIMEPARAGON_KEYSTORE_PASSWORD }}
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      # Same version as rust-toolchain.toml.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.100.0
       # Keep the generated, signed Android project out of the Rust cache.
       - uses: Swatinem/rust-cache@v2
         with:
@@ -89,7 +92,10 @@ jobs:
       CARGO_BUILD_JOBS: "2"
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      # Same version as rust-toolchain.toml.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.100.0
       - uses: Swatinem/rust-cache@v2
       - name: Install native dependencies
         run: |

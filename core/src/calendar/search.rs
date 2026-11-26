@@ -164,7 +164,8 @@ impl Search {
 				AvailabilityFilter::Free => {
 					has_availability && event.details.options.transparency == Availability::Free
 				}
-			} && (!self.public_only || event.details.options.visibility == Visibility::Public)
+			}
+			&& (!self.public_only || event.details.options.visibility == Visibility::Public)
 			&& self
 				.location
 				.as_deref()

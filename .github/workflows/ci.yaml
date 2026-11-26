@@ -17,8 +17,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      # Same version as rust-toolchain.toml.
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.100.0
           components: rustfmt
       # Explicit packages avoid traversing excluded vendored dependencies.
       - run: cargo fmt -p timeparagon -p timeparagon-core -p timeparagon-dioxus -- --check
@@ -33,7 +35,10 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      # Same version as rust-toolchain.toml.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.100.0
       # Includes compiled dependencies and CEF's download in target/*/build.
       - uses: Swatinem/rust-cache@v2
         with:
@@ -62,8 +67,10 @@ jobs:
   #     CARGO_PROFILE_DEV_DEBUG: "0"
   #   steps:
   #     - uses: actions/checkout@v7
-  #     - uses: dtolnay/rust-toolchain@stable
+  #     # Same version as rust-toolchain.toml.
+  #     - uses: dtolnay/rust-toolchain@master
   #       with:
+  #         toolchain: 1.100.0
   #         components: clippy
   #     - name: Install native dependencies
   #       run: |

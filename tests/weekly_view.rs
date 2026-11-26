@@ -993,7 +993,8 @@ fn weekly_task_view_omits_all_day_tasks_without_hiding_scheduled_cards() -> Resu
 					metadata: Default::default(),
 				})
 				.metadata
-				.deadline = Some(timeparagon_core::calendar::deadline::parse_input("2020-01-01").unwrap());
+				.deadline =
+				Some(timeparagon_core::calendar::deadline::parse_input("2020-01-01").unwrap());
 		}
 		if id == "linked" {
 			let mut metadata = timeparagon::timeblocking::metadata(&task);

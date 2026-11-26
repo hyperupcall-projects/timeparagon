@@ -1420,7 +1420,8 @@ mod tests {
 				metadata: Default::default(),
 			})
 			.metadata
-			.deadline = Some(timeparagon_core::calendar::deadline::parse_input("2026-10-30 11:59").unwrap());
+			.deadline =
+			Some(timeparagon_core::calendar::deadline::parse_input("2026-10-30 11:59").unwrap());
 		let mut later_deadline = deadline.clone();
 		later_deadline.id = "task:later".into();
 		later_deadline.details.description = "".into();
@@ -1432,7 +1433,8 @@ mod tests {
 				metadata: Default::default(),
 			})
 			.metadata
-			.deadline = Some(timeparagon_core::calendar::deadline::parse_input("2026-10-30 12:01").unwrap());
+			.deadline =
+			Some(timeparagon_core::calendar::deadline::parse_input("2026-10-30 12:01").unwrap());
 		let mut done = task("done", "inbox", today.pred_opt().unwrap());
 		done.completed = true;
 		let mut ignored = task("ignored", "inbox", today.pred_opt().unwrap());

@@ -197,7 +197,8 @@ pub(super) fn update(state: &mut State, message: EventMessage) -> Task<Message> 
 					task,
 					&state.calendar.events,
 					crate::timeblocking::day_start_hour(state),
-				) && state.timeblocking.block.as_deref() != Some(parent.id.as_str())
+				)
+				&& state.timeblocking.block.as_deref() != Some(parent.id.as_str())
 				&& state.timeblocking.focus.as_deref() != Some(parent.id.as_str())
 			{
 				return crate::timeblocking::update(

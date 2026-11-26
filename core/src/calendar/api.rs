@@ -1865,8 +1865,9 @@ fn split_recurrence(
 		.iter()
 		.filter(|line| line.starts_with("RRULE:"))
 		.count()
-		!= 1 || (lines.iter().any(|line| line.contains("COUNT="))
-		&& lines.iter().any(|line| line.starts_with("EXDATE")))
+		!= 1
+		|| (lines.iter().any(|line| line.contains("COUNT="))
+			&& lines.iter().any(|line| line.starts_with("EXDATE")))
 	{
 		return Err(
 			"This custom series cannot be split here. Use Save current event or Save all events."

@@ -84,7 +84,8 @@ fn day_view_summarizes_untimed_tasks_and_keeps_all_day_events() {
 					metadata: Default::default(),
 				})
 				.metadata
-				.deadline = Some(timeparagon_core::calendar::deadline::parse_input(&format!("{day}")).unwrap());
+				.deadline =
+				Some(timeparagon_core::calendar::deadline::parse_input(&format!("{day}")).unwrap());
 		}
 		state.calendar.events.push(task);
 	}

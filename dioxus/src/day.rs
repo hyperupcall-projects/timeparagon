@@ -2376,7 +2376,8 @@ mod tests {
 				metadata: Default::default(),
 			})
 			.metadata
-			.deadline = Some(timeparagon_core::calendar::deadline::parse_input("2026-11-05 17:30").unwrap());
+			.deadline =
+			Some(timeparagon_core::calendar::deadline::parse_input("2026-11-05 17:30").unwrap());
 		let mut fields = TaskFields::new(&timed);
 		assert_eq!(fields.description, "Notes");
 		assert_eq!(fields.estimate, "45");
