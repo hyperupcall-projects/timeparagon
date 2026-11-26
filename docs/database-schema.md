@@ -486,6 +486,14 @@ has since given those items (`google_id_map`). Resolution matches each typed
 explicit destination calendars are preserved. Mapping chains are followed to
 their final identity, and cycles fail the write with an error.
 
+A task leaving Google Tasks becomes a new Calendar event, named after the
+Google Task it leaves (`calendar_tasks::scheduled_id`). The name is chosen
+when the edit is recorded, from the ID Google knows the task by then, and the
+`TaskEdit` job carries it (`scheduled_as`), so the event shown is the one
+Google gets. Only that move and a new dated task create an event; any other
+task write to an event Google does not have is refused, never creating a
+second copy of the task.
+
 **Execution.** `task_edit::save` and `create_inbox_task` always record local
 operations. The worker calls `send_from` and `send_inbox_task` to send them;
 the block reconciler calls `send` directly. Creation IDs and original local

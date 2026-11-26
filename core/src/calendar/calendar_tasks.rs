@@ -192,12 +192,7 @@ pub fn apply(
 		}
 	}
 	if task.start.date_naive() != tb::UNDATED && task.task_ref().is_some() {
-		use sha2::{Digest, Sha256};
-		task.id = format!(
-			"tt{:x}",
-			Sha256::digest(format!("{}/{}", data.id, task.id).as_bytes())
-		)[..34]
-			.to_owned();
+		task.id = scheduled_id(data.id, &task.id);
 		task.calendar_id = settings
 			.app_calendar
 			.clone()
@@ -210,12 +205,71 @@ pub fn apply(
 	Ok(task)
 }
 
+/// The Calendar event task `task` becomes when it leaves Google Tasks, named
+/// after the Google Task it leaves (`google_task`, as an event ID): each move
+/// makes an event of its own, and every device making the same move names it
+/// alike.
+pub fn scheduled_id(task: i64, google_task: &str) -> String {
+	use sha2::{Digest, Sha256};
+	format!(
+		"tt{:x}",
+		Sha256::digest(format!("{task}/{google_task}").as_bytes())
+	)[..34]
+		.to_owned()
+}
+
 pub fn remove(token: &str, url: &str) -> Result<(), String> {
 	match scheduled::request("DELETE", url, token, None) {
 		Ok(_) => Ok(()),
 		Err(e) if matches!(e.status, Some(404 | 410)) => Ok(()),
 		Err(e) => Err(e.message),
 	}
+}
+
+/// Writes a dated task's event. Only `create` makes one Google does not have.
+fn write_event(
+	token: &str,
+	saved: &mut Event,
+	settings: &CalendarSettings,
+	create: bool,
+) -> Result<(), String> {
+	if saved.calendar_id == "local-calendar" {
+		saved.calendar_id = settings
+			.app_calendar
+			.clone()
+			.map(Ok)
+			.unwrap_or_else(|| scheduled::app_calendar(token))?;
+	}
+	let url = event_url(saved);
+	if create {
+		return scheduled::upsert_at(
+			token,
+			&url,
+			&format!(
+				"{}/{}/events",
+				api::EVENTS,
+				urlencoding::encode(&saved.calendar_id)
+			),
+			&saved.id,
+			body(saved)?,
+		);
+	}
+	match scheduled::request("PATCH", &url, token, Some(&body(saved)?)) {
+		Ok(_) => Ok(()),
+		Err(e) if matches!(e.status, Some(404 | 410)) => {
+			Err(format!("“{}” is no longer on Google Calendar", saved.title))
+		}
+		Err(e) => Err(e.message),
+	}
+}
+
+/// Creates a new dated task's event.
+pub fn create(token: &str, task: &mut Event, settings: &CalendarSettings) -> Result<(), String> {
+	write_event(token, task, settings, true)?;
+	if is_series(task) {
+		super::series::note(&task.calendar_id, &task.id, vec![task.calendar_id.clone()]);
+	}
+	Ok(())
 }
 
 pub fn persist(
@@ -225,24 +279,11 @@ pub fn persist(
 	settings: &CalendarSettings,
 ) -> Result<(), String> {
 	if saved.task_ref().is_none() {
-		if saved.calendar_id == "local-calendar" {
-			saved.calendar_id = settings
-				.app_calendar
-				.clone()
-				.map(Ok)
-				.unwrap_or_else(|| scheduled::app_calendar(token))?;
-		}
-		scheduled::upsert_at(
-			token,
-			&event_url(saved),
-			&format!(
-				"{}/{}/events",
-				api::EVENTS,
-				urlencoding::encode(&saved.calendar_id)
-			),
-			&saved.id,
-			body(saved)?,
-		)?;
+		// Only a task arriving from Google Tasks becomes a new event. Any
+		// other write is to an event Google has: making one it does not
+		// have (deleted elsewhere, or a copy shown here that was never
+		// made) would put a second copy of the task on the calendar.
+		write_event(token, saved, settings, original.task_ref().is_some())?;
 		if original.task_ref().is_some() {
 			remove(token, &crate::task_edit::task_url(original)?)?;
 		}

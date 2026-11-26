@@ -234,10 +234,12 @@ pub fn send(
 	token: &str,
 ) -> Result<Event, GoogleError> {
 	let local_id = task.id.clone();
-	send_from(task, settings, change, order, token, &local_id)
+	send_from(task, settings, change, order, token, &local_id, None)
 }
 
 /// Sends a recorded edit, retaining the local identity from before resolution.
+/// A task leaving Google Tasks becomes the event `scheduled_as`, when the
+/// edit was recorded with one (see `operations::task_edit_job`).
 pub(crate) fn send_from(
 	task: Event,
 	settings: &CalendarSettings,
@@ -245,12 +247,19 @@ pub(crate) fn send_from(
 	order: i64,
 	token: &str,
 	local_id: &str,
+	scheduled_as: Option<&str>,
 ) -> Result<Event, GoogleError> {
 	let mut database = crate::task_db::open()?;
 	let data = database.import_remote(&task)?;
 	let mut original = task;
 	original.details.task_data = Some(data);
 	let mut saved = calendar::calendar_tasks::apply(original.clone(), settings, &change, order)?;
+	if let Some(id) = scheduled_as
+		&& original.task_ref().is_some()
+		&& saved.task_ref().is_none()
+	{
+		saved.id = id.to_owned();
+	}
 	if let Change::JoinBlockSeries {
 		calendar,
 		series,
@@ -426,6 +435,42 @@ mod tests {
 		assert!(schedule_range("tomorrow", "09:00", "09:30").is_err());
 		assert!(schedule_range("2026-10-26", "9am", "09:30").is_err());
 		assert!(schedule_range("2026-10-26", "09:00", "").is_err());
+	}
+
+	/// An edit of a dated task Google does not have (deleted elsewhere, or a
+	/// copy shown here that was never made) is refused rather than made, so
+	/// it cannot put a second copy of the task on the calendar.
+	#[test]
+	fn an_edit_never_creates_the_dated_task_it_changes() {
+		let settings = CalendarSettings {
+			app_calendar: Some("app".into()),
+			..Default::default()
+		};
+		let mut task = calendar::sample_snapshot().events.remove(0);
+		task.id = "ttnevermade".into();
+		task.calendar_id = "app".into();
+		task.details = Default::default();
+		task.details.task_data = Some(crate::task_db::TaskData {
+			id: 917_100,
+			metadata: Default::default(),
+		});
+		let start = task.start;
+		let refused = calendar::api::with_transport(
+			Box::new(|method, url, _| match method {
+				"PATCH" => Err((404, "Not Found".into())),
+				_ => panic!("an edit sent {method} {url}"),
+			}),
+			|| {
+				send(
+					task,
+					&settings,
+					Change::Reflow(start, start + chrono::Duration::minutes(30)),
+					0,
+					"token",
+				)
+			},
+		);
+		assert!(refused.is_err());
 	}
 
 	/// When a block moves, the tasks repeating with it are left to the

@@ -62,6 +62,15 @@ pub(super) fn job(mut job: Job, aliases: &[(String, String, String)]) -> Result<
 	Ok(job)
 }
 
+/// Moves `calendar` and `id` on to where the item they name is now.
+pub(super) fn identity(
+	aliases: &[(String, String, String)],
+	calendar: &mut String,
+	id: &mut String,
+) -> Result<(), String> {
+	Resolver(aliases).identity(calendar, id)
+}
+
 struct Resolver<'a>(&'a [(String, String, String)]);
 
 impl Resolver<'_> {
@@ -248,6 +257,7 @@ mod tests {
 				task,
 				change: task_edit::Change::Title("local".into()),
 				order: 0,
+				scheduled_as: None,
 			},
 			&aliases,
 		)
@@ -305,6 +315,7 @@ mod tests {
 				task,
 				change: task_edit::Change::Block("source/local".into(), start, start),
 				order: 0,
+				scheduled_as: None,
 			},
 			&aliases(),
 		)

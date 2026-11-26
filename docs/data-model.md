@@ -116,7 +116,7 @@ Many kinds of ID appear in the data. This table lists them all:
 | Task-list "calendar" ID | `tasks:` + list ID | `tasks:MDk2NjQ…` | `calendar::ids::calendar_id` |
 | Google event ID | Google's (base32hex) | `5ok3…_20261109T090000Z` | Google |
 | Google task "event" ID | `task:` + task ID | `task:dGhpcyBp…` | `calendar::ids::event_id` |
-| Dated task event ID | `tt` + 32 hex | `tt3f9a…` | `calendar_tasks::apply` |
+| Dated task event ID | `tt` + 32 hex | `tt3f9a…` | `calendar_tasks::scheduled_id` |
 | Sleep event ID | `51ee9` + `YYYYMMDD` (wake date) | `51ee920261110` | `calendar::sleep::event_id` |
 | **TimeParagon task ID** | integer ≥ 100, < 2⁶² | `2875093487120931` | `task_db::Database::import` |
 | Block key | `<calendar_id>/<event_id>` | `abc@group…/5ok3…` | `timeblocking::block_key` |

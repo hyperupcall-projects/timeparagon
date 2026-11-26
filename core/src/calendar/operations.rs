@@ -50,6 +50,10 @@ pub enum Job {
 		task: Event,
 		change: task_edit::Change,
 		order: i64,
+		/// The event a task leaving Google Tasks becomes, named when the
+		/// edit was recorded: the one shown since, so the one Google gets.
+		#[serde(default)]
+		scheduled_as: Option<String>,
 	},
 	Delete {
 		calendar: String,
@@ -820,6 +824,7 @@ fn record_in(
 					task: original.clone(),
 					change: task_edit::Change::Unassign,
 					order: 0,
+					scheduled_as: None,
 				},
 				Some(&released),
 				&original.calendar_id,
@@ -1416,23 +1421,24 @@ fn finish(
 /// item by the ID it was created under).
 fn remapped(path: &Path, job: Job) -> Result<Job, String> {
 	let mut db = task_db::Database::open(path)?;
-	let aliases = {
-		let mut q = db
-			.connection()
-			.prepare("SELECT local,remote,calendar FROM google_id_map")
-			.map_err(|e| e.to_string())?;
-		q.query_map([], |r| {
-			Ok((
-				r.get::<_, String>(0)?,
-				r.get::<_, String>(1)?,
-				r.get::<_, String>(2)?,
-			))
-		})
-		.map_err(|e| e.to_string())?
-		.collect::<Result<Vec<_>, _>>()
-		.map_err(|e| e.to_string())?
-	};
-	resolve::job(job, &aliases)
+	resolve::job(job, &id_map(db.connection())?)
+}
+
+/// Every `(local, remote, calendar)` row of `google_id_map`.
+fn id_map(db: &rusqlite::Connection) -> Result<Vec<(String, String, String)>, String> {
+	let mut q = db
+		.prepare("SELECT local,remote,calendar FROM google_id_map")
+		.map_err(|e| e.to_string())?;
+	q.query_map([], |r| {
+		Ok((
+			r.get::<_, String>(0)?,
+			r.get::<_, String>(1)?,
+			r.get::<_, String>(2)?,
+		))
+	})
+	.map_err(|e| e.to_string())?
+	.collect::<Result<Vec<_>, _>>()
+	.map_err(|e| e.to_string())
 }
 
 fn execute(
@@ -1477,10 +1483,19 @@ fn execute(
 			task,
 			change,
 			order,
+			scheduled_as,
 		} => {
 			let old = ids::bare_task(&task.id).to_owned();
 			let token = client.access_token()?;
-			let saved = task_edit::send_from(task, s, change, order, &token, local_id)?;
+			let saved = task_edit::send_from(
+				task,
+				s,
+				change,
+				order,
+				&token,
+				local_id,
+				scheduled_as.as_deref(),
+			)?;
 			if ids::bare_task(&saved.id) != old {
 				return Ok(Some((
 					old,
@@ -1564,7 +1579,7 @@ fn execute(
 		Job::CreateCalendarTask { mut task } => {
 			let old = task.id.clone();
 			let token = client.access_token()?;
-			super::calendar_tasks::persist(&token, &task.clone(), &mut task, s)?;
+			super::calendar_tasks::create(&token, &mut task, s)?;
 			return Ok(Some((old, task.id, task.calendar_id)));
 		}
 		Job::CreateTask {
@@ -1616,7 +1631,7 @@ fn execute(
 }
 
 pub fn edit_task(
-	mut task: Event,
+	task: Event,
 	settings: &CalendarSettings,
 	change: task_edit::Change,
 	order: i64,
@@ -1629,23 +1644,61 @@ pub fn edit_task(
 	{
 		return Err("A task that already repeats cannot also repeat with a time block".into());
 	}
+	let (calendar, id) = (task.calendar_id.clone(), task.id.clone());
+	let (shown, job) = task_edit_job(task, settings, change, order)?;
+	submit(job, Some(&shown), &calendar, &id)?;
+	Ok(shown)
+}
+
+/// The task as `change` leaves it, to show until Google answers, and the job
+/// that sends the change.
+///
+/// A task leaving Google Tasks becomes a new event, named after the Google
+/// Task it leaves (see [`calendar_tasks::scheduled_id`]). The task shown may
+/// still carry an ID it had before, such as the one it was created under,
+/// so the name is worked out from the ID Google knows it by now, and the job
+/// carries it. Named again once sent, it could differ from the one shown,
+/// which a later edit would then create as a second copy of the task.
+///
+/// [`calendar_tasks::scheduled_id`]: super::calendar_tasks::scheduled_id
+fn task_edit_job(
+	mut task: Event,
+	settings: &CalendarSettings,
+	change: task_edit::Change,
+	order: i64,
+) -> Result<(Event, Job), String> {
 	let mut db = task_db::open()?;
 	if task.details.task_data.is_none() {
 		task.details.task_data = Some(db.import(&task)?);
 	}
 	let original = task.clone();
 	task = super::calendar_tasks::apply(task, settings, &change, order)?;
-	submit(
-		Job::TaskEdit {
-			task: original.clone(),
-			change,
-			order,
-		},
-		Some(&task),
-		&original.calendar_id,
-		&original.id,
-	)?;
-	Ok(task)
+	let scheduled_as = if original.task_ref().is_some() && task.task_ref().is_none() {
+		let (mut calendar, mut id) = (original.calendar_id.clone(), original.id.clone());
+		resolve::identity(&id_map(db.connection())?, &mut calendar, &mut id)?;
+		if calendar.starts_with(ids::TASK_LIST) && id.starts_with(ids::TASK) {
+			let data = task
+				.details
+				.task_data
+				.as_ref()
+				.ok_or("Missing task metadata")?;
+			task.id = super::calendar_tasks::scheduled_id(data.id, &id);
+		} else {
+			// It has left Google Tasks already, so this changes that event.
+			task.id = id;
+			task.calendar_id = calendar;
+		}
+		Some(task.id.clone())
+	} else {
+		None
+	};
+	let job = Job::TaskEdit {
+		task: original,
+		change,
+		order,
+		scheduled_as,
+	};
+	Ok((task, job))
 }
 /// Whether `change` takes one occurrence of a repeating task out of its
 /// series. An item in a time block either repeats with the block or is a
@@ -3071,6 +3124,122 @@ mod tests {
 				.iter()
 				.any(Event::is_task)
 		);
+	}
+
+	/// A task made here is known by the ID it was created under long after
+	/// Google has given it its own. Scheduled, it must become the event shown:
+	/// otherwise the next edit of what is shown (laying out its block, say)
+	/// creates that event too, a second copy of the task.
+	#[test]
+	fn a_task_leaving_google_tasks_becomes_the_event_shown() {
+		use std::{cell::RefCell, rc::Rc};
+		let settings = CalendarSettings {
+			app_calendar: Some("app".into()),
+			..Default::default()
+		};
+		let path = task_db::path().unwrap();
+		let name = |local: &str, remote: &str| {
+			task_db::open()
+				.unwrap()
+				.connection()
+				.execute(
+					"INSERT INTO google_id_map(local,remote,calendar) VALUES(?1,?2,'tasks:inbox')",
+					params![local, remote],
+				)
+				.unwrap();
+		};
+		let undated = at_clock(crate::timeblocking::UNDATED, 0, 0);
+		let day = NaiveDate::from_ymd_opt(2030, 11, 20).unwrap();
+		// Google named the task long ago, or only once the edit was
+		// recorded, before it is sent.
+		for (n, named_before) in [(1, true), (2, false)] {
+			let local = format!("created-here-{n}");
+			let remote = format!("named-by-google-{n}");
+			let task = Event {
+				id: ids::event_id(&local),
+				calendar_id: "tasks:inbox".into(),
+				title: "Fix phone alarms".into(),
+				start: undated,
+				end: undated + chrono::Duration::days(1),
+				all_day: true,
+				color: colors::TASK,
+				completed: false,
+				details: Details {
+					task_data: Some(task_db::TaskData {
+						id: 917_000 + n,
+						metadata: Default::default(),
+					}),
+					..Default::default()
+				},
+			};
+			if named_before {
+				name(&local, &remote);
+			}
+			let (shown, job) =
+				task_edit_job(task, &settings, task_edit::Change::Day(day), 0).unwrap();
+			if !named_before {
+				name(&local, &remote);
+			}
+			// Named after the ID Google knows it by when there is one, so
+			// each move from the task lists makes an event of its own.
+			let named_after = if named_before { &remote } else { &local };
+			assert_eq!(
+				shown.id,
+				super::super::calendar_tasks::scheduled_id(
+					917_000 + n,
+					&ids::event_id(named_after)
+				)
+			);
+
+			let Job::TaskEdit {
+				task,
+				change,
+				order,
+				scheduled_as,
+			} = remapped(&path, job).unwrap()
+			else {
+				unreachable!()
+			};
+			assert_eq!(task.id, ids::event_id(&remote), "sent as Google knows it");
+			let created = Rc::new(RefCell::new(Vec::new()));
+			let (seen, expected) = (created.clone(), shown.id.clone());
+			let sent = api::with_transport(
+				Box::new(move |method, url, body| match method {
+					"PATCH" => {
+						assert!(url.ends_with(&format!("/app/events/{expected}")), "{url}");
+						Err((404, "Not Found".into()))
+					}
+					"POST" => {
+						let body: serde_json::Value = serde_json::from_str(body.unwrap()).unwrap();
+						seen.borrow_mut()
+							.push(body["id"].as_str().unwrap().to_owned());
+						Ok("{}".into())
+					}
+					"DELETE" => {
+						assert!(
+							url.ends_with(&format!("/tasks/named-by-google-{n}")),
+							"{url}"
+						);
+						Ok(String::new())
+					}
+					_ => panic!("unexpected {method} {url}"),
+				}),
+				|| {
+					task_edit::send_from(
+						task,
+						&settings,
+						change,
+						order,
+						"token",
+						&ids::event_id(&local),
+						scheduled_as.as_deref(),
+					)
+				},
+			)
+			.unwrap();
+			assert_eq!(sent.id, shown.id);
+			assert_eq!(*created.borrow(), std::slice::from_ref(&shown.id));
+		}
 	}
 
 	#[test]
