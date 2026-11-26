@@ -476,7 +476,10 @@ fn new_habit_uses_the_shared_right_pane_and_width_setting() {
 		state.calendar.open_event.as_deref(),
 		Some(habits::NEW_HABIT_ID)
 	);
-	assert!(state.calendar.edit_draft.as_ref().unwrap().editing_title);
+	// A habit's events are named after it, so the title is not editable.
+	let draft = state.calendar.edit_draft.as_ref().unwrap();
+	assert_eq!(draft.title, "Stretch");
+	assert!(!draft.editing_title);
 	assert!(
 		state
 			.calendar
@@ -580,19 +583,17 @@ fn a_new_habit_keeps_its_draft_on_save_failure_and_closes_on_success() {
 		&mut state,
 		Message::Habits(habits::Action::AddEvent("h".into())),
 	);
+	// The title follows the habit, so it cannot be cleared.
 	let _ = app::update(
 		&mut state,
 		Message::EventEdit(EventEditMessage::EventEditTitleChanged(String::new())),
 	);
+	assert_eq!(state.calendar.edit_draft.as_ref().unwrap().title, "Stretch");
 	let _ = app::update(
 		&mut state,
 		Message::EventEdit(EventEditMessage::EventEditSaveRequested),
 	);
-	assert_eq!(state.calendar.error.as_deref(), Some("Enter a title"));
-	let _ = app::update(
-		&mut state,
-		Message::EventEdit(EventEditMessage::EventEditTitleChanged("Stretch".into())),
-	);
+	assert_eq!(state.calendar.error, None);
 	let _ = app::update(
 		&mut state,
 		Message::Habits(habits::Action::Saved(Err("Offline".into()))),

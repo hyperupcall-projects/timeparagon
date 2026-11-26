@@ -429,7 +429,7 @@ fn a_bad_or_repeated_shortcut_is_refused_without_touching_the_desktop() {
 	let mut state = State::blank();
 	let action = panel::Action::ToggleVisibility;
 
-	for input in ["nonsense", "super + u"] {
+	for input in ["nonsense", "super + f"] {
 		let _ = update(
 			&mut state,
 			Message::Settings(SettingsMessage::ShortcutInputChanged(action, input.into())),

@@ -172,7 +172,7 @@ pub fn validate(spec: &str) -> Result<()> {
 }
 
 /// Whether two spellings are the same key combination, e.g. `Meta+F` and
-/// `super + u`.
+/// `super + f`.
 pub fn same_shortcut(a: &str, b: &str) -> bool {
 	matches!((parse_shortcut(a), parse_shortcut(b)), (Ok(a), Ok(b)) if a == b)
 }
@@ -380,8 +380,8 @@ mod tests {
 	use zbus::zvariant::{Endian, Type, serialized::Context, to_bytes};
 
 	#[test]
-	fn meta_u_parses_to_the_expected_combined_code() {
-		assert_eq!(parse_shortcut("Meta+F").unwrap(), 0x1000_0055);
+	fn meta_f_parses_to_the_expected_combined_code() {
+		assert_eq!(parse_shortcut("Meta+F").unwrap(), 0x1000_0046);
 	}
 
 	#[test]
@@ -390,7 +390,7 @@ mod tests {
 
 		assert_eq!(
 			parse_shortcut(&default.toggle_visibility[0]).unwrap(),
-			0x1000_0055
+			0x1000_0046
 		);
 		assert_eq!(
 			parse_shortcut(&default.toggle_shape[0]).unwrap(),
@@ -425,7 +425,7 @@ mod tests {
 
 	#[test]
 	fn spellings_of_one_combination_are_the_same_shortcut() {
-		assert!(same_shortcut("Meta+F", " super + u "));
+		assert!(same_shortcut("Meta+F", " super + f "));
 		assert!(!same_shortcut("Meta+F", "Meta+J"));
 		assert!(!same_shortcut("Meta+F", "nonsense"));
 	}
@@ -448,7 +448,7 @@ mod tests {
 			"Meta+F+T",
 			"U",
 			"Space",
-			"Meta+Fnknown",
+			"Meta+Unknown",
 		] {
 			assert!(parse_shortcut(spec).is_err(), "{spec:?} should be rejected");
 		}

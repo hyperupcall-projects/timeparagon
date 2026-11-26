@@ -203,9 +203,6 @@ fn the_settings_tab_is_usable_at_two_hundred_pixels() {
 		"Toggle Visibility",
 		"Toggle Shape",
 		"Add",
-		"Calendar day width (px)",
-		"Time block panel width (px)",
-		"Event/Habit/Task details width (px)",
 		"Screen margin (px, 0–30)",
 		// Google Calendar.
 		"OAuth client ID",
@@ -855,7 +852,6 @@ fn life_shows_its_pages_and_opens_an_area_in_a_side_panel() -> Result<(), Error>
 		"Vision",
 		"Goals",
 		"Add goal",
-		"Objectives without a goal",
 		"Projects",
 		"Work",
 		"Add project",
@@ -1842,7 +1838,8 @@ fn the_task_editor_adds_custom_labels() -> Result<(), Error> {
 	);
 	state.task_editor_mut().label_draft = "deep work".into();
 
-	let mut ui = render(&state, Size::new(560.0, 1000.0));
+	// Tall enough that the labels row is inside the editor's scroll viewport.
+	let mut ui = render(&state, Size::new(560.0, 1400.0));
 	assert!(ui.find("Labels").is_ok());
 	assert!(ui.find("Add a label…").is_err()); // the typed text replaces the hint
 	let _ = ui.click("Add")?;

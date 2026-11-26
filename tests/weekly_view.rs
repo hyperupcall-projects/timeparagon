@@ -898,7 +898,7 @@ fn weekly_picker_emits_hover_and_selection_and_tabs_remain_reachable() -> Result
 	drop(ui);
 	state.screen = Screen::Settings;
 	let mut ui = render_main(&state, Size::new(900.0, 1600.0));
-	assert!(ui.find("Days shown").is_ok());
+	assert!(ui.find("Days shown in week view").is_ok());
 	Ok(())
 }
 
