@@ -1362,20 +1362,29 @@ fn migrate_legacy_dirs(legacy: &ProjectDirs, current: &ProjectDirs) {
 /// Core's own tests and Cargo test executables are always isolated, including
 /// when this crate is compiled as an ordinary dependency without `cfg(test)`.
 /// Detection must not depend on features enabled by the calling test crate.
-/// Normal app binaries live outside Cargo's `deps` directory.
+/// Normal app binaries live outside the directories Cargo builds tests in.
 pub fn isolated() -> bool {
 	isolated_root().is_some()
+}
+
+/// Whether `executable` is in a directory Cargo builds test executables in:
+/// `target/<profile>/deps/`, or since Rust 1.100
+/// `target/<profile>/build/<package>/<hash>/out/`. Binaries started by
+/// `cargo run` or installed by the installer are elsewhere.
+fn cargo_test_executable(executable: &Path) -> bool {
+	let mut parents = executable.ancestors().skip(1).map(Path::file_name);
+	match parents.next().flatten() {
+		Some(name) if name == "deps" => true,
+		Some(name) if name == "out" => parents.nth(2).flatten().is_some_and(|name| name == "build"),
+		_ => false,
+	}
 }
 
 fn isolated_root() -> Option<&'static Path> {
 	static ROOT: OnceLock<Option<tempfile::TempDir>> = OnceLock::new();
 	ROOT.get_or_init(|| {
 		let executable = std::env::current_exe().expect("cannot determine storage isolation");
-		let test_harness = executable
-			.parent()
-			.and_then(Path::file_name)
-			.is_some_and(|name| name == "deps");
-		if !cfg!(test) && !test_harness {
+		if !cfg!(test) && !cargo_test_executable(&executable) {
 			return None;
 		}
 		// Fail closed: never fall back to the user's files if allocation fails.
@@ -1641,6 +1650,28 @@ impl Config {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn test_executables_are_recognised_in_both_cargo_build_layouts() {
+		for (path, test) in [
+			("/repo/target/debug/deps/timeparagon-12db440b4b74b397", true),
+			(
+				"/repo/target/debug/build/timeparagon/12db440b4b74b397/out/timeparagon-12db440b4b74b397",
+				true,
+			),
+			(
+				"/repo/target/debug/build/timeparagon-core/4c7ea63c90125c2e/out/test_isolation-4c7ea63c90125c2e",
+				true,
+			),
+			("/repo/target/debug/timeparagon", false),
+			("/repo/target/release/timeparagon", false),
+			("/home/me/.local/bin/timeparagon", false),
+			("/srv/out/timeparagon", false),
+			("timeparagon", false),
+		] {
+			assert_eq!(cargo_test_executable(Path::new(path)), test, "{path}");
+		}
+	}
 
 	#[test]
 	fn objectives_require_an_existing_goal_in_their_area() {
