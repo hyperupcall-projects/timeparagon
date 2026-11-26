@@ -27,6 +27,15 @@ use crate::calendar::task_sort::sort_tasks;
 pub const TITLE_FIELD: &str = "inbox-title";
 const MAX_TITLE_CHARS: usize = 1024;
 
+/// The task lists drawn from the inbox's rules, each with a search box of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TaskList {
+	Overdue,
+	Inbox,
+	Today,
+	Triaged,
+}
+
 #[derive(Default)]
 pub struct Inbox {
 	pub voice: crate::voice::Session,
@@ -58,6 +67,15 @@ pub struct Inbox {
 	/// brought that list's name back.
 	created_list: Option<String>,
 	lookups: u64,
+	/// What each list's search box holds, kept while switching between them.
+	queries: std::collections::HashMap<TaskList, String>,
+}
+
+impl Inbox {
+	/// The text in a list's search box.
+	pub fn query(&self, list: TaskList) -> &str {
+		self.queries.get(&list).map_or("", String::as_str)
+	}
 }
 
 /// A task being written in the popup.
@@ -113,6 +131,8 @@ pub enum Action {
 	Image(crate::image_input::Action),
 	Sort(InboxSort),
 	OverdueSort(InboxSort),
+	/// A list's search box changed.
+	Search(TaskList, String),
 	/// Open the add something popup.
 	NewTask,
 	KindSelected(calendar::DraftKind),
@@ -295,6 +315,10 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 		Action::OverdueSort(sort) => {
 			state.config.calendar.overdue_sort = sort;
 			crate::app::queue_save(state)
+		}
+		Action::Search(list, query) => {
+			state.inbox.queries.insert(list, query);
+			Task::none()
 		}
 		Action::NewTask => {
 			state.inbox.error = None;

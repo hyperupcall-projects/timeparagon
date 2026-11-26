@@ -580,6 +580,27 @@ pub fn page_heading<'a>(
 	.width(Fill)
 }
 
+/// What a task list's search box says it searches, so every list words it alike.
+pub const TASK_SEARCH_PLACEHOLDER: &str = "Search title or description…";
+
+/// The search box over a task list, which narrows it to the tasks whose title
+/// or description holds the text. See [`crate::calendar::search::TextQuery`].
+pub fn task_search<'a>(
+	query: &str,
+	on_input: impl Fn(String) -> Message + 'a,
+	metrics: &Metrics,
+) -> iced::widget::Column<'a, Message> {
+	column![
+		text("Search").size(metrics.label()).style(text::secondary),
+		text_input(TASK_SEARCH_PLACEHOLDER, query)
+			.on_input(on_input)
+			.size(metrics.label())
+			.width(Fill),
+	]
+	.spacing(8)
+	.width(Fill)
+}
+
 /// Put actions below headings when a side-by-side toolbar would squeeze the title.
 pub fn page_toolbar<'a>(
 	title: iced::widget::Column<'a, Message>,

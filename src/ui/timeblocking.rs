@@ -1579,11 +1579,11 @@ pub fn backlog<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
 		.collect();
 	tasks.sort_by_key(|event| tb::backlog_order(event));
 
-	let query = state.timeblocking.backlog_query.trim().to_lowercase();
+	let query = crate::calendar::search::TextQuery::new(&state.timeblocking.backlog_query);
 	let shown: Vec<_> = tasks
 		.iter()
 		.copied()
-		.filter(|task| query.is_empty() || task.title.to_lowercase().contains(&query))
+		.filter(|task| query.matches(task))
 		.collect();
 
 	let mut body = column![
@@ -1593,11 +1593,11 @@ pub fn backlog<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> 
 			Some(shown.len()),
 			metrics
 		),
-		text("Search").size(metrics.label()).style(text::secondary),
-		crate::ui::controls::text_input("Search tasks…", &state.timeblocking.backlog_query)
-			.on_input(|value| msg(Action::BacklogQuery(value)))
-			.size(metrics.label())
-			.width(Fill),
+		super::controls::task_search(
+			&state.timeblocking.backlog_query,
+			|value| msg(Action::BacklogQuery(value)),
+			metrics,
+		),
 	]
 	.spacing(8);
 	if tasks.is_empty() {

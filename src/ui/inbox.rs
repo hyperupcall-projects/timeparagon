@@ -8,23 +8,17 @@ use super::layout::Metrics;
 use super::source_icon;
 use crate::app::{EventMessage, SystemMessage, TaskMessage};
 use crate::app::{Message, State};
+use crate::calendar::search::TextQuery;
 use crate::calendar::{self, Event};
 use crate::inbox::{self, Action, Draft};
+// Which Tasks list a card is drawn for, so the actions can differ.
+use crate::inbox::TaskList as List;
 use crate::integrations;
 use crate::timeblocking as tb;
 use chrono::Local;
 
 fn msg(action: Action) -> Message {
 	Message::Inbox(action)
-}
-
-/// Which Tasks list a card is drawn for, so the actions can differ.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum List {
-	Overdue,
-	Inbox,
-	Today,
-	Triaged,
 }
 
 pub fn view<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
@@ -69,6 +63,16 @@ fn list_view<'a>(state: &'a State, metrics: &Metrics, list: List) -> Element<'a,
 	} else {
 		&[]
 	};
+	let listed = tasks.len() + invitations.len();
+	let query = TextQuery::new(state.inbox.query(list));
+	let tasks: Vec<_> = tasks
+		.into_iter()
+		.filter(|task| query.matches(task))
+		.collect();
+	let invitations: Vec<_> = invitations
+		.iter()
+		.filter(|invitation| query.matches(invitation))
+		.collect();
 	let count = tasks.len() + invitations.len();
 	let title = super::controls::page_heading(heading, subtitle, Some(count), metrics);
 	let header: Element<'a, Message> = if list == List::Inbox {
@@ -79,7 +83,15 @@ fn list_view<'a>(state: &'a State, metrics: &Metrics, list: List) -> Element<'a,
 	} else {
 		title.into()
 	};
-	let mut body = column![header].spacing(metrics.spacing);
+	let mut body = column![
+		header,
+		super::controls::task_search(
+			state.inbox.query(list),
+			move |query| msg(Action::Search(list, query)),
+			metrics,
+		),
+	]
+	.spacing(metrics.spacing);
 	if matches!(list, List::Inbox | List::Overdue) {
 		body = body.push(
 			row![
@@ -117,6 +129,7 @@ fn list_view<'a>(state: &'a State, metrics: &Metrics, list: List) -> Element<'a,
 	if count == 0 {
 		body = body.push(
 			text(match list {
+				_ if listed > 0 => "No matching tasks",
 				List::Overdue => "Nothing unfinished",
 				List::Inbox => "Nothing to triage",
 				List::Today => "No tasks left to slot in today",
@@ -1245,6 +1258,64 @@ mod tests {
 		let mut ui = simulator(&state, 500.0);
 		assert!(ui.find("Reply to Sam").is_err());
 		assert!(ui.find("No tasks left to slot in today").is_ok());
+	}
+
+	#[test]
+	fn each_list_searches_titles_and_descriptions_with_its_own_box() {
+		let mut state = state_with_task("Ask about the invoice\n");
+		let mut plants = state.calendar.events[0].clone();
+		plants.id = "task:two".into();
+		plants.title = "Water plants".into();
+		plants.details.description = String::new();
+		state.calendar.events.push(plants);
+
+		let mut ui = simulator(&state, 500.0);
+		let search = ui
+			.find(crate::ui::controls::TASK_SEARCH_PLACEHOLDER)
+			.unwrap();
+		ui.point_at(search.bounds().center());
+		ui.simulate(iced_test::simulator::click());
+		ui.typewrite("invoice");
+		let typed = ui
+			.into_messages()
+			.filter_map(|message| match message {
+				Message::Inbox(Action::Search(List::Inbox, query)) => Some(query),
+				_ => None,
+			})
+			.last();
+		assert_eq!(typed.as_deref(), Some("invoice"));
+
+		// The description matches the first task, and nothing matches the other.
+		let _ = crate::app::update(
+			&mut state,
+			msg(Action::Search(List::Inbox, "INVOICE ".into())),
+		);
+		let mut ui = simulator(&state, 500.0);
+		assert!(ui.find("Reply to Sam").is_ok());
+		assert!(ui.find("Water plants").is_err());
+		drop(ui);
+
+		let _ = crate::app::update(&mut state, msg(Action::Search(List::Inbox, "water".into())));
+		let mut ui = simulator(&state, 500.0);
+		assert!(ui.find("Water plants").is_ok());
+		assert!(ui.find("Reply to Sam").is_err());
+		drop(ui);
+
+		let _ = crate::app::update(&mut state, msg(Action::Search(List::Inbox, "nope".into())));
+		let mut ui = simulator(&state, 500.0);
+		assert!(ui.find("No matching tasks").is_ok());
+		assert!(ui.find("Nothing to triage").is_err());
+		drop(ui);
+
+		// The Triaged list has a box of its own, which starts empty.
+		state.screen = crate::app::Screen::Triaged;
+		for task in &mut state.calendar.events {
+			task.calendar_id = "tasks:triaged".into();
+		}
+		assert_eq!(state.inbox.query(List::Triaged), "");
+		let mut ui = simulator(&state, 500.0);
+		assert!(ui.find("Reply to Sam").is_ok());
+		assert!(ui.find("Water plants").is_ok());
 	}
 
 	#[test]

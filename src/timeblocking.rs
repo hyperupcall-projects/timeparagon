@@ -88,7 +88,7 @@ pub struct Workspace {
 	/// asking the plan view under the pointer. It drives the drop preview, so
 	/// the preview always agrees with where the task actually lands.
 	pub drop_hover: Option<DropHover>,
-	/// Text that narrows the backlog by task title or list name.
+	/// Text that narrows the backlog by task title or description.
 	pub backlog_query: String,
 	/// When set, the backlog shows only tasks from this Google Tasks list.
 	pub backlog_list: Option<String>,

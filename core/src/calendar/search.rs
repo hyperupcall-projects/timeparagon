@@ -199,6 +199,32 @@ impl Search {
 	}
 }
 
+/// What a task list's search box narrows it to: tasks whose title or
+/// description holds the text, ignoring case and surrounding spaces. Only the
+/// description's prose is searched, never the metadata stored beneath it. Every
+/// task matches while the box is blank.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TextQuery(String);
+
+impl TextQuery {
+	pub fn new(query: &str) -> Self {
+		Self(query.trim().to_lowercase())
+	}
+
+	/// Whether the box is blank, so nothing is filtered out.
+	pub fn is_empty(&self) -> bool {
+		self.0.is_empty()
+	}
+
+	pub fn matches(&self, event: &Event) -> bool {
+		self.is_empty()
+			|| event.title.to_lowercase().contains(&self.0)
+			|| task_metadata::prose(&event.details.description)
+				.to_lowercase()
+				.contains(&self.0)
+	}
+}
+
 /// Whether an event is under way at this time of day, counting the minute it
 /// starts and the minute it ends. An all-day event covers the whole day.
 fn covers_time(event: &Event, time: NaiveTime) -> bool {
@@ -364,6 +390,23 @@ mod tests {
 		assert!(search.matches(&task));
 		search.update(Action::Query("tt-minutes".into()));
 		assert!(!search.matches(&task));
+	}
+
+	#[test]
+	fn a_task_list_query_finds_the_title_or_description_but_not_the_metadata() {
+		let mut task = task("Laundry", None);
+		task.details.description = "Whites only\n---\ntt-version: 1\ntt-minutes: 30".into();
+		for (query, found) in [
+			("", true),
+			("   ", true),
+			("LAUND", true),
+			(" whites ", true),
+			("tt-minutes", false),
+			("dishes", false),
+		] {
+			assert_eq!(TextQuery::new(query).matches(&task), found, "{query:?}");
+		}
+		assert!(TextQuery::new("  ").is_empty());
 	}
 
 	#[test]

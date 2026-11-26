@@ -4,6 +4,7 @@
 
 use chrono::{DateTime, Local, NaiveDate, NaiveTime};
 use dioxus::prelude::*;
+use timeparagon_core::calendar::search::TextQuery;
 use timeparagon_core::calendar::task_sort::{InboxSort, sort_tasks};
 use timeparagon_core::calendar::time_format::{self, TimeFormat};
 use timeparagon_core::calendar::{self, Calendar, Event, deadline, ids};
@@ -231,6 +232,22 @@ fn timestamp(time: Option<DateTime<chrono::Utc>>, format: TimeFormat) -> String 
 	)
 }
 
+/// The search box over a task list, which narrows it to the tasks whose title
+/// or description holds the text. Each list keeps its own while it is open.
+fn search_box(query: Signal<String>) -> Element {
+	let mut query = query;
+	rsx! {
+		input {
+			class: "client-input",
+			r#type: "search",
+			placeholder: "Search title or description…",
+			aria_label: "Search tasks",
+			value: "{query}",
+			oninput: move |event| query.set(event.value()),
+		}
+	}
+}
+
 /// One of Overdue, Inbox, Today or Backlog.
 #[component]
 pub fn TaskList(
@@ -249,6 +266,7 @@ pub fn TaskList(
 	on_saved: EventHandler<()>,
 ) -> Element {
 	let mut sort_error = use_signal(|| None::<String>);
+	let query = use_signal(String::new);
 	let settings = config.read().calendar.clone();
 	let now = timeparagon_core::clock::now();
 	let (heading, subtitle, tasks): (String, &str, Vec<&Event>) = match tab {
@@ -281,8 +299,22 @@ pub fn TaskList(
 		}
 	};
 
+	let wanted = TextQuery::new(&query.read());
+	let listed = tasks.len();
+	let tasks: Vec<&Event> = tasks
+		.into_iter()
+		.filter(|task| wanted.matches(task))
+		.collect();
 	let invitations = if tab == TaskTab::Inbox && signed_in {
-		rsx! { Invitations { calendars: calendars.clone(), settings: settings.clone(), revision, editing } }
+		rsx! {
+			Invitations {
+				calendars: calendars.clone(),
+				settings: settings.clone(),
+				query: wanted.clone(),
+				revision,
+				editing,
+			}
+		}
 	} else {
 		rsx! {}
 	};
@@ -293,6 +325,7 @@ pub fn TaskList(
 	};
 	let count = tasks.len();
 	let empty = match tab {
+		_ if listed > 0 => "No matching tasks",
 		TaskTab::Overdue => "Nothing unfinished",
 		TaskTab::Inbox => "Nothing to triage",
 		_ => "No tasks left to slot in today",
@@ -317,6 +350,7 @@ pub fn TaskList(
 					button { class: "btn primary", onclick: move |_| on_new_task.call(()), "New task" }
 				}
 			}
+			{search_box(query)}
 			if let Some(chosen) = sort {
 				label { class: "plan-sort",
 					span { "Sort by" }
@@ -523,6 +557,8 @@ fn task_card(
 fn Invitations(
 	calendars: Vec<Calendar>,
 	settings: CalendarSettings,
+	/// The Inbox's search, which narrows these too.
+	query: TextQuery,
 	revision: Signal<u32>,
 	editing: Signal<Option<Event>>,
 ) -> Element {
@@ -550,8 +586,12 @@ fn Invitations(
 			.await
 		}
 	});
-	let invitations = match &*found.read() {
-		Some(Ok(invitations)) => invitations.clone(),
+	let invitations: Vec<Event> = match &*found.read() {
+		Some(Ok(invitations)) => invitations
+			.iter()
+			.filter(|invitation| query.matches(invitation))
+			.cloned()
+			.collect(),
 		Some(Err(message)) => {
 			return rsx! { p { class: "editor-error", role: "alert", "Could not load invitations: {message}" } };
 		}
@@ -602,17 +642,17 @@ fn Backlog(
 	editing: Signal<Option<Event>>,
 	on_saved: EventHandler<()>,
 ) -> Element {
-	let mut query = use_signal(String::new);
+	let query = use_signal(String::new);
 	let busy = use_signal(|| None::<String>);
 	let error = use_signal(|| None::<String>);
 	let settings = config.read().calendar.clone();
 	let list_name = backlog_list_name(&settings, &calendars);
 	let tasks = backlog_tasks(&events, &settings, &calendars);
-	let wanted = query().trim().to_lowercase();
+	let wanted = TextQuery::new(&query.read());
 	let shown: Vec<&Event> = tasks
 		.iter()
 		.copied()
-		.filter(|task| wanted.is_empty() || task.title.to_lowercase().contains(&wanted))
+		.filter(|task| wanted.matches(task))
 		.collect();
 	let count = shown.len();
 	let sections = tb::BacklogSection::ALL.into_iter().map(|section| {
@@ -639,14 +679,7 @@ fn Backlog(
 					p { class: "hint plan-subtitle", "Google Tasks parked on this list" }
 				}
 			}
-			input {
-				class: "client-input",
-				r#type: "search",
-				placeholder: "Search tasks…",
-				aria_label: "Search tasks",
-				value: "{query}",
-				oninput: move |event| query.set(event.value()),
-			}
+			{search_box(query)}
 			if let Some(message) = error() {
 				p { class: "editor-error", role: "alert", "{message}" }
 			}

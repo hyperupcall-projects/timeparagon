@@ -1545,4 +1545,16 @@ mod sheet_tests {
 		);
 		assert!(!backlog.contains("Sort by"));
 	}
+
+	#[test]
+	fn every_task_list_can_be_searched_by_title_or_description() {
+		for html in [
+			render_list(|| list_app(TaskTab::Overdue)),
+			render_list(|| list_app(TaskTab::Inbox)),
+			render_list(|| list_app(TaskTab::Today)),
+			render_list(|| list_app(TaskTab::Backlog)),
+		] {
+			assert_offers(&html, &["Search title or description…", "Search tasks"]);
+		}
+	}
 }

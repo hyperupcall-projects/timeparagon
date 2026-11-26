@@ -2305,7 +2305,7 @@ fn backlog_shows_only_the_parked_list_and_filters_by_search() -> Result<(), Erro
 		ui.find("Buy stamps").is_err(),
 		"a task on another list must not appear in the backlog"
 	);
-	let search = ui.find("Search tasks…")?;
+	let search = ui.find("Search title or description…")?;
 	ui.point_at(search.bounds().center());
 	ui.simulate(iced_test::simulator::click());
 	ui.typewrite("outline");
@@ -2323,6 +2323,24 @@ fn backlog_shows_only_the_parked_list_and_filters_by_search() -> Result<(), Erro
 	assert!(ui.find("Research outline").is_err());
 	drop(ui);
 
+	// The description is searched as well as the title.
+	state
+		.calendar
+		.events
+		.iter_mut()
+		.find(|event| event.id == "task:backlog")
+		.unwrap()
+		.details
+		.description = "Read the grant guidelines".into();
+	let _ = app::update(
+		&mut state,
+		Message::TimeBlocking(Action::BacklogQuery("grant".into())),
+	);
+	let mut ui = render(&state, Size::new(420.0, 720.0));
+	assert!(ui.find("Research outline").is_ok());
+	assert!(ui.find("Send invoice").is_err());
+	drop(ui);
+
 	// Choosing a different list in Settings changes what the backlog shows.
 	state.config.calendar.backlog_list = Some("tasks:errands".into());
 	let _ = app::update(
@@ -2338,7 +2356,7 @@ fn backlog_shows_only_the_parked_list_and_filters_by_search() -> Result<(), Erro
 
 	// The list name and search stay inside a 180px window.
 	let mut ui = render(&state, Size::new(180.0, 720.0));
-	for label in ["Search tasks…", "Buy stamps"] {
+	for label in ["Search title or description…", "Buy stamps"] {
 		let bounds = ui.find(label)?.bounds();
 		assert!(
 			bounds.x >= -1.0 && bounds.x + bounds.width <= 181.0,
