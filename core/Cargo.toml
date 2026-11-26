@@ -15,7 +15,6 @@ getrandom = { version = "0.3.3", default-features = false, features = ["std"] }
 # The data layer only needs Color.
 iced_core = { version = "0.14", default-features = false }
 log = "0.4.34"
-notify = "8.2.0"
 # Parses note bodies; the HTML renderer is not needed.
 pulldown-cmark = { version = "0.13", default-features = false }
 rusqlite = { version = "0.41.0", features = ["bundled", "backup"] }

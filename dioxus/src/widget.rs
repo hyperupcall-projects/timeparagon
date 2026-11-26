@@ -343,11 +343,9 @@ pub extern "system" fn Java_dev_kofler_timeparagon_widget_WidgetRefreshService_n
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use chrono::{DateTime, Duration, Local, TimeZone};
+	use chrono::{DateTime, Local, TimeZone};
 	use timeparagon_core::calendar::{Calendar, Details, Snapshot};
 	use timeparagon_core::places::{Place, PlaceSettings, SavedRoute, TravelMode};
-	use timeparagon_core::task_db::TaskData;
-	use timeparagon_core::timeblocking::Metadata;
 
 	fn date() -> NaiveDate {
 		NaiveDate::from_ymd_opt(2026, 10, 26).unwrap()
@@ -372,21 +370,6 @@ mod tests {
 			completed: false,
 			details: Details::default(),
 		}
-	}
-
-	fn task(id: &str, block: Option<&str>, order: i64, completed: bool) -> Event {
-		let mut task = event(id, "tasks:work", at(0, 0), at(0, 0) + Duration::days(1));
-		task.all_day = true;
-		task.completed = completed;
-		task.details.task_data = Some(TaskData {
-			id: order,
-			metadata: Metadata {
-				block: block.map(str::to_owned),
-				order,
-				..Metadata::default()
-			},
-		});
-		task
 	}
 
 	fn calendar(id: &str) -> Calendar {
