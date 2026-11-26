@@ -85,7 +85,7 @@ fn panel_plus_opens_the_inbox_task_form() {
 		"Priority",
 		"Location",
 		"Description",
-		"Add task",
+		"Add",
 		"Cancel",
 	] {
 		assert!(ui.find(label).is_ok(), "missing {label}");
@@ -114,7 +114,7 @@ fn dock_editor_window_uses_the_full_form_and_can_open_the_estimate_dialog() {
 			"Priority",
 			"Location",
 			"Description",
-			"Add task",
+			"Add",
 			"Cancel",
 		] {
 			assert!(ui.find(label).is_ok(), "missing {label} at {width}");

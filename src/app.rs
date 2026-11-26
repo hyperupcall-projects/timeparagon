@@ -1292,6 +1292,7 @@ fn system_theme_task() -> Task<Message> {
 pub fn boot_add_something() -> (State, Task<Message>) {
 	let mut state = boot_state();
 	state.task_creation_window = true;
+	state.errors.close();
 	state.main_size = Size::new(480.0, 800.0);
 	let edit = crate::inbox::update(&mut state, crate::inbox::Action::NewTask);
 	let (_id, open) = window::open(window::Settings {

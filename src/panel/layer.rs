@@ -115,17 +115,12 @@ fn show_popover(panel: &mut Panel) -> Task<Message> {
 	let show = panel
 		.id
 		.map(|id| {
-			let height = panel.app.main_size.height.ceil().max(1.0) as i32;
+			// Layout will report the visible card's bounds. Keep the rest of
+			// the surface click-through, including while the card is opening.
 			layer(
 				id,
-				LayerAction::SetInputRegion(iced_layershell::actions::ActionCallback::new(
-					move |region| region.add(0, 0, 440, height),
-				)),
-			)
-			.chain(layer(
-				id,
 				LayerAction::KeyboardInteractivityChange(KeyboardInteractivity::Exclusive),
-			))
+			)
 		})
 		.unwrap_or_else(Task::none);
 	Task::batch([adapt(edit), show])
@@ -346,7 +341,13 @@ fn update(panel: &mut Panel, message: Message) -> Task<Message> {
 		| Message::Runtime(Action::Output(app::Message::System(
 			app::SystemMessage::TaskPopoverBounds(bounds),
 		))) => {
-			if let Some(id) = panel.id.filter(|_| panel.app.task_creation_window) {
+			// A sensor callback may still be queued when Cancel, Escape, a
+			// save, or loss of focus hides the editor. It must not make the
+			// now-invisible surface intercept clicks again.
+			if let Some(id) = panel
+				.id
+				.filter(|_| panel.app.task_creation_window && panel.app.inbox.draft.is_some())
+			{
 				let x = bounds.x.floor() as i32;
 				let y = bounds.y.floor() as i32;
 				let width = bounds.width.ceil() as i32;
@@ -377,6 +378,15 @@ fn update(panel: &mut Panel, message: Message) -> Task<Message> {
 			Task::batch(tasks)
 		}
 		Message::Focused(id) => {
+			if panel.app.task_creation_window
+				&& Some(id) == panel.id
+				&& panel.app.inbox.draft.is_none()
+			{
+				return layer(
+					id,
+					LayerAction::KeyboardInteractivityChange(KeyboardInteractivity::None),
+				);
+			}
 			// Use Exclusive only to acquire initial focus. Keeping the grab
 			// prevents other windows (including the screenshot UI) from taking
 			// focus. Match the dock editor by yielding once focus arrives.
@@ -510,12 +520,15 @@ fn update(panel: &mut Panel, message: Message) -> Task<Message> {
 								}
 							},
 							output_option: OutputOption::LastOutput,
-							events_transparent: flash
-								&& panel
-									.app
-									.flash
-									.as_ref()
-									.is_some_and(|f| f.settings.passthrough),
+							// Popovers start with no input region, even before
+							// their first configure/layout callback arrives.
+							events_transparent: popover
+								|| (flash
+									&& panel
+										.app
+										.flash
+										.as_ref()
+										.is_some_and(|f| f.settings.passthrough)),
 							namespace: Some(namespace),
 						},
 					},
@@ -748,7 +761,15 @@ mod tests {
 			assert!(panel.app.inbox.draft.is_some());
 			assert_eq!(panel.id, Some(id));
 			assert!(messages.iter().any(|m| matches!(m,
-                Message::Layer(LayerShellCustomActionWithId(Some(target), LayerAction::SetInputRegion(_))) if *target == id)));
+                Message::Layer(LayerShellCustomActionWithId(Some(target),
+                    LayerAction::KeyboardInteractivityChange(KeyboardInteractivity::Exclusive))) if *target == id)));
+			assert!(!messages.iter().any(|m| matches!(
+				m,
+				Message::Layer(LayerShellCustomActionWithId(
+					_,
+					LayerAction::SetInputRegion(_)
+				))
+			)));
 			assert!(!messages.iter().any(|m| matches!(
 				m,
 				Message::Layer(LayerShellCustomActionWithId(
@@ -764,6 +785,45 @@ mod tests {
 			assert_eq!(panel.id, Some(id));
 			assert!(messages.iter().any(|m| matches!(m,
                 Message::Layer(LayerShellCustomActionWithId(Some(target), LayerAction::SetInputRegion(_))) if *target == id)));
+		}
+	}
+
+	#[test]
+	fn hidden_editor_ignores_late_card_and_map_bounds_after_losing_focus() {
+		let mut panel = panel();
+		panel.app.task_creation_window = true;
+		let (_tx, rx) = std::sync::mpsc::channel();
+		panel.commands = Some(rx);
+		let id = panel.id.unwrap();
+		let card =
+			iced::Rectangle::new(iced::Point::new(0.0, 180.0), iced::Size::new(440.0, 720.0));
+		let map = iced::Rectangle::with_size(iced::Size::new(440.0, 900.0));
+		for _ in 0..2 {
+			let _ = outputs(show_popover(&mut panel));
+			for bounds in [card, map] {
+				let message = app::Message::System(app::SystemMessage::TaskPopoverBounds(bounds));
+				assert!(!outputs(update(&mut panel, Message::App(message))).is_empty());
+			}
+			let messages = outputs(update(&mut panel, Message::Unfocused(id)));
+			assert!(panel.app.inbox.draft.is_none());
+			assert!(messages.iter().any(|m| matches!(m,
+                Message::Layer(LayerShellCustomActionWithId(Some(target), LayerAction::SetInputRegion(_))) if *target == id)));
+			for bounds in [card, map] {
+				let message = app::Message::System(app::SystemMessage::TaskPopoverBounds(bounds));
+				assert!(outputs(update(&mut panel, Message::App(message.clone()))).is_empty());
+				assert!(
+					outputs(update(
+						&mut panel,
+						Message::Runtime(Action::Output(message))
+					))
+					.is_empty()
+				);
+			}
+			let messages = outputs(update(&mut panel, Message::Focused(id)));
+			assert!(matches!(messages.as_slice(),
+                [Message::Layer(LayerShellCustomActionWithId(Some(target),
+                    LayerAction::KeyboardInteractivityChange(KeyboardInteractivity::None)))]
+                if *target == id));
 		}
 	}
 
@@ -786,7 +846,8 @@ mod tests {
 		assert!(
 			matches!(&messages[..], [Message::Layer(LayerShellCustomActionWithId(None,
             LayerAction::NewLayerShell { settings, .. }))]
-            if settings.size == Some((440, 0)) && settings.keyboard_interactivity == KeyboardInteractivity::None)
+            if settings.size == Some((440, 0)) && settings.keyboard_interactivity == KeyboardInteractivity::None
+                && settings.events_transparent)
 		);
 		let messages = outputs(update(
 			&mut panel,
@@ -861,6 +922,7 @@ mod tests {
                 if *target == id && settings.anchor == expected.0
                     && settings.size == Some(expected.1) && settings.margin == Some(expected.2)
                     && settings.exclusive_zone == Some(0) && settings.layer == Layer::Overlay
+                    && settings.events_transparent
                     && settings.namespace.as_deref() == Some("timeparagon-task-popover")));
 			assert!(
 				outputs(update(

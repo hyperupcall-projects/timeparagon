@@ -7,7 +7,7 @@ use iced::{Color, Element, Fill, Length, Rectangle, Renderer, Size, Theme, mouse
 use crate::app::{Message, State};
 
 pub(crate) fn host<'a>(state: &'a State, content: Element<'a, Message>) -> Element<'a, Message> {
-	if !state.errors.is_open() {
+	if state.task_creation_window || !state.errors.is_open() {
 		return content;
 	}
 	let background = Element::new(Inert(content));
@@ -37,22 +37,7 @@ pub(crate) fn host<'a>(state: &'a State, content: Element<'a, Message>) -> Eleme
 			})
 			.into()
 	});
-	let modal = stack![background, iced::widget::opaque(dialog)];
-	if state.task_creation_window {
-		// The dock's task editor usually accepts input only over its card.
-		// While an error is open the entire dimmed surface must take input.
-		let bounds = |size: Size| {
-			Message::System(crate::app::SystemMessage::TaskPopoverBounds(
-				Rectangle::with_size(size),
-			))
-		};
-		iced::widget::sensor(modal)
-			.on_show(bounds)
-			.on_resize(bounds)
-			.into()
-	} else {
-		modal.into()
-	}
+	stack![background, iced::widget::opaque(dialog)].into()
 }
 
 struct Inert<'a>(Element<'a, Message>);

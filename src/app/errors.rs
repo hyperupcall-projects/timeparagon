@@ -18,6 +18,12 @@ impl Errors {
 }
 
 pub(crate) fn capture(state: &mut State) {
+	// The dock keeps its task editor alive while hidden. Background failures
+	// belong in the log, not in a modal on that otherwise invisible surface.
+	let show_dialog = !state.task_creation_window;
+	if !show_dialog {
+		state.errors.close();
+	}
 	let sources = [
 		&state.config_error,
 		&state.calendar.error,
@@ -38,7 +44,7 @@ pub(crate) fn capture(state: &mut State) {
 				log::error!("{message}");
 				announced.push(message.clone());
 			}
-			if !state.errors.messages.contains(message) {
+			if show_dialog && !state.errors.messages.contains(message) {
 				state.errors.messages.push(message.clone());
 			}
 		}

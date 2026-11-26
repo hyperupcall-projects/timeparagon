@@ -1,3 +1,4 @@
+use iced::futures::{StreamExt, executor::block_on};
 use iced::{Size, keyboard, window};
 use iced_test::{Simulator, core::Settings};
 use timeparagon::app::{self, Message, State, SystemMessage};
@@ -55,9 +56,8 @@ fn every_global_error_opens_a_dialog_in_each_window() {
 }
 
 #[test]
-fn task_popover_errors_are_above_existing_dialogs_and_block_background_input() {
+fn global_errors_are_above_existing_dialogs_and_block_background_input() {
 	let mut state = State::blank();
-	state.task_creation_window = true;
 	update(
 		&mut state,
 		Message::Inbox(timeparagon::inbox::Action::NewTask),
@@ -93,6 +93,88 @@ fn task_popover_errors_are_above_existing_dialogs_and_block_background_input() {
 		app::view(&state, window::Id::unique()),
 	);
 	assert!(ui.find(SCHEMA).is_err());
+}
+
+#[test]
+fn dock_errors_leave_the_hidden_surface_empty_and_the_open_form_usable() {
+	for source in 0..7 {
+		let mut state = State::blank();
+		let field = match source {
+			0 => &mut state.config_error,
+			1 => &mut state.calendar.error,
+			2 => &mut state.inbox.error,
+			3 => &mut state.routines.error,
+			4 => &mut state.habits.error,
+			5 => &mut state.notes.error,
+			_ => &mut state.accounts.error,
+		};
+		*field = Some(SCHEMA.into());
+		// Startup can capture an error before the dock's editor mode is set.
+		update(&mut state, Message::Ignored);
+		state.task_creation_window = true;
+		for open in [false, true] {
+			if open {
+				update(
+					&mut state,
+					Message::Inbox(timeparagon::inbox::Action::NewTask),
+				);
+				state.calendar.error = Some("Calendar sync timed out".into());
+				update(&mut state, Message::Ignored);
+			}
+			let mut ui = Simulator::with_size(
+				Settings::default(),
+				Size::new(440.0, 900.0),
+				app::view(&state, window::Id::unique()),
+			);
+			assert!(ui.find(SCHEMA).is_err(), "source {source}, open {open}");
+			assert!(ui.find("Calendar sync timed out").is_err());
+			assert!(ui.find("Error").is_err());
+			if open {
+				ui.click("Cancel").unwrap();
+			} else {
+				assert!(ui.find("Cancel").is_err());
+			}
+			ui.simulate([iced::Event::Window(window::Event::RedrawRequested(
+				iced::time::Instant::now(),
+			))]);
+			let messages: Vec<_> = ui.into_messages().collect();
+			if open {
+				assert!(
+					messages
+						.iter()
+						.any(|m| matches!(m, Message::Inbox(timeparagon::inbox::Action::Cancel)))
+				);
+			} else {
+				assert!(
+					!messages
+						.iter()
+						.any(|m| matches!(m, Message::System(SystemMessage::TaskPopoverBounds(_))))
+				);
+			}
+		}
+		// Suppressed errors must not consume Escape and leave the form open.
+		let task = app::update(
+			&mut state,
+			Message::System(SystemMessage::KeyPressed(
+				keyboard::Key::Named(keyboard::key::Named::Escape),
+				keyboard::Modifiers::default(),
+			)),
+		);
+		let actions = block_on(
+			iced_test::runtime::task::into_stream(task)
+				.expect("Escape should cancel the form")
+				.collect::<Vec<_>>(),
+		);
+		assert!(
+			actions.iter().any(|action| matches!(
+				action,
+				iced_test::runtime::Action::Output(Message::Inbox(
+					timeparagon::inbox::Action::Cancel
+				))
+			)),
+			"source {source}"
+		);
+	}
 }
 
 #[test]
