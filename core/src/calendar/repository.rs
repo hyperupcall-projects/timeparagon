@@ -33,7 +33,7 @@ pub(super) struct SyncState {
 pub(super) fn state(connection: &Connection) -> Result<Option<SyncState>, String> {
 	let json: Option<String> = connection
 		.query_row(
-			"SELECT value FROM documents WHERE key=?1",
+			"SELECT value FROM caches WHERE key=?1",
 			[keys::SYNC_STATE],
 			|r| r.get(0),
 		)
@@ -44,7 +44,7 @@ pub(super) fn state(connection: &Connection) -> Result<Option<SyncState>, String
 }
 
 pub(super) fn save_state(connection: &Connection, state: &SyncState) -> Result<(), String> {
-	connection.execute("INSERT INTO documents(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+	connection.execute("INSERT INTO caches(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         params![keys::SYNC_STATE, serde_json::to_string(state).map_err(|e| e.to_string())?]).map_err(|e|e.to_string())?;
 	Ok(())
 }

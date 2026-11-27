@@ -988,7 +988,7 @@ Apps notice changes made by another process, or brought by sync, through the
 
 Older versions kept the settings in `config.toml`. The first time this version
 opens a device's database, it imports that device's file (values at their
-default left out), records `settings_imported_at` in `documents`, and renames
+default left out), records `settings_imported_at` in `device_state`, and renames
 the file `config.toml.imported`. It is not read after that. A file that does
 not parse is left where it is and not imported; the error is logged.
 

@@ -25,7 +25,7 @@ use crate::task_db::Database;
 
 /// The document that records when this database imported a settings file.
 /// Present even when there was no file, so nothing is imported later.
-const MARKER: &str = "settings_imported_at";
+const MARKER: &str = crate::task_db::keys::SETTINGS_IMPORTED_AT;
 
 fn toml_to_json(value: toml::Value) -> Value {
 	match value {
@@ -155,7 +155,15 @@ fn store(
 /// settings are reported in the log and start from their defaults.
 pub(crate) fn import_once(db: &Connection, path: &Path, file: &Path) -> io::Result<bool> {
 	let tx = Transaction::new_unchecked(db, TransactionBehavior::Immediate).map_err(other)?;
-	if document(&tx, MARKER).map_err(other)?.is_some() {
+	let imported: Option<String> = tx
+		.query_row(
+			"SELECT value FROM device_state WHERE key=?1",
+			[MARKER],
+			|r| r.get(0),
+		)
+		.optional()
+		.map_err(other)?;
+	if imported.is_some() {
 		return Ok(false);
 	}
 	let mut stored = None;
@@ -173,7 +181,7 @@ pub(crate) fn import_once(db: &Connection, path: &Path, file: &Path) -> io::Resu
 	}
 	let now = serde_json::to_string(&crate::clock::utc_now().to_rfc3339()).map_err(other)?;
 	tx.execute(
-		"INSERT INTO documents(key,value) VALUES(?1,?2) ON CONFLICT(key) DO NOTHING",
+		"INSERT INTO device_state(key,value) VALUES(?1,?2) ON CONFLICT(key) DO NOTHING",
 		[MARKER, now.as_str()],
 	)
 	.map_err(other)?;

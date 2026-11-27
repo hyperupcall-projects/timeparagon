@@ -1508,7 +1508,7 @@ fn stepping_back_to_a_day_paints_its_cached_events_at_once() {
 		)
 		.unwrap();
 	}
-	db.execute("INSERT INTO documents VALUES('calendar_sync_state',?1)",[serde_json::json!({"fetched_at":snapshot.fetched_at,"calendars":snapshot.calendars,"notice":null}).to_string()]).unwrap();
+	db.execute("INSERT INTO caches VALUES('calendar_sync_state',?1)",[serde_json::json!({"fetched_at":snapshot.fetched_at,"calendars":snapshot.calendars,"notice":null}).to_string()]).unwrap();
 	db.execute(
 		"INSERT INTO google_sync_windows VALUES(?1,?2)",
 		[

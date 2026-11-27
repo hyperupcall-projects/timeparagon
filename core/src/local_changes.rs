@@ -93,17 +93,20 @@ pub(crate) fn install_calendar(db: &Connection) -> rusqlite::Result<()> {
 /// Creates the counter table and the triggers that maintain it. Idempotent.
 pub(crate) fn install(db: &Connection) -> rusqlite::Result<()> {
 	db.execute_batch(CREATE)?;
-	for (operation, key) in [
-		("INSERT", "NEW.key"),
-		("UPDATE", "NEW.key"),
-		("DELETE", "OLD.key"),
-	] {
-		let name = format!("'doc:'||{key}");
-		db.execute_batch(&format!(
-            "CREATE TRIGGER IF NOT EXISTS timeparagon_change_documents_{op} AFTER {operation} ON documents BEGIN {body} END;",
-            op = operation.to_ascii_lowercase(),
-            body = bump(&name),
-        ))?;
+	// A document's counter is named after its key, whichever table keeps it.
+	for table in ["documents", "caches", "device_state"] {
+		for (operation, key) in [
+			("INSERT", "NEW.key"),
+			("UPDATE", "NEW.key"),
+			("DELETE", "OLD.key"),
+		] {
+			let name = format!("'doc:'||{key}");
+			db.execute_batch(&format!(
+                "CREATE TRIGGER IF NOT EXISTS timeparagon_change_{table}_{op} AFTER {operation} ON {table} BEGIN {body} END;",
+                op = operation.to_ascii_lowercase(),
+                body = bump(&name),
+            ))?;
+		}
 	}
 	let settings = crate::settings::schema::TABLES.map(|table| (table.name, SETTINGS));
 	for (table, counter) in [("google_entities", OVERLAY), ("google_id_map", OVERLAY)]
@@ -143,7 +146,7 @@ pub(crate) fn read_from(db: &Connection) -> rusqlite::Result<Counters> {
 			+ value(SLEEP)?
 			+ value(&document(crate::task_db::keys::SYNC_STATE))?
 			+ value(&document(crate::calendar::operations::SERIES_EDITS))?
-			+ value(&document("google_deletes"))?,
+			+ value(&document(crate::task_db::keys::GOOGLE_DELETES))?,
 		alarms: value(&document(crate::task_db::keys::ALARMS))?,
 		habits: value(&document(crate::task_db::keys::HABITS))?,
 		// Settling a series edit unlocks the occurrences it locked, which

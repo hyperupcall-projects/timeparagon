@@ -22,7 +22,7 @@ use crate::task_db::Database;
 pub const SECTIONS: [&str; 5] = ["notepad", "brain_dump", "projects", "task_work", "routines"];
 
 /// The time the shared data last changed, as milliseconds since the epoch.
-const MODIFIED: &str = "shared_data_modified_ms";
+const MODIFIED: &str = crate::task_db::keys::SHARED_MODIFIED;
 
 /// The key each section's document is filed under.
 fn key(section: &str) -> String {
@@ -192,7 +192,7 @@ pub(crate) fn store_in(
 	}
 	if changed {
 		tx.execute(
-            "INSERT INTO documents (key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            "INSERT INTO device_state (key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             params![MODIFIED, now_ms().to_string()],
         )
         .map_err(other)?;
@@ -240,7 +240,13 @@ mod tests {
 				);
 			}
 		}
-		let modified = document(connection, MODIFIED)
+		let modified = connection
+			.query_row(
+				"SELECT value FROM device_state WHERE key=?1",
+				[MODIFIED],
+				|r| r.get::<_, String>(0),
+			)
+			.optional()
 			.map_err(other)?
 			.and_then(|text| text.parse().ok())
 			.unwrap_or(0);
@@ -285,7 +291,7 @@ mod tests {
 		let mut database = Database::open(&path).unwrap();
 		database
 			.connection()
-			.execute("UPDATE documents SET value='1' WHERE key=?1", [MODIFIED])
+			.execute("UPDATE device_state SET value='1' WHERE key=?1", [MODIFIED])
 			.unwrap();
 		save_section(&path, "notepad", &notepad).unwrap();
 		assert_eq!(

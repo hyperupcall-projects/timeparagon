@@ -38,7 +38,7 @@ The schema version is stored in `PRAGMA user_version`.
 | `user_version` | Meaning |
 | --- | --- |
 | `0` | New file. `Database::open` creates the schema. |
-| `2` through `14` | Upgraded to 15 on open: see below. |
+| `2` through `15` | Upgraded to 16 on open: see below. |
 | `6` | Like 5, with the app's tables, indexes and triggers prefixed `timeparagon_` instead of `timeslay_`, and the built-in calendar sources' IDs prefixed `timeparagon:` instead of `timeslay:`. |
 | `7` | Adds the synced `notes` metadata table. |
 | `8` | Creates the incremental Google sync cache during upgrade and reinstalls synced data tables and triggers. |
@@ -48,8 +48,9 @@ The schema version is stored in `PRAGMA user_version`.
 | `12` | Habit log entries are keyed by an ID instead of their position (`habit_log_entries` becomes `habit_entries`). |
 | `13` | `google_sync_events` gains the generated `task` column and two indexes, so a view reads only its own dates' rows. |
 | `14` | `task_aliases` and `google_entities` are keyed by `(calendar_id, event_id)` instead of one string joining them. |
-| `15` | Current (`task_db::SCHEMA_VERSION`). The habit, brain dump and task work tables are `STRICT` and check that related columns agree. |
-| anything else | Refused: `Unsupported database schema N; expected 15`. |
+| `15` | The habit, brain dump and task work tables are `STRICT` and check that related columns agree. |
+| `16` | Current (`task_db::SCHEMA_VERSION`). Caches and this device's own state leave `documents` for `caches` and `device_state`. |
+| anything else | Refused: `Unsupported database schema N; expected 16`. |
 
 Builds from before version 5 refuse a version 5 file, so every TimeParagon
 process on a device (panel, dock, shortcut daemon, browser host) has to be
@@ -61,6 +62,10 @@ Every statement in setup is idempotent (`CREATE … IF NOT EXISTS`,
 processes setting up at once, or a crash halfway through, cause no harm. Once a
 file is stamped with the current version, setup is skipped, because the apps
 open the database many times a minute.
+
+**15 → 16** (`Database::move_local_documents`) creates `caches` and
+`device_state` and moves the [documents](#documents) that are not shared into
+them, so `documents` holds only what devices share. A row already moved wins.
 
 **14 → 15** (`relational::make_strict`, before the setup transaction, since
 it turns foreign keys off) rebuilds each table of
@@ -247,7 +252,7 @@ The tables fall into six groups:
 | Group | Tables | Created by |
 | --- | --- | --- |
 | [Tasks](#tasks) | `tasks`, `task_aliases` | `task_db::Database::set_up` |
-| [Documents](#documents) | `documents` | `task_db::Database::set_up` |
+| [Documents](#documents) | `documents`, `caches`, `device_state` | `task_db::Database::set_up` |
 | [Google cache](#google-cache) | `google_sync_events`, `google_task_records`, `google_sync_windows` | `task_db::Database::set_up` |
 | [Google writes](#google-writes) | `google_entities`, `google_id_map`, `google_task_backend_state` | `task_db::Database::set_up` |
 | [Settings](#settings) | `settings`, `device_settings` | `settings::schema::CREATE`, from `task_db::Database::set_up` |
@@ -404,37 +409,45 @@ runs when the updated application opens it.
 
 ## Documents
 
-### `documents`
+Three key–value tables hold the remaining document-shaped data, one for each
+lifetime:
 
 ```sql
-CREATE TABLE documents (
-  key   TEXT PRIMARY KEY,
-  value TEXT NOT NULL      -- JSON (except shared_data_modified_ms, a bare integer)
-);
+-- Shared between devices: the journal triggers watch it.
+CREATE TABLE documents (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+-- Copies of what Google, Mapbox and the People API hold. Safe to delete:
+-- each is fetched again when missing.
+CREATE TABLE caches (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+-- What this device keeps about itself and its own writes in progress.
+-- Never leaves the device, and not rebuilt if lost.
+CREATE TABLE device_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 ```
 
-This is a key–value store for the remaining document-shaped app data.
-Use `task_db::read_document` / `write_document` / `remove_document`, or
-`shared_data::store` / `overlay` for the `shared.*` keys. Writing directly
-bypasses the merge logic described below.
+Use `task_db::read_document` / `write_document` / `remove_document`, which
+pick the table by key (`task_db::table_of`, from the lists in
+`task_db::keys`), or `shared_data::store` / `overlay` for the `shared.*` keys.
+Writing `documents` directly bypasses the merge logic described below. Each
+key's change counter is `doc:<key>`, whichever table keeps it.
 
 If a document's value does not parse, reading it is an **error**, not an
 empty value, so callers can refuse to save over data they could not read.
 
 #### Every key
 
-| Key | Synced | Type (Rust) | Written by | Contents |
-| --- | :---: | --- | --- | --- |
-| `alarms` | ✅ | `alarms::Library` | Alarms screen | One-shot alarms. [Details](./data-model.md#alarms) |
-| `shared.notepad` | ✅ | `config::NotepadText` | Notepad tab | `{"text": "…"}` |
-| `shared.projects` | ✅ | `config::ProjectsSettings` | Life / projects | `{"items": [Project], "areas": [LifeArea]}` |
-| `shared.routines` | ✅ | `routines::Routines` | Routines (desktop) | `{"entries": [Entry]}`, one per day, week or month. [Details](./data-model.md#routines) |
-| `shared_data_modified_ms` | — | integer as text | `shared_data::store` | When a `shared.*` document last changed, in ms since the epoch |
-| `contacts` | — | `people::cache::File` | People screen | Raw Google People API responses per signed-in account |
-| `routes` | — | `Vec<travel::Stored>` | Desktop travel | Cached Mapbox trip times: `[{from,to,mode,seconds,meters}]` |
-| `calendar_sync_state` | — | `repository::SyncState` | Calendar refresh | `{"fetched_at", "calendars": [{id,name,color,primary,selected_by_google}], "notice"}` |
-| `dioxus_theme` | — | `String` | Android app | Theme name. Rust publishes it in `widget-day.json`; the Android home-screen widget reads only that snapshot |
-| `settings_imported_at` | — | RFC 3339 string | Schema 5 setup | When this database imported `config.toml`, or found none to import. Present means it never imports one again |
+| Key | Table | Type (Rust) | Written by | Contents |
+| --- | --- | --- | --- | --- |
+| `alarms` | `documents` | `alarms::Library` | Alarms screen | One-shot alarms. [Details](./data-model.md#alarms) |
+| `shared.notepad` | `documents` | `config::NotepadText` | Notepad tab | `{"text": "…"}` |
+| `shared.projects` | `documents` | `config::ProjectsSettings` | Life / projects | `{"items": [Project], "areas": [LifeArea]}` |
+| `shared.routines` | `documents` | `routines::Routines` | Routines (desktop) | `{"entries": [Entry]}`, one per day, week or month. [Details](./data-model.md#routines) |
+| `contacts` | `caches` | `people::cache::File` | People screen | Raw Google People API responses per signed-in account |
+| `routes` | `caches` | `Vec<travel::Stored>` | Desktop travel | Cached Mapbox trip times: `[{from,to,mode,seconds,meters}]` |
+| `calendar_sync_state` | `caches` | `repository::SyncState` | Calendar refresh | `{"fetched_at", "calendars": [{id,name,color,primary,selected_by_google}], "notice"}` |
+| `shared_data_modified_ms` | `device_state` | integer as text | `shared_data::store` | When a `shared.*` document last changed, in ms since the epoch |
+| `dioxus_theme` | `device_state` | `String` | Android app | Theme name. Rust publishes it in `widget-day.json`; the Android home-screen widget reads only that snapshot |
+| `settings_imported_at` | `device_state` | RFC 3339 string | Schema 5 setup | When this database imported `config.toml`, or found none to import. Present means it never imports one again |
+| `google_deletes` | `device_state` | map of `operations::Deleting` | Google write worker | What each delete on its way to Google takes with it, by `google_entities` row |
+| `google_series_edits` | `device_state` | map of `operations::SeriesEdit` | Google write worker | What each series edit on its way locks, by `google_entities` row |
 
 `shared_data` (`core/src/shared_data.rs`) writes the remaining `shared.*` documents and routes brain dumps and task work to normalized tables.
 The apps' `Config` holds them as `notepad.text`, `brain_dump`, `projects` and
@@ -748,7 +761,7 @@ CREATE TABLE timeparagon_change_counters (
 
 | Counter `name` | Incremented by |
 | --- | --- |
-| `doc:<key>` | Any `INSERT`/`UPDATE`/`DELETE` on `documents` for that key |
+| `doc:<key>` | Any `INSERT`/`UPDATE`/`DELETE` on `documents`, `caches` or `device_state` for that key |
 | `google.overlay` | Any change to `google_entities` or `google_id_map` (so a write being answered unlocks its item everywhere) |
 | `settings` | Any change to `settings` or `device_settings`, by an app or by sync |
 
@@ -763,7 +776,7 @@ A counter that has never been incremented reads as `0`.
 Triggers (`AFTER` each of `INSERT`, `UPDATE`, `DELETE`):
 
 ```
-timeparagon_change_documents_{insert,update,delete}
+timeparagon_change_{documents,caches,device_state}_{insert,update,delete}
 timeparagon_change_google_entities_{insert,update,delete}
 timeparagon_change_google_id_map_{insert,update,delete}
 timeparagon_change_<settings table>_{insert,update,delete}
@@ -1015,8 +1028,10 @@ WHERE uploaded = 0 GROUP BY document;
 SELECT t.id, t.metadata FROM tasks t JOIN task_aliases a ON a.task_id = t.id
 WHERE a.calendar_id = 'tasks:<listId>' AND a.event_id = 'task:<taskId>';
 
--- Size of each document
-SELECT key, length(value) FROM documents ORDER BY 2 DESC;
+-- Size of each document, in each of its tables
+SELECT 'documents', key, length(value) FROM documents
+UNION ALL SELECT 'caches', key, length(value) FROM caches
+UNION ALL SELECT 'device_state', key, length(value) FROM device_state ORDER BY 3 DESC;
 
 -- Settings that are not at their defaults, shared and this device's own
 SELECT 'shared', key, value FROM settings

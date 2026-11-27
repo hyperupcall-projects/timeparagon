@@ -24,6 +24,39 @@ pub mod keys {
 	pub const SYNC_STATE: &str = "calendar_sync_state";
 	/// Published by Rust in the Android widget snapshot: see `widget.rs`.
 	pub const THEME: &str = "dioxus_theme";
+	/// When this database imported `config.toml`: see `settings::import`.
+	pub const SETTINGS_IMPORTED_AT: &str = "settings_imported_at";
+	/// When a shared section last changed: see `shared_data`.
+	pub const SHARED_MODIFIED: &str = "shared_data_modified_ms";
+	/// Writes to Google in progress: see `calendar::operations`.
+	pub const GOOGLE_DELETES: &str = "google_deletes";
+	pub const GOOGLE_SERIES_EDITS: &str = "google_series_edits";
+
+	/// Kept in `caches`: copies of what Google, Mapbox and the People API
+	/// hold, fetched again when missing.
+	pub const CACHED: [&str; 3] = [CONTACTS, ROUTES, SYNC_STATE];
+	/// Kept in `device_state`: what this device keeps about itself and its
+	/// own writes in progress. Never replicated, and not rebuilt if lost.
+	pub const DEVICE: [&str; 5] = [
+		THEME,
+		SETTINGS_IMPORTED_AT,
+		SHARED_MODIFIED,
+		GOOGLE_DELETES,
+		GOOGLE_SERIES_EDITS,
+	];
+}
+
+/// The table a document is kept in: `caches` or `device_state` for the keys
+/// listed in [`keys`], `documents` for the rest, which are shared between
+/// devices (or were, under an older build).
+pub(crate) fn table_of(key: &str) -> &'static str {
+	if keys::CACHED.contains(&key) {
+		"caches"
+	} else if keys::DEVICE.contains(&key) {
+		"device_state"
+	} else {
+		"documents"
+	}
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -35,10 +68,10 @@ pub struct TaskData {
 /// The schema this build sets up, kept in SQLite's `user_version`.
 ///
 /// Schema changes are applied transactionally by [`Database::set_up`].
-pub const SCHEMA_VERSION: i64 = 15;
+pub const SCHEMA_VERSION: i64 = 16;
 
 /// Older schemas [`Database::set_up`] can bring up to date.
-const UPGRADABLE: std::ops::RangeInclusive<i64> = 2..=14;
+const UPGRADABLE: std::ops::RangeInclusive<i64> = 2..=15;
 
 fn schema_version(db: &Connection) -> Result<i64, String> {
 	db.query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -115,12 +148,15 @@ impl Database {
             CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, metadata TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS task_aliases (calendar_id TEXT NOT NULL, event_id TEXT NOT NULL, task_id INTEGER NOT NULL REFERENCES tasks(id), PRIMARY KEY (calendar_id, event_id));
             CREATE TABLE IF NOT EXISTS documents (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS device_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS caches (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS google_task_records (id TEXT PRIMARY KEY, event TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS google_task_backend_state (task_id INTEGER PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS google_entities (calendar_id TEXT NOT NULL, event_id TEXT NOT NULL, event TEXT, acknowledged_at TEXT, observed_at TEXT, sending_since TEXT, PRIMARY KEY (calendar_id, event_id));
             CREATE TABLE IF NOT EXISTS google_id_map (local TEXT PRIMARY KEY, remote TEXT NOT NULL, calendar TEXT NOT NULL);
 ")
             .map_err(|e| e.to_string())?;
+		Self::move_local_documents(&tx).map_err(|e| e.to_string())?;
 		// Schema 5: the settings, which used to be config.toml.
 		tx.execute_batch(crate::settings::schema::CREATE)
 			.map_err(|e| e.to_string())?;
@@ -243,6 +279,27 @@ impl Database {
                  DROP TABLE IF EXISTS google_operations;
                  DELETE FROM timeparagon_change_counters WHERE name='google.queue';",
             )?;
+		}
+		Ok(())
+	}
+
+	/// Schema 16: documents that are not shared leave `documents` for
+	/// `caches` or `device_state` (see [`table_of`]), so `documents` holds
+	/// only what devices share. A row already moved wins. Idempotent.
+	fn move_local_documents(tx: &Connection) -> rusqlite::Result<()> {
+		for (table, moved) in [
+			("caches", &keys::CACHED[..]),
+			("device_state", &keys::DEVICE[..]),
+		] {
+			for key in moved {
+				tx.execute(
+					&format!(
+						"INSERT OR IGNORE INTO {table}(key,value) SELECT key,value FROM documents WHERE key=?1"
+					),
+					[key],
+				)?;
+				tx.execute("DELETE FROM documents WHERE key=?1", [key])?;
+			}
 		}
 		Ok(())
 	}
@@ -576,11 +633,14 @@ pub fn read_document<T: DeserializeOwned>(path: &Path, key: &str) -> io::Result<
 			.transpose()
 			.map_err(io::Error::other);
 	}
+	let table = table_of(key);
 	let text: Option<String> = database
 		.0
-		.query_row("SELECT value FROM documents WHERE key=?1", [key], |row| {
-			row.get(0)
-		})
+		.query_row(
+			&format!("SELECT value FROM {table} WHERE key=?1"),
+			[key],
+			|row| row.get(0),
+		)
 		.optional()
 		.map_err(io::Error::other)?;
 	let result = text
@@ -590,7 +650,9 @@ pub fn read_document<T: DeserializeOwned>(path: &Path, key: &str) -> io::Result<
 				.map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 		})
 		.transpose()?;
-	crate::database_sync::projection::remember(path, key, text);
+	if table == "documents" {
+		crate::database_sync::projection::remember(path, key, text);
+	}
 	Ok(result)
 }
 
@@ -625,6 +687,19 @@ fn change_document(path: &Path, key: &str, desired: Option<String>) -> io::Resul
 		let rows = crate::relational::save(&tx, path, key, &value)?;
 		tx.commit().map_err(io::Error::other)?;
 		return crate::relational::remember(path, key, rows);
+	}
+	// Nothing else writes these, so there is no other device's edit to merge.
+	let table = table_of(key);
+	if table != "documents" {
+		match desired {
+			Some(value) => tx.execute(
+				&format!("INSERT INTO {table}(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value"),
+				params![key, value],
+			),
+			None => tx.execute(&format!("DELETE FROM {table} WHERE key=?1"), [key]),
+		}
+		.map_err(io::Error::other)?;
+		return tx.commit().map_err(io::Error::other);
 	}
 	let value = crate::database_sync::projection::prepare(path, &tx, key, &desired)?;
 	match value {
@@ -1051,6 +1126,71 @@ confirmed','{}','2026-01-01T00:00:00+00:00');
 				.unwrap();
 		assert_eq!(aliases, 81, "all processes reuse the same shared task");
 		std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+	}
+}
+
+#[cfg(test)]
+mod local_document_tests {
+	use super::*;
+
+	#[test]
+	fn schema_15_moves_caches_and_device_state_out_of_the_shared_documents() {
+		let dir = tempfile::tempdir().unwrap();
+		let path = dir.path().join("test.sqlite3");
+		Database::open(&path).unwrap();
+		let moved = keys::CACHED
+			.iter()
+			.chain(&keys::DEVICE)
+			.copied()
+			.collect::<Vec<_>>();
+		{
+			// Put the rows back where schema 15 kept them.
+			let db = Connection::open(&path).unwrap();
+			for key in &moved {
+				db.execute(
+					"INSERT INTO documents VALUES(?1,?2)",
+					params![key, format!("{{\"was\":\"{key}\"}}")],
+				)
+				.unwrap();
+			}
+			db.execute(
+				"INSERT INTO documents VALUES('alarms','{\"alarms\":[]}')",
+				[],
+			)
+			.unwrap();
+			db.execute_batch("PRAGMA user_version=15;").unwrap();
+		}
+		Database::open(&path).unwrap();
+		for key in &moved {
+			let value: serde_json::Value = read_document(&path, key).unwrap().unwrap();
+			assert_eq!(value["was"], *key);
+		}
+		let db = Connection::open(&path).unwrap();
+		let left: Vec<String> = db
+			.prepare("SELECT key FROM documents ORDER BY key")
+			.unwrap()
+			.query_map([], |r| r.get(0))
+			.unwrap()
+			.collect::<Result<_, _>>()
+			.unwrap();
+		assert_eq!(left, ["alarms"]);
+		let count = |table: &str| -> i64 {
+			db.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+				.unwrap()
+		};
+		assert_eq!(count("caches"), keys::CACHED.len() as i64);
+		assert_eq!(count("device_state"), keys::DEVICE.len() as i64);
+		// Watchers see a change to a moved document as before.
+		let before = crate::local_changes::read(&path).unwrap();
+		write_document_json(&path, keys::SYNC_STATE, "{}").unwrap();
+		remove_document(&path, keys::GOOGLE_DELETES).unwrap();
+		let after = crate::local_changes::read(&path).unwrap();
+		assert_eq!(after.calendar, before.calendar + 2);
+		assert!(
+			read_document::<serde_json::Value>(&path, keys::GOOGLE_DELETES)
+				.unwrap()
+				.is_none()
+		);
 	}
 }
 

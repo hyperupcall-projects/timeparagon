@@ -145,7 +145,7 @@ enum Deleting {
 
 /// The `documents` key holding each pending delete's [`Deleting`], by
 /// `google_entities` row. Not shared with other devices.
-const DELETES: &str = "google_deletes";
+const DELETES: &str = task_db::keys::GOOGLE_DELETES;
 
 /// How long after Google confirmed a delete the other items it took along
 /// are still kept out of view. A fetch made since shows them gone anyway;
@@ -243,7 +243,7 @@ fn read_records<T: serde::de::DeserializeOwned>(
 	key: &str,
 ) -> Result<HashMap<String, T>, String> {
 	let json: Option<String> = tx
-		.query_row("SELECT value FROM documents WHERE key=?1", [key], |r| {
+		.query_row("SELECT value FROM device_state WHERE key=?1", [key], |r| {
 			r.get(0)
 		})
 		.optional()
@@ -261,7 +261,7 @@ fn write_records<T: Serialize>(
 ) -> Result<(), String> {
 	let json = serde_json::to_string(records).map_err(|e| e.to_string())?;
 	tx.execute(
-        "INSERT INTO documents(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        "INSERT INTO device_state(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         params![key, json],
     )
     .map_err(|e| e.to_string())?;
@@ -324,7 +324,7 @@ struct SeriesEdit {
 /// by `google_entities` row. Not shared with other devices. Its counter
 /// counts towards the overlay's (see [`crate::local_changes`]), so settling
 /// an edit unlocks what it locked.
-pub const SERIES_EDITS: &str = "google_series_edits";
+pub const SERIES_EDITS: &str = task_db::keys::GOOGLE_SERIES_EDITS;
 
 /// How long after Google confirmed a series edit what it changed may stay
 /// locked, should the process that sent it stop before settling it.

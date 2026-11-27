@@ -132,7 +132,7 @@ mod tests {
 		let mut db = rusqlite::Connection::open(path).unwrap();
 		let tx = db.transaction().unwrap();
 		tx.execute(
-			"INSERT OR REPLACE INTO documents VALUES('calendar_sync_state',?1)",
+			"INSERT OR REPLACE INTO caches VALUES('calendar_sync_state',?1)",
 			[serde_json::json!({
 				"fetched_at":snapshot.fetched_at, "calendars":snapshot.calendars, "notice":snapshot.notice,
 			})
