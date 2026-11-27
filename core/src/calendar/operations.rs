@@ -293,8 +293,8 @@ fn write_delete(
 	for (key, deleting) in deletes {
 		let current = tx
             .query_row(
-                "SELECT 1 FROM google_entities WHERE id=?1 AND event IS NULL AND (sending_since IS NOT NULL OR acknowledged_at > ?2)",
-                params![key, settled],
+                "SELECT 1 FROM google_entities WHERE calendar_id=?1 AND event_id=?2 AND event IS NULL AND (sending_since IS NOT NULL OR acknowledged_at > ?3)",
+                params![columns(&key).0, columns(&key).1, settled],
                 |_| Ok(()),
             )
             .optional()
@@ -364,8 +364,8 @@ fn write_series_edit(
 	for (key, edit) in edits.drain() {
 		let current = tx
             .query_row(
-                "SELECT 1 FROM google_entities WHERE id=?1 AND (sending_since IS NOT NULL OR acknowledged_at > ?2)",
-                params![key, settled],
+                "SELECT 1 FROM google_entities WHERE calendar_id=?1 AND event_id=?2 AND (sending_since IS NOT NULL OR acknowledged_at > ?3)",
+                params![columns(&key).0, columns(&key).1, settled],
                 |_| Ok(()),
             )
             .optional()
@@ -514,8 +514,16 @@ pub fn new_id() -> Result<String, String> {
 	getrandom::fill(&mut b).map_err(|e| e.to_string())?;
 	Ok(b.iter().map(|v| format!("{v:02x}")).collect())
 }
+/// An item's identity in memory: the calendar and ID its `google_entities`
+/// row is keyed by, joined. It names writes and keys the local-only
+/// documents [`DELETES`] and [`SERIES_EDITS`]; [`columns`] splits it for SQL.
 fn key(calendar: &str, id: &str) -> String {
 	format!("{calendar}\n{id}")
+}
+
+/// The `(calendar_id, event_id)` of an identity from [`key`].
+fn columns(entity: &str) -> (&str, &str) {
+	entity.split_once('\n').unwrap_or((entity, ""))
 }
 
 /// Shows `event` (or, for `None`, the item's removal) locally at once, locked
@@ -603,12 +611,7 @@ fn worker(path: &Path) -> &'static Worker {
 								settling.push(entity.clone());
 							}
 							super::series::take_noted();
-							let local_id = write
-								.entity
-								.split_once('\n')
-								.expect("write identity")
-								.1
-								.to_owned();
+							let local_id = columns(&write.entity).1.to_owned();
 							let result = send_in(&path, *write, |job| {
 								let settings = crate::config::Config::load().calendar;
 								execute(
@@ -920,9 +923,9 @@ fn record_tx(
 		.map_err(|e| e.to_string())?;
 	if let Some(existing) = tx
         .query_row(
-            "SELECT id FROM google_entities WHERE json_extract(event,'$.id')=?1 AND (id=?2 OR json_extract(event,'$.calendar_id')=?3) LIMIT 1",
-            params![id, entity, calendar],
-            |r| r.get::<_, String>(0),
+            "SELECT calendar_id,event_id FROM google_entities WHERE json_extract(event,'$.id')=?1 AND ((calendar_id=?2 AND event_id=?1) OR json_extract(event,'$.calendar_id')=?2) LIMIT 1",
+            params![id, calendar],
+            |r| Ok(key(&r.get::<_, String>(0)?, &r.get::<_, String>(1)?)),
         )
         .optional()
         .map_err(|e| e.to_string())?
@@ -936,12 +939,19 @@ fn record_tx(
 		let hour = crate::config::CalendarSettings::stored_day_start_hour(tx);
 		let rows = {
 			let mut q = tx
-				.prepare("SELECT id,event FROM google_entities WHERE event IS NOT NULL")
+				.prepare(
+					"SELECT calendar_id,event_id,event FROM google_entities WHERE event IS NOT NULL",
+				)
 				.map_err(|e| e.to_string())?;
-			q.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-				.map_err(|e| e.to_string())?
-				.collect::<Result<Vec<_>, _>>()
-				.map_err(|e| e.to_string())?
+			q.query_map([], |r| {
+				Ok((
+					key(&r.get::<_, String>(0)?, &r.get::<_, String>(1)?),
+					r.get::<_, String>(2)?,
+				))
+			})
+			.map_err(|e| e.to_string())?
+			.collect::<Result<Vec<_>, _>>()
+			.map_err(|e| e.to_string())?
 		};
 		let mut same: Vec<String> = rows
 			.into_iter()
@@ -955,8 +965,8 @@ fn record_tx(
 			.collect();
 		let own_row = tx
 			.query_row(
-				"SELECT 1 FROM google_entities WHERE id=?1",
-				[&entity],
+				"SELECT 1 FROM google_entities WHERE calendar_id=?1 AND event_id=?2",
+				[columns(&entity).0, columns(&entity).1],
 				|_| Ok(()),
 			)
 			.optional()
@@ -966,15 +976,18 @@ fn record_tx(
 			entity = same.remove(0);
 		}
 		for other in same {
-			tx.execute("DELETE FROM google_entities WHERE id=?1", [other])
-				.map_err(|e| e.to_string())?;
+			tx.execute(
+				"DELETE FROM google_entities WHERE calendar_id=?1 AND event_id=?2",
+				[columns(&other).0, columns(&other).1],
+			)
+			.map_err(|e| e.to_string())?;
 		}
 	}
 
 	(|| -> rusqlite::Result<()> {
         tx.execute(
-            "INSERT INTO google_entities(id,event,acknowledged_at,observed_at,sending_since) VALUES(?1,?2,NULL,NULL,?3) ON CONFLICT(id) DO UPDATE SET event=excluded.event,acknowledged_at=NULL,observed_at=NULL,sending_since=excluded.sending_since",
-            params![entity, saved, crate::clock::utc_now().to_rfc3339()],
+            "INSERT INTO google_entities(calendar_id,event_id,event,acknowledged_at,observed_at,sending_since) VALUES(?1,?2,?3,NULL,NULL,?4) ON CONFLICT(calendar_id,event_id) DO UPDATE SET event=excluded.event,acknowledged_at=NULL,observed_at=NULL,sending_since=excluded.sending_since",
+            params![columns(&entity).0, columns(&entity).1, saved, crate::clock::utc_now().to_rfc3339()],
         )?;
         if let Some(event) = event {
             if let Some(data) = &event.details.task_data {
@@ -983,8 +996,8 @@ fn record_tx(
                     params![data.id, serde_json::to_string(&data.metadata).unwrap()],
                 )?;
                 tx.execute(
-                    "INSERT INTO task_aliases(source,task_id) VALUES(?1,?2) ON CONFLICT(source) DO UPDATE SET task_id=excluded.task_id",
-                    params![crate::timeblocking::block_key(event), data.id],
+                    task_db::ALIAS,
+                    params![event.calendar_id, event.id, data.id],
                 )?;
             }
         }
@@ -1071,7 +1084,7 @@ pub(super) fn read_overlay(tx: &rusqlite::Connection) -> Result<Overlay, String>
 	{
 		let mut q = tx
 			.prepare(
-				"SELECT id,event,acknowledged_at,sending_since,observed_at IS NOT NULL FROM google_entities",
+				"SELECT calendar_id,event_id,event,acknowledged_at,sending_since,observed_at IS NOT NULL FROM google_entities",
 			)
 			.map_err(|e| e.to_string())?;
 		let cutoff = stale_cutoff();
@@ -1079,23 +1092,23 @@ pub(super) fn read_overlay(tx: &rusqlite::Connection) -> Result<Overlay, String>
 			.query_map([], |r| {
 				Ok((
 					r.get::<_, String>(0)?,
-					r.get::<_, Option<String>>(1)?,
+					r.get::<_, String>(1)?,
 					r.get::<_, Option<String>>(2)?,
 					r.get::<_, Option<String>>(3)?,
-					r.get::<_, bool>(4)?,
+					r.get::<_, Option<String>>(4)?,
+					r.get::<_, bool>(5)?,
 				))
 			})
 			.map_err(|e| e.to_string())?
 		{
-			let (key, json, ack, sending_since, observed) = row.map_err(|e| e.to_string())?;
+			let (calendar, id, json, ack, sending_since, observed) =
+				row.map_err(|e| e.to_string())?;
 			// A write cut off long ago no longer counts: the item is unlocked
 			// and shows what Google has.
 			if sending_since.as_ref().is_some_and(|since| *since < cutoff) {
 				continue;
 			}
-			let Some((calendar, id)) = key.split_once('\n') else {
-				continue;
-			};
+			let key = key(&calendar, &id);
 			let deleting = deletes.remove(&key).filter(|_| json.is_none());
 			let acknowledged_at = ack.and_then(|ack| DateTime::parse_from_rfc3339(&ack).ok());
 			// Settled once Google's copy of the series is back; one left by
@@ -1386,30 +1399,32 @@ fn finish(
 				tx.execute("INSERT INTO google_id_map(local,remote,calendar) VALUES(?1,?2,?3) ON CONFLICT(local) DO UPDATE SET remote=excluded.remote,calendar=excluded.calendar",params![local,remote,calendar]).map_err(|e|e.to_string())?;
 			}
 			if deletes {
-				if let Some((calendar, id)) = entity.split_once('\n') {
-					tx.execute("DELETE FROM google_task_records WHERE id=?1", [id])
-						.map_err(|e| e.to_string())?;
-					tx.execute(
-						"DELETE FROM google_sync_events WHERE calendar_id=?1 AND id=?2",
-						params![calendar, id],
-					)
+				let (calendar, id) = columns(entity);
+				tx.execute("DELETE FROM google_task_records WHERE id=?1", [id])
 					.map_err(|e| e.to_string())?;
-				}
+				tx.execute(
+					"DELETE FROM google_sync_events WHERE calendar_id=?1 AND id=?2",
+					params![calendar, id],
+				)
+				.map_err(|e| e.to_string())?;
 			}
 
 			// A later write for the same item is still on its way, and its
 			// wanted state is the one to keep showing, locked.
 			if last {
 				tx.execute(
-					"UPDATE google_entities SET acknowledged_at=?2,sending_since=NULL WHERE id=?1",
-					params![entity, crate::clock::now().to_rfc3339()],
+					"UPDATE google_entities SET acknowledged_at=?3,sending_since=NULL WHERE calendar_id=?1 AND event_id=?2",
+					params![columns(&entity).0, columns(&entity).1, crate::clock::now().to_rfc3339()],
 				)
 				.map_err(|e| e.to_string())?;
 			}
 		}
 		Err(_) if last => {
-			tx.execute("DELETE FROM google_entities WHERE id=?1", [entity])
-				.map_err(|e| e.to_string())?;
+			tx.execute(
+				"DELETE FROM google_entities WHERE calendar_id=?1 AND event_id=?2",
+				[columns(&entity).0, columns(&entity).1],
+			)
+			.map_err(|e| e.to_string())?;
 		}
 		Err(_) => {}
 	}
@@ -1927,27 +1942,26 @@ pub(super) fn observe_range(
 	let records = {
 		let mut q = tx
 			.prepare(
-				"SELECT id,event,acknowledged_at FROM google_entities WHERE acknowledged_at IS NOT NULL",
+				"SELECT calendar_id,event_id,event,acknowledged_at FROM google_entities WHERE acknowledged_at IS NOT NULL",
 			)
 			.map_err(|e| e.to_string())?;
 		q.query_map([], |r| {
 			Ok((
 				r.get::<_, String>(0)?,
-				r.get::<_, Option<String>>(1)?,
-				r.get::<_, String>(2)?,
+				r.get::<_, String>(1)?,
+				r.get::<_, Option<String>>(2)?,
+				r.get::<_, String>(3)?,
 			))
 		})
 		.map_err(|e| e.to_string())?
 		.collect::<Result<Vec<_>, _>>()
 		.map_err(|e| e.to_string())?
 	};
-	for (key, json, ack) in records {
+	for (calendar, id, json, ack) in records {
 		if !DateTime::parse_from_rfc3339(&ack).is_ok_and(|a| fetched > a) {
 			continue;
 		}
-		let Some((calendar, id)) = key.split_once('\n') else {
-			continue;
-		};
+		let (calendar, id) = (calendar.as_str(), id.as_str());
 		let old = json
 			.as_ref()
 			.map(|j| serde_json::from_str::<Event>(j))
@@ -1986,7 +2000,7 @@ pub(super) fn observe_range(
 				.map(serde_json::to_string)
 				.transpose()
 				.map_err(|e| e.to_string())?;
-			tx.execute("UPDATE google_entities SET event=?2,acknowledged_at=?3,observed_at=COALESCE(observed_at,?5) WHERE id=?1 AND acknowledged_at=?4",params![key,json,fetched.to_rfc3339(),ack,fetched.with_timezone(&Utc).to_rfc3339()]).map_err(|e|e.to_string())?;
+			tx.execute("UPDATE google_entities SET event=?3,acknowledged_at=?4,observed_at=COALESCE(observed_at,?6) WHERE calendar_id=?1 AND event_id=?2 AND acknowledged_at=?5",params![calendar,id,json,fetched.to_rfc3339(),ack,fetched.with_timezone(&Utc).to_rfc3339()]).map_err(|e|e.to_string())?;
 		}
 	}
 	prune_observed(&tx, fetched).map_err(|e| e.to_string())?;
@@ -2019,26 +2033,26 @@ pub(super) fn observe_series(
 		.map_err(|e| e.to_string())?;
 	let rows = {
 		let mut q = tx
-            .prepare("SELECT id,event,acknowledged_at FROM google_entities WHERE acknowledged_at IS NOT NULL AND sending_since IS NULL")
+            .prepare("SELECT calendar_id,event_id,event,acknowledged_at FROM google_entities WHERE acknowledged_at IS NOT NULL AND sending_since IS NULL")
             .map_err(|e| e.to_string())?;
 		q.query_map([], |r| {
 			Ok((
 				r.get::<_, String>(0)?,
-				r.get::<_, Option<String>>(1)?,
-				r.get::<_, String>(2)?,
+				r.get::<_, String>(1)?,
+				r.get::<_, Option<String>>(2)?,
+				r.get::<_, String>(3)?,
 			))
 		})
 		.map_err(|e| e.to_string())?
 		.collect::<Result<Vec<_>, _>>()
 		.map_err(|e| e.to_string())?
 	};
-	for (key, json, ack) in rows {
+	for (calendar, id, json, ack) in rows {
 		if !DateTime::parse_from_rfc3339(&ack).is_ok_and(|a| fetched > a) {
 			continue;
 		}
-		let Some((calendar, id)) = key.split_once('\n') else {
-			continue;
-		};
+		let key = key(&calendar, &id);
+		let (calendar, id) = (calendar.as_str(), id.as_str());
 		let old = json
 			.as_ref()
 			.map(|j| serde_json::from_str::<Event>(j))
@@ -2057,7 +2071,7 @@ pub(super) fn observe_series(
 				.map(serde_json::to_string)
 				.transpose()
 				.map_err(|e| e.to_string())?;
-			tx.execute("UPDATE google_entities SET event=?2,acknowledged_at=?3,observed_at=COALESCE(observed_at,?5) WHERE id=?1 AND acknowledged_at=?4",params![key,json,fetched.to_rfc3339(),ack,fetched.with_timezone(&Utc).to_rfc3339()]).map_err(|e|e.to_string())?;
+			tx.execute("UPDATE google_entities SET event=?3,acknowledged_at=?4,observed_at=COALESCE(observed_at,?6) WHERE calendar_id=?1 AND event_id=?2 AND acknowledged_at=?5",params![calendar,id,json,fetched.to_rfc3339(),ack,fetched.with_timezone(&Utc).to_rfc3339()]).map_err(|e|e.to_string())?;
 		}
 	}
 	tx.commit().map_err(|e| e.to_string())
@@ -2564,7 +2578,7 @@ mod tests {
 		let mut db = task_db::Database::open(path).unwrap();
 		let mut q = db
 			.connection()
-			.prepare("SELECT id FROM google_entities")
+			.prepare("SELECT calendar_id||char(10)||event_id FROM google_entities")
 			.unwrap();
 		q.query_map([], |r| r.get(0))
 			.unwrap()
@@ -2678,9 +2692,10 @@ mod tests {
 		] {
 			db.connection()
 				.execute(
-					"INSERT INTO google_entities(id,event,acknowledged_at,sending_since) VALUES(?1,?2,?3,?4)",
+					"INSERT INTO google_entities(calendar_id,event_id,event,acknowledged_at,sending_since) VALUES(?1,?2,?3,?4,?5)",
 					params![
-						key(&event.calendar_id, &event.id),
+						event.calendar_id,
+						event.id,
 						serde_json::to_string(event).unwrap(),
 						ack,
 						since
@@ -2844,7 +2859,7 @@ mod tests {
 			notify: false,
 			with_tasks: None,
 		};
-		database.connection().execute_batch("CREATE TRIGGER reject_child BEFORE INSERT ON google_entities WHEN instr(NEW.id,'task:child')>0 BEGIN SELECT RAISE(ABORT,'disk failure'); END;").unwrap();
+		database.connection().execute_batch("CREATE TRIGGER reject_child BEFORE INSERT ON google_entities WHEN instr(NEW.event_id,'task:child')>0 BEGIN SELECT RAISE(ABORT,'disk failure'); END;").unwrap();
 		assert!(record_in(&path, delete.clone(), None, &block.calendar_id, &block.id).is_err());
 		assert_eq!(entities(&path), 0);
 		database

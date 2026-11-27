@@ -525,9 +525,10 @@ fn offline_views_use_coverage_and_changes_to_offscreen_dates_after_reopening() {
 	database
 		.connection()
 		.execute(
-			"INSERT INTO google_entities(id,event,acknowledged_at) VALUES(?1,?2,?3)",
+			"INSERT INTO google_entities(calendar_id,event_id,event,acknowledged_at) VALUES(?1,?2,?3,?4)",
 			params![
-				format!("{PRIMARY}\nold"),
+				PRIMARY,
+				"old",
 				serde_json::to_string(&first.events[0]).unwrap(),
 				(crate::clock::now() - Duration::minutes(1)).to_rfc3339()
 			],

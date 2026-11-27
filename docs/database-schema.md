@@ -38,7 +38,7 @@ The schema version is stored in `PRAGMA user_version`.
 | `user_version` | Meaning |
 | --- | --- |
 | `0` | New file. `Database::open` creates the schema. |
-| `2` through `12` | Upgraded to 13 on open: see below. |
+| `2` through `13` | Upgraded to 14 on open: see below. |
 | `6` | Like 5, with the app's tables, indexes and triggers prefixed `timeparagon_` instead of `timeslay_`, and the built-in calendar sources' IDs prefixed `timeparagon:` instead of `timeslay:`. |
 | `7` | Adds the synced `notes` metadata table. |
 | `8` | Creates the incremental Google sync cache during upgrade and reinstalls synced data tables and triggers. |
@@ -46,8 +46,9 @@ The schema version is stored in `PRAGMA user_version`.
 | `10` | Keeps every shared setting in `settings`, and no longer replicates `sleep_nights`. |
 | `11` | Normalizes habits, brain dumps and task work; replicates those as native Turso rows. |
 | `12` | Habit log entries are keyed by an ID instead of their position (`habit_log_entries` becomes `habit_entries`). |
-| `13` | Current (`task_db::SCHEMA_VERSION`). `google_sync_events` gains the generated `task` column and two indexes, so a view reads only its own dates' rows. |
-| anything else | Refused: `Unsupported database schema N; expected 13`. |
+| `13` | `google_sync_events` gains the generated `task` column and two indexes, so a view reads only its own dates' rows. |
+| `14` | Current (`task_db::SCHEMA_VERSION`). `task_aliases` and `google_entities` are keyed by `(calendar_id, event_id)` instead of one string joining them. |
+| anything else | Refused: `Unsupported database schema N; expected 14`. |
 
 Builds from before version 5 refuse a version 5 file, so every TimeParagon
 process on a device (panel, dock, shortcut daemon, browser host) has to be
@@ -59,6 +60,13 @@ Every statement in setup is idempotent (`CREATE … IF NOT EXISTS`,
 processes setting up at once, or a crash halfway through, cause no harm. Once a
 file is stamped with the current version, setup is skipped, because the apps
 open the database many times a minute.
+
+**13 → 14** (`Database::split_item_keys`) rebuilds `task_aliases` and
+`google_entities`, whose keys were one string (`calendar/event` and
+`calendar` newline `event`), with the two key columns `calendar_id` and
+`event_id`. A value without its separator was never looked up and is
+dropped, as is an alias of a task that no longer exists. The overlay's change
+triggers are installed again on the rebuilt table.
 
 **12 → 13** (`calendar::api::incremental::install_schema`) adds
 `google_sync_events.task` and the indexes `google_sync_events_time` and
@@ -155,7 +163,8 @@ erDiagram
         TEXT metadata "JSON Metadata"
     }
     task_aliases {
-        TEXT source PK "calendar_id/event_id"
+        TEXT calendar_id PK
+        TEXT event_id PK
         INTEGER task_id FK
     }
     documents {
@@ -167,7 +176,8 @@ erDiagram
         TEXT event "JSON Event"
     }
     google_entities {
-        TEXT id PK "calendar NL id"
+        TEXT calendar_id PK
+        TEXT event_id PK
         TEXT event "JSON Event or NULL"
         TEXT acknowledged_at
         TEXT observed_at
@@ -271,19 +281,20 @@ Google Task, or in `ttData*` extended properties for a dated Calendar task. See
 
 ```sql
 CREATE TABLE task_aliases (
-  source  TEXT PRIMARY KEY,                              -- "<calendar_id>/<event_id>"
-  task_id INTEGER NOT NULL REFERENCES tasks(id)
+  calendar_id TEXT NOT NULL,                     -- Event.calendar_id
+  event_id    TEXT NOT NULL,                     -- Event.id
+  task_id     INTEGER NOT NULL REFERENCES tasks(id),
+  PRIMARY KEY (calendar_id, event_id)
 );
 ```
 
-Maps each Google identity a task has had to its TimeParagon ID. `source` is
-`timeblocking::block_key(event)`, which is `calendar_id + "/" + id`. For a
-Google Task, that is `tasks:<listId>/task:<taskId>`.
+Maps each Google identity a task has had to its TimeParagon ID. For a Google
+Task, that is (`tasks:<listId>`, `task:<taskId>`).
 
 A task that moves gets a new alias, and its old aliases stay, so a stale view
 holding the old ID still resolves to the same task. Concurrent processes that
-import the same Google task agree on one ID (`ON CONFLICT(source) DO NOTHING`
-inside an `IMMEDIATE` transaction).
+import the same Google task agree on one ID (`ON CONFLICT DO NOTHING` inside an
+`IMMEDIATE` transaction).
 
 ---
 
@@ -586,13 +597,21 @@ transaction and sent one after another.
 
 ```sql
 CREATE TABLE google_entities (
-  id              TEXT PRIMARY KEY,  -- "<calendar_id>\n<event_id>" (newline-separated)
+  calendar_id     TEXT NOT NULL,     -- the item's calendar or task list when first recorded
+  event_id        TEXT NOT NULL,     -- its ID then
   event           TEXT,              -- JSON: calendar::Event; NULL = deleted locally
   acknowledged_at TEXT,              -- RFC 3339; when Google confirmed the last write
   observed_at     TEXT,              -- RFC 3339 UTC; when a fetch first showed Google agrees
-  sending_since   TEXT               -- RFC 3339 UTC; set while a write is on its way to Google
+  sending_since   TEXT,              -- RFC 3339 UTC; set while a write is on its way to Google
+  PRIMARY KEY (calendar_id, event_id)
 );
 ```
+
+The key is the identity the row was recorded under. When Google has since
+renamed the item, `event` holds its current `id` and `calendar_id`, so lookups
+by an item's current identity read those from the JSON. In memory a row's
+identity is the two joined by a newline (`operations::key`), which also keys
+the local-only `google_deletes` and `google_series_edits` documents.
 
 The **overlay**: the latest state the user wants for each item they have
 edited. Each fetched calendar is rendered with these rows laid on top
@@ -965,7 +984,7 @@ not use these merge rules.
 
 ```sql
 -- Items being sent to Google right now
-SELECT replace(id, char(10), ' / ') AS item, sending_since,
+SELECT calendar_id, event_id, sending_since,
        json_extract(event, '$.title') AS title
 FROM google_entities WHERE sending_since IS NOT NULL;
 
@@ -975,7 +994,7 @@ WHERE uploaded = 0 GROUP BY document;
 
 -- A task's metadata by any Google identity
 SELECT t.id, t.metadata FROM tasks t JOIN task_aliases a ON a.task_id = t.id
-WHERE a.source = 'tasks:<listId>/task:<taskId>';
+WHERE a.calendar_id = 'tasks:<listId>' AND a.event_id = 'task:<taskId>';
 
 -- Size of each document
 SELECT key, length(value) FROM documents ORDER BY 2 DESC;

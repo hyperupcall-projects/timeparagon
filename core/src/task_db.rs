@@ -35,10 +35,10 @@ pub struct TaskData {
 /// The schema this build sets up, kept in SQLite's `user_version`.
 ///
 /// Schema changes are applied transactionally by [`Database::set_up`].
-pub const SCHEMA_VERSION: i64 = 13;
+pub const SCHEMA_VERSION: i64 = 14;
 
 /// Older schemas [`Database::set_up`] can bring up to date.
-const UPGRADABLE: std::ops::RangeInclusive<i64> = 2..=12;
+const UPGRADABLE: std::ops::RangeInclusive<i64> = 2..=13;
 
 fn schema_version(db: &Connection) -> Result<i64, String> {
 	db.query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -104,23 +104,25 @@ impl Database {
 		crate::legacy_name::rename_schema(&tx).map_err(|e| e.to_string())?;
 		tx.execute_batch("
             CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY, metadata TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS task_aliases (source TEXT PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id));
+            CREATE TABLE IF NOT EXISTS task_aliases (calendar_id TEXT NOT NULL, event_id TEXT NOT NULL, task_id INTEGER NOT NULL REFERENCES tasks(id), PRIMARY KEY (calendar_id, event_id));
             CREATE TABLE IF NOT EXISTS documents (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS google_task_records (id TEXT PRIMARY KEY, event TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS google_task_backend_state (task_id INTEGER PRIMARY KEY, data TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS google_entities (id TEXT PRIMARY KEY, event TEXT, acknowledged_at TEXT, observed_at TEXT, sending_since TEXT);
+            CREATE TABLE IF NOT EXISTS google_entities (calendar_id TEXT NOT NULL, event_id TEXT NOT NULL, event TEXT, acknowledged_at TEXT, observed_at TEXT, sending_since TEXT, PRIMARY KEY (calendar_id, event_id));
             CREATE TABLE IF NOT EXISTS google_id_map (local TEXT PRIMARY KEY, remote TEXT NOT NULL, calendar TEXT NOT NULL);
 ")
             .map_err(|e| e.to_string())?;
 		// Schema 5: the settings, which used to be config.toml.
 		tx.execute_batch(crate::settings::schema::CREATE)
 			.map_err(|e| e.to_string())?;
-		crate::local_changes::install(&tx).map_err(|e| e.to_string())?;
 		// Schema 7 adds the synced metadata table for Markdown notes.
 		crate::settings::schema::create_data(&tx).map_err(|e| e.to_string())?;
 		// Schema 8: incremental Google sync used to create these on first use.
 		crate::calendar::api::incremental::install_schema(&tx).map_err(|e| e.to_string())?;
 		Self::remove_write_queue(&tx).map_err(|e| e.to_string())?;
+		Self::split_item_keys(&tx).map_err(|e| e.to_string())?;
+		// After the tables it watches are rebuilt, which drops their triggers.
+		crate::local_changes::install(&tx).map_err(|e| e.to_string())?;
 		Self::migrate_calendar(&tx)?;
 		crate::local_changes::install_calendar(&tx).map_err(|e| e.to_string())?;
 		crate::relational::install(&tx).map_err(|e| e.to_string())?;
@@ -236,6 +238,45 @@ impl Database {
 		Ok(())
 	}
 
+	/// Schema 14: `task_aliases.source` (`calendar/event`) and
+	/// `google_entities.id` (`calendar` newline `event`) become the two
+	/// columns `calendar_id` and `event_id`, so neither has to be taken apart
+	/// again. SQLite cannot change a primary key in place, so each table is
+	/// rebuilt. A value without its separator was never looked up and is not
+	/// kept, nor is an alias of a task that is gone. Idempotent: does nothing
+	/// once the old column is gone. Runs after [`Self::remove_write_queue`],
+	/// which still names `google_entities.id`.
+	fn split_item_keys(tx: &Connection) -> rusqlite::Result<()> {
+		let has = |table: &str, column: &str| -> rusqlite::Result<bool> {
+			tx.query_row(
+				"SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",
+				[table, column],
+				|r| r.get(0),
+			)
+		};
+		if has("task_aliases", "source")? {
+			tx.execute_batch(
+				"CREATE TABLE task_aliases_new (calendar_id TEXT NOT NULL, event_id TEXT NOT NULL, task_id INTEGER NOT NULL REFERENCES tasks(id), PRIMARY KEY (calendar_id, event_id));
+                 INSERT INTO task_aliases_new
+                   SELECT substr(source,1,instr(source,'/')-1), substr(source,instr(source,'/')+1), task_id
+                   FROM task_aliases WHERE instr(source,'/')>0 AND task_id IN (SELECT id FROM tasks);
+                 DROP TABLE task_aliases;
+                 ALTER TABLE task_aliases_new RENAME TO task_aliases;",
+			)?;
+		}
+		if has("google_entities", "id")? {
+			tx.execute_batch(
+				"CREATE TABLE google_entities_new (calendar_id TEXT NOT NULL, event_id TEXT NOT NULL, event TEXT, acknowledged_at TEXT, observed_at TEXT, sending_since TEXT, PRIMARY KEY (calendar_id, event_id));
+                 INSERT INTO google_entities_new
+                   SELECT substr(id,1,instr(id,char(10))-1), substr(id,instr(id,char(10))+1), event, acknowledged_at, observed_at, sending_since
+                   FROM google_entities WHERE instr(id,char(10))>0;
+                 DROP TABLE google_entities;
+                 ALTER TABLE google_entities_new RENAME TO google_entities;",
+			)?;
+		}
+		Ok(())
+	}
+
 	/// Schema 9: source rows replace rendered month snapshots. Keep local edits,
 	/// stable IDs and stored sleep; convert their old source-row codec once.
 	fn migrate_calendar(tx: &Connection) -> Result<(), String> {
@@ -327,8 +368,10 @@ impl Database {
 					},
 				};
 				if event.details.task_data.is_none() {
-					let mut data = tx.query_row("SELECT t.id,t.metadata FROM tasks t JOIN task_aliases a ON a.task_id=t.id WHERE a.source=?1",
-						[crate::timeblocking::block_key(&event)],read_data).optional().map_err(|e|e.to_string())?;
+					let mut data = tx
+						.query_row(ALIASED, params![event.calendar_id, event.id], read_data)
+						.optional()
+						.map_err(|e| e.to_string())?;
 					if let Some(data) = &mut data {
 						let pending:bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM google_entities WHERE sending_since IS NOT NULL AND json_extract(event,'$.details.task_data.id')=?1)",[data.id],|r|r.get(0)).map_err(|e|e.to_string())?;
 						if pending {
@@ -395,13 +438,8 @@ impl Database {
 		let tx = self
 			.0
 			.transaction_with_behavior(TransactionBehavior::Immediate)?;
-		let source = crate::timeblocking::block_key(event);
 		let existing = tx
-			.query_row(
-				"SELECT t.id,t.metadata FROM tasks t JOIN task_aliases a ON a.task_id=t.id WHERE a.source=?1",
-				[&source],
-				read_data,
-			)
+			.query_row(ALIASED, params![event.calendar_id, event.id], read_data)
 			.optional()?;
 		let data = if let Some(data) = existing {
 			data
@@ -430,8 +468,8 @@ impl Database {
 			TaskData { id, metadata }
 		};
 		tx.execute(
-			"INSERT INTO task_aliases VALUES (?1,?2) ON CONFLICT(source) DO NOTHING",
-			params![source, data.id],
+			"INSERT INTO task_aliases(calendar_id,event_id,task_id) VALUES (?1,?2,?3) ON CONFLICT DO NOTHING",
+			params![event.calendar_id, event.id, data.id],
 		)?;
 		tx.commit()?;
 		Ok(data)
@@ -439,11 +477,7 @@ impl Database {
 
 	pub fn lookup(&self, event: &Event) -> Result<Option<TaskData>, String> {
 		self.0
-			.query_row(
-				"SELECT t.id,t.metadata FROM tasks t JOIN task_aliases a ON a.task_id=t.id WHERE a.source=?1",
-				[crate::timeblocking::block_key(event)],
-				read_data,
-			)
+			.query_row(ALIASED, params![event.calendar_id, event.id], read_data)
 			.optional()
 			.map_err(|e| e.to_string())
 	}
@@ -488,11 +522,17 @@ impl Database {
             let tx = self.0.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let json = serde_json::to_string(&data.metadata).expect("metadata serializes");
             tx.execute("INSERT INTO tasks (id,metadata) VALUES (?1,?2) ON CONFLICT(id) DO UPDATE SET metadata=excluded.metadata", params![data.id,json])?;
-            tx.execute("INSERT INTO task_aliases VALUES (?1,?2) ON CONFLICT(source) DO UPDATE SET task_id=excluded.task_id", params![crate::timeblocking::block_key(event),data.id])?;
+            tx.execute(ALIAS, params![event.calendar_id, event.id, data.id])?;
             tx.commit()
         })().map_err(|e| e.to_string())
 	}
 }
+/// A task's ID and metadata by any Google identity it has had.
+const ALIASED: &str = "SELECT t.id,t.metadata FROM tasks t JOIN task_aliases a ON a.task_id=t.id WHERE a.calendar_id=?1 AND a.event_id=?2";
+
+/// Records that a Google identity names a task, replacing what it named before.
+pub(crate) const ALIAS: &str = "INSERT INTO task_aliases(calendar_id,event_id,task_id) VALUES(?1,?2,?3) ON CONFLICT(calendar_id,event_id) DO UPDATE SET task_id=excluded.task_id";
+
 fn read_data(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskData> {
 	let json: String = row.get(1)?;
 	let metadata = serde_json::from_str(&json).map_err(|e| {
@@ -840,14 +880,14 @@ mod tests {
 			// `legacy_key`, an alias pointing at it, and the old write queue.
 			let db = Connection::open(&path).unwrap();
 			db.execute_batch(
-                "DROP TABLE task_aliases; DROP TABLE tasks;
+                "DROP TABLE task_aliases; DROP TABLE tasks; DROP TABLE google_entities;
                  CREATE TABLE tasks (id INTEGER PRIMARY KEY, metadata TEXT NOT NULL, legacy_key TEXT UNIQUE);
                  CREATE TABLE task_aliases (source TEXT PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES tasks(id));
+                 CREATE TABLE google_entities (id TEXT PRIMARY KEY, event TEXT, acknowledged_at TEXT, observed_at TEXT);
                  INSERT INTO tasks VALUES (100,'{}','old'),(101,'{}',NULL);
-                 INSERT INTO task_aliases VALUES ('a',100),('b',101);
+                 INSERT INTO task_aliases VALUES ('tasks:list/task:a',100),('cal/b',101),('no separator',101);
                  CREATE TABLE google_operations (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, payload TEXT NOT NULL, entity TEXT NOT NULL, created_at TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, error TEXT, lease_until INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1, dead_at TEXT);
                  CREATE TABLE google_operation_progress (operation_id INTEGER PRIMARY KEY REFERENCES google_operations(id) ON DELETE CASCADE, data TEXT NOT NULL);
-                 ALTER TABLE google_entities DROP COLUMN sending_since;
                  PRAGMA user_version = 2;",
             )
             .unwrap();
@@ -863,16 +903,23 @@ mod tests {
 			.collect::<Result<_, _>>()
 			.unwrap();
 		assert_eq!(columns, ["id", "metadata"]);
-		let aliases: Vec<(String, i64)> = connection
+		let aliases: Vec<(String, String, i64)> = connection
 			.prepare(
-				"SELECT a.source,t.id FROM task_aliases a JOIN tasks t ON t.id=a.task_id ORDER BY a.source",
+				"SELECT a.calendar_id,a.event_id,t.id FROM task_aliases a JOIN tasks t ON t.id=a.task_id ORDER BY a.calendar_id",
 			)
 			.unwrap()
-			.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+			.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
 			.unwrap()
 			.collect::<Result<_, _>>()
 			.unwrap();
-		assert_eq!(aliases, [("a".into(), 100), ("b".into(), 101)]);
+		// Split at the separator; one without it could never be looked up.
+		assert_eq!(
+			aliases,
+			[
+				("cal".into(), "b".into(), 101),
+				("tasks:list".into(), "task:a".into(), 100)
+			]
+		);
 		let foreign_keys: bool = connection
 			.query_row("PRAGMA foreign_keys", [], |r| r.get(0))
 			.unwrap();
@@ -889,7 +936,9 @@ mod tests {
 			// unsent edit, and an edit Google had already confirmed.
 			let db = Connection::open(&path).unwrap();
 			db.execute_batch(
-                "CREATE TABLE google_operations (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, payload TEXT NOT NULL, entity TEXT NOT NULL, created_at TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, error TEXT, lease_until INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1, dead_at TEXT);
+                "DROP TABLE google_entities;
+                 CREATE TABLE google_entities (id TEXT PRIMARY KEY, event TEXT, acknowledged_at TEXT, observed_at TEXT);
+                 CREATE TABLE google_operations (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, payload TEXT NOT NULL, entity TEXT NOT NULL, created_at TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, error TEXT, lease_until INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1, dead_at TEXT);
                  CREATE TABLE google_operation_progress (operation_id INTEGER PRIMARY KEY REFERENCES google_operations(id) ON DELETE CASCADE, data TEXT NOT NULL);
                  CREATE TRIGGER timeparagon_change_google_operations_insert AFTER INSERT ON google_operations BEGIN SELECT 1; END;
                  INSERT INTO google_operations(kind,payload,entity,created_at) VALUES('Edit event','{}','cal
@@ -898,7 +947,6 @@ unsent','now');
 unsent','{}',NULL);
                  INSERT INTO google_entities(id,event,acknowledged_at) VALUES('cal
 confirmed','{}','2026-01-01T00:00:00+00:00');
-                 ALTER TABLE google_entities DROP COLUMN sending_since;
                  PRAGMA user_version = 3;",
             )
             .unwrap();
@@ -915,13 +963,24 @@ confirmed','{}','2026-01-01T00:00:00+00:00');
 			.unwrap();
 		assert_eq!(tables, 0);
 		let kept: Vec<String> = connection
-			.prepare("SELECT id FROM google_entities WHERE sending_since IS NULL")
+			.prepare(
+				"SELECT calendar_id||'/'||event_id FROM google_entities WHERE sending_since IS NULL",
+			)
 			.unwrap()
 			.query_map([], |r| r.get(0))
 			.unwrap()
 			.collect::<Result<_, _>>()
 			.unwrap();
-		assert_eq!(kept, ["cal\nconfirmed"]);
+		assert_eq!(kept, ["cal/confirmed"]);
+		// The overlay's change triggers were rebuilt with its table.
+		let triggers: i64 = connection
+			.query_row(
+				"SELECT count(*) FROM sqlite_master WHERE type='trigger' AND tbl_name='google_entities'",
+				[],
+				|r| r.get(0),
+			)
+			.unwrap();
+		assert_eq!(triggers, 3);
 		std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 	}
 	#[cfg(unix)]
@@ -1016,9 +1075,10 @@ mod calendar_migration_tests {
 			.unwrap();
 		db.connection()
 			.execute(
-				"INSERT INTO google_entities(id,event) VALUES(?1,?2)",
+				"INSERT INTO google_entities(calendar_id,event_id,event) VALUES(?1,?2,?3)",
 				params![
-					format!("{}\n{}", desired.calendar_id, desired.id),
+					desired.calendar_id,
+					desired.id,
 					serde_json::to_string(&desired).unwrap()
 				],
 			)

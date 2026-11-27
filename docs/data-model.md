@@ -127,7 +127,7 @@ Many kinds of ID appear in the data. This table lists them all:
 | Project / life area / goal / objective / place ID | `u64` | Personal area is always `1` | `config`, `places` |
 | Note | its front matter `id` and database primary key | `local-6601e8a5ac899-2` | `notes::files`, `notes::store` |
 | Contact | People API resource name | `people/c123…` | Google |
-| Edited item (`google_entities.id`) | `<calendar_id>\n<event_id>` | | `operations::key` |
+| Edited item | `google_entities (calendar_id, event_id)`; in memory joined by a newline | | `operations::key` |
 | Sync edit | 32 random hex chars, or `snapshot-` + 32 hex | | `database_sync` |
 
 Names are never used as references. Tasks refer to projects, places and

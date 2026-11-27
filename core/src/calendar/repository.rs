@@ -460,9 +460,10 @@ mod tests {
 		database
 			.connection()
 			.execute(
-				"INSERT INTO google_entities(id,event,sending_since) VALUES(?1,?2,?3)",
+				"INSERT INTO google_entities(calendar_id,event_id,event,sending_since) VALUES(?1,?2,?3,?4)",
 				params![
-					format!("{}\n{}", moved.calendar_id, moved.id),
+					moved.calendar_id,
+					moved.id,
 					serde_json::to_string(&moved).unwrap(),
 					crate::clock::utc_now().to_rfc3339()
 				],
@@ -506,9 +507,10 @@ mod tests {
 		let mut db = Database::open(&path).unwrap();
 		db.connection()
 			.execute(
-				"INSERT INTO google_entities(id,event) VALUES(?1,?2)",
+				"INSERT INTO google_entities(calendar_id,event_id,event) VALUES(?1,?2,?3)",
 				params![
-					format!("{}\n{}", event.calendar_id, event.id),
+					event.calendar_id,
+					event.id,
 					serde_json::to_string(event).unwrap()
 				],
 			)

@@ -3043,9 +3043,10 @@ mod tests {
 		let mut db = crate::task_db::Database::open(&path).unwrap();
 		db.connection()
 			.execute(
-				"INSERT INTO google_entities(id,event) VALUES(?1,?2)",
+				"INSERT INTO google_entities(calendar_id,event_id,event) VALUES(?1,?2,?3)",
 				rusqlite::params![
-					"tasks:google-list\ntask:local-id",
+					"tasks:google-list",
+					"task:local-id",
 					serde_json::to_string(&pending).unwrap()
 				],
 			)
@@ -3079,18 +3080,20 @@ mod tests {
 		let mut db = crate::task_db::Database::open(&path).unwrap();
 		db.connection()
 			.execute(
-				"INSERT INTO google_entities(id,event) VALUES(?1,?2)",
+				"INSERT INTO google_entities(calendar_id,event_id,event) VALUES(?1,?2,?3)",
 				rusqlite::params![
-					"tasks:google-list\ntask:local-id",
+					"tasks:google-list",
+					"task:local-id",
 					serde_json::to_string(&pending).unwrap()
 				],
 			)
 			.unwrap();
 		db.connection()
 			.execute(
-				"UPDATE google_entities SET sending_since=?2 WHERE id=?1",
+				"UPDATE google_entities SET sending_since=?3 WHERE calendar_id=?1 AND event_id=?2",
 				rusqlite::params![
-					"tasks:google-list\ntask:local-id",
+					"tasks:google-list",
+					"task:local-id",
 					crate::clock::utc_now().to_rfc3339()
 				],
 			)
