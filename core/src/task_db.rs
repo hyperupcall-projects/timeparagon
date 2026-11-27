@@ -67,10 +67,10 @@ pub struct TaskData {
 /// The schema this build sets up, kept in SQLite's `user_version`.
 ///
 /// Schema changes are applied transactionally by [`Database::set_up`].
-pub const SCHEMA_VERSION: i64 = 18;
+pub const SCHEMA_VERSION: i64 = 19;
 
 /// Older schemas [`Database::set_up`] can bring up to date.
-const UPGRADABLE: std::ops::RangeInclusive<i64> = 2..=17;
+const UPGRADABLE: std::ops::RangeInclusive<i64> = 2..=18;
 
 fn schema_version(db: &Connection) -> Result<i64, String> {
 	db.query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -178,8 +178,12 @@ impl Database {
 		Self::migrate_calendar(&tx)?;
 		crate::local_changes::install_calendar(&tx).map_err(|e| e.to_string())?;
 		crate::relational::install(&tx).map_err(|e| e.to_string())?;
+		// Schema 19: the work tables keep a task's and a block's parts in
+		// columns of their own. After `install`, which creates the new tables.
+		crate::relational::move_work_tables(&tx).map_err(|e| e.to_string())?;
 		// Schema 18: work sessions keyed by a Google identity move to the
-		// task's own ID. After `install`, whose triggers record the move.
+		// task's own ID. After the move, and after `install`, whose triggers
+		// record this one.
 		crate::relational::rekey_work_sessions(&tx).map_err(|e| e.to_string())?;
 		tx.commit().map_err(|e| e.to_string())?;
 

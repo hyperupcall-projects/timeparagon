@@ -791,9 +791,11 @@ figures are worked out from the tasks, events, work sessions and habits.
 
 ## Work sessions, distractions and pomodoro
 
-Recorded in time-block focus mode. Stored in `task_work_sessions` and
-`task_work_distractions` (shared), one session or distraction per row. The
-shared core type `task_work::WorkLog` retains this in-memory shape:
+Recorded in time-block focus mode. Stored in `work_sessions` and
+`work_distractions` (shared), one session or distraction per row, with the
+task and block in their parts (see
+[the schema](./database-schema.md#normalized-habits-brain-dumps-and-task-work)).
+The shared core type `task_work::WorkLog` retains this in-memory shape:
 
 ```json
 {
@@ -815,7 +817,7 @@ shared core type `task_work::WorkLog` retains this in-memory shape:
   A Google Task that has no task ID yet is given one before work on it starts
   (`task_db::Database::import`), so a session is never keyed by the task's
   Google identity. Sessions older builds keyed that way move to the task ID on
-  upgrade to schema 18, where the task's identity has an alias (see
+  upgrade from before schema 19, where the task's identity has an alias (see
   [the schema](./database-schema.md#versioning)).
 - The active session is the most recent one with `stopped_at = null`.
 - Distractions are 1, 5, 10, 15 or 30 minutes long.

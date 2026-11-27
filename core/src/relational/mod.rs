@@ -59,8 +59,18 @@ pub(crate) const TABLES: &[Table] = &[
         "habit_id"=>"TEXT", "date"=>"TEXT", "id"=>"TEXT", "kind"=>"TEXT NOT NULL CHECK(kind IN ('happened','resisted'))", "position"=>"INTEGER NOT NULL", "at"=>"TEXT", "amount"=>"INTEGER", "note"=>"TEXT NOT NULL"),
 	table!("habit_preferences", "habits", 1, "", "id"=>"INTEGER CHECK(id=1)", "sort"=>"TEXT NOT NULL", "reversed"=>"BOOLEAN NOT NULL", "hide_archived"=>"BOOLEAN NOT NULL", "hide_completed"=>"BOOLEAN NOT NULL", "score_bucket"=>"TEXT NOT NULL", "history_bucket"=>"TEXT NOT NULL"),
 	table!("brain_dump_entries", "shared.brain_dump", 1, "", "date"=>"TEXT", "text"=>"TEXT NOT NULL", "position"=>"INTEGER NOT NULL"),
-	table!("task_work_sessions", "shared.task_work", 1, "", "id"=>"TEXT", "task_key"=>"TEXT NOT NULL", "task_title"=>"TEXT NOT NULL", "block_key"=>"TEXT", "started_at"=>"TEXT NOT NULL", "stopped_at"=>"TEXT", "position"=>"INTEGER NOT NULL"),
-	table!("task_work_distractions", "shared.task_work", 1, "", "id"=>"TEXT", "block_key"=>"TEXT NOT NULL", "minutes"=>"INTEGER NOT NULL CHECK(minutes>=0)", "recorded_at"=>"TEXT NOT NULL", "position"=>"INTEGER NOT NULL"),
+	// A session's task is its TimeParagon ID, with the event ID of the one
+	// occurrence worked on when the task is a recurring dated one; or, for a
+	// task that had no ID then, its Google identity instead. A block is its
+	// Google identity. See `codec::task_columns`.
+	table!("work_sessions", "shared.task_work", 1, ",
+        CHECK((task_id IS NULL) = (task_calendar_id IS NOT NULL)),
+        CHECK((task_calendar_id IS NULL) = (task_event_id IS NULL)),
+        CHECK(occurrence_id IS NULL OR task_id IS NOT NULL),
+        CHECK((block_calendar_id IS NULL) = (block_event_id IS NULL))",
+        "id"=>"TEXT", "task_id"=>"INTEGER", "occurrence_id"=>"TEXT", "task_calendar_id"=>"TEXT", "task_event_id"=>"TEXT", "task_title"=>"TEXT NOT NULL",
+        "block_calendar_id"=>"TEXT", "block_event_id"=>"TEXT", "started_at"=>"TEXT NOT NULL", "stopped_at"=>"TEXT", "position"=>"INTEGER NOT NULL"),
+	table!("work_distractions", "shared.task_work", 1, "", "id"=>"TEXT", "block_calendar_id"=>"TEXT NOT NULL", "block_event_id"=>"TEXT NOT NULL", "minutes"=>"INTEGER NOT NULL CHECK(minutes>=0)", "recorded_at"=>"TEXT NOT NULL", "position"=>"INTEGER NOT NULL"),
 ];
 
 impl Table {
@@ -281,9 +291,9 @@ pub(crate) fn install(db: &Connection) -> io::Result<()> {
 	}
 	db.execute_batch("CREATE INDEX IF NOT EXISTS habit_days_date ON habit_days(date,habit_id);
         CREATE INDEX IF NOT EXISTS habits_section ON habits(section_id);
-        CREATE INDEX IF NOT EXISTS task_work_sessions_task ON task_work_sessions(task_key,started_at);
-        CREATE INDEX IF NOT EXISTS task_work_sessions_block ON task_work_sessions(block_key,started_at);
-        CREATE INDEX IF NOT EXISTS task_work_distractions_block ON task_work_distractions(block_key,recorded_at);").map_err(error)?;
+        CREATE INDEX IF NOT EXISTS work_sessions_task ON work_sessions(task_id,started_at);
+        CREATE INDEX IF NOT EXISTS work_sessions_block ON work_sessions(block_calendar_id,block_event_id,started_at);
+        CREATE INDEX IF NOT EXISTS work_distractions_block ON work_distractions(block_calendar_id,block_event_id,recorded_at);").map_err(error)?;
 	migrate_log_entries(db)?;
 	for key in ["habits", "shared.brain_dump", "shared.task_work"] {
 		let legacy: Option<String> = db
@@ -467,23 +477,24 @@ fn migrate_log_entries(db: &Connection) -> io::Result<()> {
 }
 
 /// Schema 18: work started on a Google Task before the task had its
-/// TimeParagon ID was keyed by the task's Google identity,
-/// `<calendar_id>/<event_id>` (see `timeblocking::task_key`), which changes
-/// when the task moves. Each such session whose identity is an alias of one
-/// task moves to that task's ID, where the task's later work is. A session's
-/// row ID comes from its key (see [`codec::session_id`]), so the move is a new
-/// row: the triggers record the old row's deletion and the new row, sent
-/// together, and the new row keeps the old one's sync token, so devices that
-/// move the same synced session agree on it. A session another device already
-/// moved, and sent here, is kept, and the copy under the Google identity goes.
-/// A session whose identity is no task's alias keeps it. Idempotent.
+/// TimeParagon ID was kept under the task's Google identity (see
+/// `timeblocking::task_key`), which changes when the task moves. Each such
+/// session whose identity is an alias of a task moves to that task's ID,
+/// where the task's later work is. The moved session is a new row, with the
+/// ID a session from before sessions had one would have under the task's ID
+/// (see [`codec::session_id`]): the triggers record the old row's deletion
+/// and the new row, sent together, and the new row keeps the old one's sync
+/// token, so devices that move the same synced session agree on it. A session
+/// another device already moved, and sent here, is kept, and the copy under
+/// the Google identity goes. A session whose identity is no task's alias
+/// keeps it. Runs after [`move_work_tables`]. Idempotent.
 pub(crate) fn rekey_work_sessions(db: &Connection) -> io::Result<()> {
-	const TABLE: &str = "task_work_sessions";
+	const TABLE: &str = "work_sessions";
 	let sessions = db
 		.prepare(
-			"SELECT s.id,min(a.task_id),s.started_at FROM task_work_sessions s
-             JOIN task_aliases a ON s.task_key=a.calendar_id||'/'||a.event_id
-             GROUP BY s.id HAVING count(DISTINCT a.task_id)=1",
+			"SELECT s.id,a.task_id,s.started_at FROM work_sessions s
+             JOIN task_aliases a ON a.calendar_id=s.task_calendar_id AND a.event_id=s.task_event_id
+             WHERE s.task_id IS NULL",
 		)
 		.and_then(|mut q| {
 			q.query_map([], |r| {
@@ -497,8 +508,7 @@ pub(crate) fn rekey_work_sessions(db: &Connection) -> io::Result<()> {
 		})
 		.map_err(error)?;
 	for (old, task, started_at) in sessions {
-		let key = task.to_string();
-		let new = codec::session_id(&key, &Value::String(started_at), 0);
+		let new = codec::session_id(&task.to_string(), &Value::String(started_at), 0);
 		let revision: Option<String> = db
 			.query_row(
 				"SELECT revision FROM timeparagon_relational_state WHERE table_name=?1 AND row_key=?2 AND deleted=0",
@@ -509,19 +519,19 @@ pub(crate) fn rekey_work_sessions(db: &Connection) -> io::Result<()> {
 			.map_err(error)?;
 		let moved: bool = db
 			.query_row(
-				"SELECT EXISTS(SELECT 1 FROM task_work_sessions WHERE id=?1)",
+				"SELECT EXISTS(SELECT 1 FROM work_sessions WHERE id=?1)",
 				[&new],
 				|r| r.get(0),
 			)
 			.map_err(error)?;
 		if moved {
-			db.execute("DELETE FROM task_work_sessions WHERE id=?1", [&old])
+			db.execute("DELETE FROM work_sessions WHERE id=?1", [&old])
 				.map_err(error)?;
 			continue;
 		}
 		db.execute(
-			"UPDATE task_work_sessions SET id=?2,task_key=?3 WHERE id=?1",
-			params![old, new, key],
+			"UPDATE work_sessions SET id=?2,task_id=?3,task_calendar_id=NULL,task_event_id=NULL WHERE id=?1",
+			params![old, new, task],
 		)
 		.map_err(error)?;
 		if let Some(revision) = revision {
@@ -532,6 +542,120 @@ pub(crate) fn rekey_work_sessions(db: &Connection) -> io::Result<()> {
 			.map_err(error)?;
 		}
 	}
+	Ok(())
+}
+
+/// Schema 19: `task_work_sessions` and `task_work_distractions` kept a task
+/// or block as one string (`timeblocking::task_key`, `block_key`). Their rows
+/// move to `work_sessions` and `work_distractions`, which keep its parts in
+/// columns of their own ([`codec::session_row`]). Each row keeps its ID, its
+/// sync token and whether it is still to be sent. The server's tables are new
+/// too, so the next sync sends the rows there (`sync::resend_missing`); its
+/// old ones are left for builds that still use them. A row whose task or block
+/// fits no shape fails the upgrade, leaving the file as it was. Idempotent:
+/// does nothing once the old tables are gone.
+pub(crate) fn move_work_tables(db: &Connection) -> io::Result<()> {
+	let exists = |name: &str| -> io::Result<bool> {
+		db.query_row(
+			"SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+			[name],
+			|r| r.get(0),
+		)
+		.map_err(error)
+	};
+	let moves: [(&str, &str, &str); 2] = [
+		(
+			"task_work_sessions",
+			"work_sessions",
+			"SELECT id,task_key,task_title,block_key,started_at,stopped_at,position FROM task_work_sessions",
+		),
+		(
+			"task_work_distractions",
+			"work_distractions",
+			"SELECT id,block_key,minutes,recorded_at,position FROM task_work_distractions",
+		),
+	];
+	let mut rows = Vec::new();
+	let mut found = false;
+	for (old, new, query) in moves {
+		if !exists(old)? {
+			continue;
+		}
+		found = true;
+		let table = TABLES
+			.iter()
+			.find(|t| t.name == new)
+			.expect("the work tables are relational tables");
+		let mut statement = db.prepare(query).map_err(error)?;
+		let mut result = statement.query([]).map_err(error)?;
+		while let Some(r) = result.next().map_err(error)? {
+			let id: String = r.get(0).map_err(error)?;
+			let row = if new == "work_sessions" {
+				codec::session_row(
+					&id,
+					&r.get::<_, String>(1).map_err(error)?,
+					&r.get::<_, String>(2).map_err(error)?,
+					r.get::<_, Option<String>>(3).map_err(error)?.as_deref(),
+					r.get::<_, String>(4).map_err(error)?.into(),
+					r.get::<_, Option<String>>(5).map_err(error)?.into(),
+					r.get::<_, i64>(6).map_err(error)?,
+				)
+			} else {
+				codec::distraction_row(
+					&id,
+					&r.get::<_, String>(1).map_err(error)?,
+					r.get::<_, i64>(2).map_err(error)?.into(),
+					r.get::<_, String>(3).map_err(error)?.into(),
+					r.get::<_, i64>(4).map_err(error)?,
+				)
+			}
+			.map_err(|e| invalid(format!("{old} row {id}: {e}")))?;
+			rows.push((table, row));
+		}
+	}
+	if !found {
+		return Ok(());
+	}
+	// The copies are not new edits: their sync state moves with them below.
+	let projecting: i64 = db
+		.query_row(
+			"SELECT projecting FROM timeparagon_relational_control WHERE id=1",
+			[],
+			|r| r.get(0),
+		)
+		.map_err(error)?;
+	db.execute(
+		"UPDATE timeparagon_relational_control SET projecting=1 WHERE id=1",
+		[],
+	)
+	.map_err(error)?;
+	for (table, row) in &rows {
+		table.upsert(db, row)?;
+	}
+	for (old, new, _) in moves {
+		if !exists(old)? {
+			continue;
+		}
+		db.execute(
+			"INSERT OR IGNORE INTO timeparagon_relational_state(table_name,row_key,revision,deleted,dirty)
+             SELECT ?2,row_key,revision,deleted,dirty FROM timeparagon_relational_state WHERE table_name=?1",
+			params![old, new],
+		)
+		.map_err(error)?;
+		db.execute(
+			"DELETE FROM timeparagon_relational_state WHERE table_name=?1",
+			[old],
+		)
+		.map_err(error)?;
+		// Also drops its triggers and indexes.
+		db.execute_batch(&format!("DROP TABLE {old};"))
+			.map_err(error)?;
+	}
+	db.execute(
+		"UPDATE timeparagon_relational_control SET projecting=?1 WHERE id=1",
+		[projecting],
+	)
+	.map_err(error)?;
 	Ok(())
 }
 

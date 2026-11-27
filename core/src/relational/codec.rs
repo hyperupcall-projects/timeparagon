@@ -60,6 +60,102 @@ pub(super) fn log_entry_id(
 	id
 }
 
+/// A task ID as `timeblocking::task_key` writes one.
+fn task_id(text: &str) -> Option<i64> {
+	text.parse::<i64>().ok().filter(|id| id.to_string() == text)
+}
+
+/// A work session's task key (`timeblocking::task_key`) as the columns
+/// `task_id, occurrence_id, task_calendar_id, task_event_id`: the task's ID,
+/// with the event ID of the one occurrence worked on when the task is a
+/// recurring dated one (`<id>/<event>`); or, for a task that had no ID, its
+/// Google identity (`<calendar>/<event>`) instead.
+pub(super) fn task_columns(key: &str) -> io::Result<[Value; 4]> {
+	let (head, tail) = match key.split_once('/') {
+		Some((head, tail)) => (head, Some(tail)),
+		None => (key, None),
+	};
+	Ok(match (task_id(head), tail) {
+		(Some(id), occurrence) => [
+			id.into(),
+			occurrence.map_or(Value::Null, Value::from),
+			Value::Null,
+			Value::Null,
+		],
+		(None, Some(event)) => [Value::Null, Value::Null, head.into(), event.into()],
+		(None, None) => {
+			return Err(invalid(format!(
+				"the task {key:?} is neither a task ID nor a Google identity"
+			)));
+		}
+	})
+}
+
+/// The task key [`task_columns`] stored.
+fn task_key(columns: &[Value]) -> io::Result<String> {
+	use Value::{Null, Number, String};
+	match columns {
+		[Number(id), Null, Null, Null] => Ok(id.to_string()),
+		[Number(id), String(occurrence), Null, Null] => Ok(format!("{id}/{occurrence}")),
+		[Null, Null, String(calendar), String(event)] => Ok(format!("{calendar}/{event}")),
+		_ => Err(invalid(
+			"a work session's task is neither a task ID nor a Google identity",
+		)),
+	}
+}
+
+/// A block key (`timeblocking::block_key`), `<calendar>/<event>`, as the
+/// columns `block_calendar_id, block_event_id`.
+pub(super) fn block_columns(key: &str) -> io::Result<[Value; 2]> {
+	key.split_once('/')
+		.map(|(calendar, event)| [calendar.into(), event.into()])
+		.ok_or_else(|| invalid(format!("the block {key:?} is not a Google identity")))
+}
+
+/// The block key [`block_columns`] stored, if any.
+fn block_key(calendar: &Value, event: &Value) -> io::Result<Option<String>> {
+	match (calendar, event) {
+		(Value::String(calendar), Value::String(event)) => Ok(Some(format!("{calendar}/{event}"))),
+		(Value::Null, Value::Null) => Ok(None),
+		_ => Err(invalid("a block is half a Google identity")),
+	}
+}
+
+/// A `work_sessions` row. `started_at` and `stopped_at` are as stored.
+pub(super) fn session_row(
+	id: &str,
+	task_key: &str,
+	title: &str,
+	block_key: Option<&str>,
+	started_at: Value,
+	stopped_at: Value,
+	position: i64,
+) -> io::Result<Vec<Value>> {
+	let mut row = vec![json!(id)];
+	row.extend(task_columns(task_key)?);
+	row.push(json!(title));
+	row.extend(match block_key {
+		Some(key) => block_columns(key)?,
+		None => [Value::Null, Value::Null],
+	});
+	row.extend([started_at, stopped_at, json!(position)]);
+	Ok(row)
+}
+
+/// A `work_distractions` row. `recorded_at` is as stored.
+pub(super) fn distraction_row(
+	id: &str,
+	block_key: &str,
+	minutes: Value,
+	recorded_at: Value,
+	position: i64,
+) -> io::Result<Vec<Value>> {
+	let mut row = vec![json!(id)];
+	row.extend(block_columns(block_key)?);
+	row.extend([minutes, recorded_at, json!(position)]);
+	Ok(row)
+}
+
 pub(super) fn encode(key: &str, v: &Value) -> io::Result<Rows> {
 	let mut rows = Rows::new();
 	match key {
@@ -229,19 +325,16 @@ pub(super) fn encode(key: &str, v: &Value) -> io::Result<Rows> {
 				} else {
 					s.id.clone()
 				};
-				insert(
-					&mut rows,
-					7,
-					vec![
-						json!(id),
-						json!(s.task_key),
-						json!(s.task_title),
-						value(&s.block_key)?,
-						started_at,
-						value(s.stopped_at)?,
-						json!(p),
-					],
+				let row = session_row(
+					&id,
+					&s.task_key,
+					&s.task_title,
+					s.block_key.as_deref(),
+					started_at,
+					value(s.stopped_at)?,
+					p as i64,
 				)?;
+				insert(&mut rows, 7, row)?;
 			}
 			counts.clear();
 			for (p, d) in log.distractions.iter().enumerate() {
@@ -254,17 +347,14 @@ pub(super) fn encode(key: &str, v: &Value) -> io::Result<Rows> {
 				} else {
 					d.id.clone()
 				};
-				insert(
-					&mut rows,
-					8,
-					vec![
-						json!(id),
-						json!(d.block_key),
-						json!(d.minutes),
-						value(d.recorded_at)?,
-						json!(p),
-					],
+				let row = distraction_row(
+					&id,
+					&d.block_key,
+					json!(d.minutes),
+					value(d.recorded_at)?,
+					p as i64,
 				)?;
+				insert(&mut rows, 8, row)?;
 			}
 		}
 		_ => return Err(invalid("unknown relational document")),
@@ -411,22 +501,23 @@ pub(super) fn decode(key: &str, rows: &Rows) -> io::Result<Value> {
 		}
 		"shared.task_work" => {
 			let mut log = crate::task_work::WorkLog::default();
-			for r in ordered(rows, 7, 6) {
+			for r in ordered(rows, 7, 10) {
 				log.sessions.push(crate::task_work::Session {
 					id: model(r[0].clone())?,
-					task_key: model(r[1].clone())?,
-					task_title: model(r[2].clone())?,
-					block_key: model(r[3].clone())?,
-					started_at: model(r[4].clone())?,
-					stopped_at: model(r[5].clone())?,
+					task_key: task_key(&r[1..5])?,
+					task_title: model(r[5].clone())?,
+					block_key: block_key(&r[6], &r[7])?,
+					started_at: model(r[8].clone())?,
+					stopped_at: model(r[9].clone())?,
 				});
 			}
-			for r in ordered(rows, 8, 4) {
+			for r in ordered(rows, 8, 5) {
 				log.distractions.push(crate::task_work::Distraction {
 					id: model(r[0].clone())?,
-					block_key: model(r[1].clone())?,
-					minutes: model(r[2].clone())?,
-					recorded_at: model(r[3].clone())?,
+					block_key: block_key(&r[1], &r[2])?
+						.ok_or_else(|| invalid("a distraction has no block"))?,
+					minutes: model(r[3].clone())?,
+					recorded_at: model(r[4].clone())?,
 				});
 			}
 			// Devices can append at different local positions while offline.

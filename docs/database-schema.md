@@ -38,7 +38,7 @@ The schema version is stored in `PRAGMA user_version`.
 | `user_version` | Meaning |
 | --- | --- |
 | `0` | New file. `Database::open` creates the schema. |
-| `2` through `17` | Upgraded to 18 on open: see below. |
+| `2` through `18` | Upgraded to 19 on open: see below. |
 | `6` | Like 5, with the app's tables, indexes and triggers prefixed `timeparagon_` instead of `timeslay_`, and the built-in calendar sources' IDs prefixed `timeparagon:` instead of `timeslay:`. |
 | `7` | Adds the synced `notes` metadata table. |
 | `8` | Creates the incremental Google sync cache during upgrade and reinstalls synced data tables and triggers. |
@@ -51,8 +51,9 @@ The schema version is stored in `PRAGMA user_version`.
 | `15` | The habit, brain dump and task work tables are `STRICT` and check that related columns agree. |
 | `16` | Caches and this device's own state leave `documents` for `caches` and `device_state`. |
 | `17` | Drops `counter`, `google_task_backend_state` and the desktop's `routes` cache, which nothing reads. |
-| `18` | Current (`task_db::SCHEMA_VERSION`). Work sessions recorded under a Google Task's Google identity move to the task's TimeParagon ID. |
-| anything else | Refused: `Unsupported database schema N; expected 18`. |
+| `18` | Work sessions recorded under a Google Task's Google identity move to the task's TimeParagon ID. |
+| `19` | Current (`task_db::SCHEMA_VERSION`). Work sessions and distractions keep a task's and a block's parts in columns of their own (`task_work_sessions` and `task_work_distractions` become `work_sessions` and `work_distractions`). |
+| anything else | Refused: `Unsupported database schema N; expected 19`. |
 
 Builds from before version 5 refuse a version 5 file, so every TimeParagon
 process on a device (panel, dock, shortcut daemon, browser host) has to be
@@ -65,19 +66,34 @@ processes setting up at once, or a crash halfway through, cause no harm. Once a
 file is stamped with the current version, setup is skipped, because the apps
 open the database many times a minute.
 
-**17 → 18** (`relational::rekey_work_sessions`) moves work started on a
-Google Task before the task had its TimeParagon ID. Such a session's
-`task_key` was the task's Google identity, `<calendar_id>/<event_id>`, which
-changes when the task moves. Where that identity is in `task_aliases` for
-exactly one task, the session's key becomes the task's ID. A session's `id`
-comes from its key, so the move makes a new row. The triggers record the old
-row's deletion and the new row, and both are sent together. The new row keeps
-the old row's sync token, so devices that move the same synced session agree
-on it. If the session is already there under the task's ID, because another
+**18 → 19** (`relational::move_work_tables`) moves the rows of
+`task_work_sessions` and `task_work_distractions`, which kept a task or a
+block as one string, to `work_sessions` and `work_distractions`, which keep
+its parts in columns of their own (see
+[Normalized habits](#normalized-habits-brain-dumps-and-task-work)). Each row
+keeps its `id`, its sync token and whether it is still to be sent, under the
+new table's name, and the old tables go with their triggers and indexes. The
+server's tables are new too: its old ones are left as they are and no longer
+read, and the first sync sends every row the new ones lack (see
+[Native row sync](#native-row-sync-and-cutover)). Upgrade every syncing
+device, since work recorded by schema 18 builds no longer reaches upgraded
+ones. A row whose task or block fits none of the shapes fails the upgrade,
+and the file is left as it was.
+
+**17 → 18** (`relational::rekey_work_sessions`, after the move to 19) moves
+work started on a Google Task before the task had its TimeParagon ID. Such a
+session was kept under the task's Google identity (`task_calendar_id`,
+`task_event_id`), which changes when the task moves. Where that identity is
+in `task_aliases`, the session moves to the task's ID. The moved session is a
+new row, with the `id` a session from before sessions had one would have
+under the task's ID (`codec::session_id`). The triggers record the old row's
+deletion and the new row, and both are sent together. The new row keeps the
+old row's sync token, so devices that move the same synced session agree on
+it. If the session is already there under the task's ID, because another
 device moved it and sent it here, the copy under the Google identity is
-deleted. A session whose identity is no task's alias keeps its key. The move
-runs once, on upgrade, so a session an older build records this way later
-keeps its key: upgrade every syncing device.
+deleted. A session whose identity is no task's alias keeps it. The move runs
+on every upgrade from before 19, so a session an older build records this way
+later keeps its identity: upgrade every syncing device.
 
 **16 → 17** drops what nothing reads any more: the `counter` table, which
 allocated task IDs before they were random; `google_task_backend_state`, which
@@ -344,8 +360,8 @@ these three legacy keys to the tables, so callers cannot recreate JSON blobs.
 | `habit_entries` | `habit_id, date, id` | Each happened/resisted entry: `kind`, `position`, `at`, `amount`, `note` |
 | `habit_preferences` | `id` (always 1) | Sort, reversal, visibility flags, chart buckets |
 | `brain_dump_entries` | `date` | `text`, `position`; empty text is a saved page |
-| `task_work_sessions` | `id` | `task_key`, `task_title`, `block_key`, `started_at`, `stopped_at`, `position` |
-| `task_work_distractions` | `id` | `block_key`, `minutes`, `recorded_at`, `position` |
+| `work_sessions` | `id` | The task: `task_id` and `occurrence_id`, or `task_calendar_id` and `task_event_id`; `task_title`; the block: `block_calendar_id`, `block_event_id`; `started_at`, `stopped_at`, `position` |
+| `work_distractions` | `id` | The block: `block_calendar_id`, `block_event_id`; `minutes`, `recorded_at`, `position` |
 
 Log entries, work sessions and distractions each have an `id` of their own,
 given when they are made (`Habit::set_log`, `WorkLog::start`,
@@ -369,6 +385,19 @@ needs (both for `interval`, times only for `times_per_day`, neither for
 `measure_present` is, and `measure_target` only then; and a habit day has
 `repetitions` exactly when its `mark` is `reps`. The server's tables keep only
 each column's type, since their tombstones leave the other columns empty.
+
+A work session's task is its TimeParagon ID (`task_id`, an `INTEGER`), with
+the event ID of the one occurrence worked on when the task is a recurring
+dated one (`occurrence_id`). A session from before tasks were given their ID
+when work on them starts may have the task's Google identity
+(`task_calendar_id`, `task_event_id`) instead. A block is its Google identity,
+`block_calendar_id` and `block_event_id`, which a session may not have. The
+`CHECK`s hold a session to exactly one of the task's two forms, an occurrence
+to a task ID, and each Google identity to both its parts. In memory these are
+still one string each, `timeblocking::task_key` and `block_key` joined by `/`
+(as `google_entities` rows are joined by a newline): the codec splits them on
+the first `/` (`codec::task_columns`, `codec::block_columns`) and refuses a
+task or block in any other shape rather than storing it.
 
 Habit children have foreign keys with cascading deletion. Deleting a section
 sets its habits' section to NULL. Dates and timestamps use the typed models'
@@ -1051,9 +1080,11 @@ FROM timeparagon_sync_edits WHERE uploaded = 0 AND document GLOB '*:*' GROUP BY 
 -- Habits by name
 SELECT id, name FROM habits ORDER BY position;
 
--- Work time by task (completed sessions only)
-SELECT task_key, sum(unixepoch(stopped_at)-unixepoch(started_at)) AS seconds
-FROM task_work_sessions WHERE stopped_at IS NOT NULL GROUP BY task_key;
+-- Work time by task (completed sessions only), with each task's titles
+SELECT task_id, group_concat(DISTINCT task_title) AS titles,
+       sum(unixepoch(stopped_at)-unixepoch(started_at)) AS seconds
+FROM work_sessions WHERE stopped_at IS NOT NULL AND task_id IS NOT NULL
+GROUP BY task_id;
 
 -- Native row changes waiting for sync
 SELECT table_name, count(*) FROM timeparagon_relational_state

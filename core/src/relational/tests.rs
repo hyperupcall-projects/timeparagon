@@ -99,11 +99,11 @@ fn library() -> Library {
 fn work() -> crate::task_work::WorkLog {
 	let mut w = crate::task_work::WorkLog::default();
 	let at = DateTime::from_timestamp(1000, 123456789).unwrap();
-	w.start("task:123".into(), "Title".into(), Some("block".into()), at);
+	w.start("123".into(), "Title".into(), Some("work/block".into()), at);
 	for _ in 0..2 {
 		w.distractions.push(crate::task_work::Distraction {
 			id: String::new(),
-			block_key: "block".into(),
+			block_key: "work/block".into(),
 			minutes: 5,
 			recorded_at: at,
 		});
@@ -449,7 +449,7 @@ fn stopping_a_work_session_beside_others_syncs_the_longer_row() {
 		for i in 0..7 {
 			let at = DateTime::from_timestamp(1000 + i * 60, 598590497).unwrap();
 			w.start(
-				format!("task:{i}"),
+				(100 + i).to_string(),
 				format!("Study session {i}"),
 				Some(block.clone()),
 				at,
@@ -910,12 +910,12 @@ fn an_edited_log_entry_or_work_session_stays_the_same_row() {
 	let pending = sync::pending(&raw).unwrap();
 	let changed = pending
 		.iter()
-		.filter(|c| matches!(TABLES[c.table].name, "habit_entries" | "task_work_sessions"))
+		.filter(|c| matches!(TABLES[c.table].name, "habit_entries" | "work_sessions"))
 		.map(|c| (TABLES[c.table].name, c.deleted))
 		.collect::<Vec<_>>();
 	assert_eq!(
 		changed,
-		[("habit_entries", false), ("task_work_sessions", false)]
+		[("habit_entries", false), ("work_sessions", false)]
 	);
 	assert_eq!(notes(&path), ["a late breakfast"]);
 }
@@ -1092,7 +1092,7 @@ fn merged_work_rows_choose_the_latest_session_and_distraction_by_time() {
 	let mut later = w.sessions[0].clone();
 	later.id = crate::task_work::new_id();
 	later.started_at += chrono::Duration::seconds(10);
-	later.task_key = "later".into();
+	later.task_key = "2876".into();
 	w.sessions.insert(0, later);
 	let mut later = w.distractions[0].clone();
 	later.recorded_at += chrono::Duration::seconds(10);
@@ -1101,8 +1101,8 @@ fn merged_work_rows_choose_the_latest_session_and_distraction_by_time() {
 	let rows = codec::encode("shared.task_work", &json!(w)).unwrap();
 	let mut actual: crate::task_work::WorkLog =
 		serde_json::from_value(codec::decode("shared.task_work", &rows).unwrap()).unwrap();
-	assert_eq!(actual.active().unwrap().task_key, "later");
-	actual.undo_distraction("block");
+	assert_eq!(actual.active().unwrap().task_key, "2876");
+	actual.undo_distraction("work/block");
 	assert!(actual.distractions.iter().all(|d| d.minutes == 5));
 }
 
@@ -1128,15 +1128,227 @@ fn retiring_documents_with_old_triggers_does_not_journal_a_user_deletion() {
 
 const TASK: &str = "2875093487120931";
 const GOOGLE: &str = "tasks:one/task:abc";
-/// Makes `GOOGLE` an alias of `TASK`, and the file schema 17 again.
+/// Makes `GOOGLE` an alias of `TASK`, and the file schema 17 again, with
+/// its work tables as they were.
 fn as_schema_17_knowing_the_task(path: &Path) {
-	db(path)
-		.execute_batch(&format!(
-			"INSERT INTO tasks VALUES({TASK},'{{}}');
-             INSERT INTO task_aliases VALUES('tasks:one','task:abc',{TASK});
-             PRAGMA user_version=17;"
-		))
+	let raw = db(path);
+	old_work_tables(&raw);
+	raw.execute_batch(&format!(
+		"INSERT INTO tasks VALUES({TASK},'{{}}');
+         INSERT INTO task_aliases VALUES('tasks:one','task:abc',{TASK});
+         PRAGMA user_version=17;"
+	))
+	.unwrap();
+}
+/// Puts the work back in the tables schemas 11 to 18 kept it in, which kept
+/// a task or block as one string, with its sync state.
+fn old_work_tables(raw: &Connection) {
+	raw.execute_batch(
+		"CREATE TABLE task_work_sessions(id TEXT NOT NULL,task_key TEXT NOT NULL,task_title TEXT NOT NULL,block_key TEXT,started_at TEXT NOT NULL,stopped_at TEXT,position INTEGER NOT NULL,PRIMARY KEY(id)) STRICT;
+         CREATE TABLE task_work_distractions(id TEXT NOT NULL,block_key TEXT NOT NULL,minutes INTEGER NOT NULL CHECK(minutes>=0),recorded_at TEXT NOT NULL,position INTEGER NOT NULL,PRIMARY KEY(id)) STRICT;
+         INSERT INTO task_work_sessions SELECT id,coalesce(task_id||coalesce('/'||occurrence_id,''),task_calendar_id||'/'||task_event_id),task_title,block_calendar_id||'/'||block_event_id,started_at,stopped_at,position FROM work_sessions;
+         INSERT INTO task_work_distractions SELECT id,block_calendar_id||'/'||block_event_id,minutes,recorded_at,position FROM work_distractions;
+         DROP TABLE work_sessions; DROP TABLE work_distractions;
+         UPDATE timeparagon_relational_state SET table_name='task_work_sessions' WHERE table_name='work_sessions';
+         UPDATE timeparagon_relational_state SET table_name='task_work_distractions' WHERE table_name='work_distractions';",
+	)
+	.unwrap();
+}
+/// Each of `table`'s rows in the outbox: its sync token, and whether it is
+/// deleted and still to be sent.
+fn states(raw: &Connection, table: &str) -> BTreeMap<String, (String, bool, bool)> {
+	raw.prepare(
+		"SELECT row_key,revision,deleted,dirty FROM timeparagon_relational_state WHERE table_name=?1",
+	)
+	.unwrap()
+	.query_map([table], |r| {
+		Ok((r.get(0)?, (r.get(1)?, r.get(2)?, r.get(3)?)))
+	})
+	.unwrap()
+	.collect::<rusqlite::Result<_>>()
+	.unwrap()
+}
+/// Work on each shape of task and block a session can have, all of it done.
+fn shapes() -> crate::task_work::WorkLog {
+	let at = |minutes: i64| DateTime::from_timestamp(1_000_000 + minutes * 60, 0).unwrap();
+	let mut w = crate::task_work::WorkLog::default();
+	for (minutes, task, block) in [
+		(0, "2875", Some("work/block")),
+		(30, "2875/series_20261109T090000Z", None),
+		// A task that had no ID, and is no task's alias.
+		(60, "tasks:one/task:other", Some("work/block")),
+	] {
+		w.start(
+			task.into(),
+			"Write report".into(),
+			block.map(Into::into),
+			at(minutes),
+		);
+		w.stop_all(at(minutes + 20));
+	}
+	w.distractions.push(crate::task_work::Distraction::new(
+		"work/block".into(),
+		5,
+		at(10),
+	));
+	w
+}
+#[test]
+fn work_tasks_and_blocks_are_kept_in_their_parts() {
+	let (_dir, path) = database();
+	let log = shapes();
+	task_db::write_document(&path, "shared.task_work", &log).unwrap();
+	assert_eq!(work_log(&path), log);
+	let raw = db(&path);
+	type Parts = (
+		Option<i64>,
+		Option<String>,
+		Option<String>,
+		Option<String>,
+		Option<String>,
+		Option<String>,
+	);
+	let parts: Vec<Parts> = raw
+		.prepare("SELECT task_id,occurrence_id,task_calendar_id,task_event_id,block_calendar_id,block_event_id FROM work_sessions ORDER BY started_at")
+		.unwrap()
+		.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))
+		.unwrap()
+		.collect::<rusqlite::Result<_>>()
 		.unwrap();
+	let some = |text: &str| Some(text.to_owned());
+	assert_eq!(
+		parts,
+		[
+			(Some(2875), None, None, None, some("work"), some("block")),
+			(
+				Some(2875),
+				some("series_20261109T090000Z"),
+				None,
+				None,
+				None,
+				None
+			),
+			(
+				None,
+				None,
+				some("tasks:one"),
+				some("task:other"),
+				some("work"),
+				some("block")
+			),
+		]
+	);
+	// A task or block in another shape is refused rather than stored.
+	let at = DateTime::from_timestamp(2_000_000, 0).unwrap();
+	let mut bad_task = log.clone();
+	bad_task.start("task:deep".into(), "Deep work".into(), None, at);
+	let mut bad_block = log.clone();
+	bad_block.start("2875".into(), "Deep work".into(), Some("block".into()), at);
+	let mut bad_distraction = log.clone();
+	bad_distraction
+		.distractions
+		.push(crate::task_work::Distraction::new("block".into(), 5, at));
+	for bad in [bad_task, bad_block, bad_distraction] {
+		assert!(task_db::write_document(&path, "shared.task_work", &bad).is_err());
+	}
+	// So is a row whose parts disagree.
+	for (statement, why) in [
+		(
+			"UPDATE work_sessions SET task_calendar_id='tasks:one',task_event_id='task:x' WHERE task_id IS NOT NULL",
+			"a task ID and a Google identity",
+		),
+		(
+			"UPDATE work_sessions SET task_event_id=NULL WHERE task_id IS NULL",
+			"half a Google identity",
+		),
+		(
+			"UPDATE work_sessions SET occurrence_id='x' WHERE task_id IS NULL",
+			"an occurrence of no task",
+		),
+		(
+			"UPDATE work_sessions SET block_event_id=NULL WHERE block_calendar_id IS NOT NULL",
+			"half a block",
+		),
+	] {
+		assert!(raw.execute(statement, []).is_err(), "{why}");
+	}
+	assert_eq!(work_log(&path), log);
+}
+#[test]
+fn schema_18_work_moves_to_tables_that_keep_tasks_and_blocks_in_parts() {
+	runtime().block_on(async {
+		let (dir, a) = database();
+		let (_dir, b) = database();
+		let (_server, conn) = server(&dir.path().join("remote.db")).await;
+		let log = shapes();
+		// Sent, with a distraction since taken back.
+		let mut taken_back = log.clone();
+		taken_back
+			.distractions
+			.push(crate::task_work::Distraction::new(
+				"work/block".into(),
+				1,
+				DateTime::from_timestamp(2_000_000, 0).unwrap(),
+			));
+		task_db::write_document(&a, "shared.task_work", &taken_back).unwrap();
+		send(&conn, &a).await;
+		task_db::write_document(&a, "shared.task_work", &log).unwrap();
+		send(&conn, &a).await;
+		// The rows as a schema 18 file had them, sent to the server's old tables.
+		let raw = db(&a);
+		let sessions = states(&raw, "work_sessions");
+		let distractions = states(&raw, "work_distractions");
+		assert!(distractions.values().any(|(_, deleted, _)| *deleted));
+		old_work_tables(&raw);
+		raw.execute_batch("PRAGMA user_version=18").unwrap();
+		task_db::Database::open(&a).unwrap();
+		assert_eq!(work_log(&a), log);
+		assert_eq!(states(&raw, "work_sessions"), sessions);
+		assert_eq!(states(&raw, "work_distractions"), distractions);
+		for old in ["task_work_sessions", "task_work_distractions"] {
+			assert!(states(&raw, old).is_empty());
+			let left: i64 = raw
+				.query_row(
+					"SELECT count(*) FROM sqlite_master WHERE tbl_name=?1",
+					[old],
+					|r| r.get(0),
+				)
+				.unwrap();
+			assert_eq!(left, 0, "{old} and its triggers are gone");
+		}
+		// The rows the server's new tables lack are sent to them, and another
+		// device gets them from there.
+		let (_new_server, conn) = server(&dir.path().join("new.db")).await;
+		pull(&conn, &a).await;
+		send(&conn, &a).await;
+		pull(&conn, &b).await;
+		assert_eq!(work_log(&b), log);
+		assert!(sync::pending(&raw).unwrap().is_empty());
+	});
+}
+#[test]
+fn a_work_row_that_fits_no_shape_fails_the_upgrade_and_leaves_the_file() {
+	let (_dir, path) = database();
+	task_db::write_document(&path, "shared.task_work", &shapes()).unwrap();
+	let raw = db(&path);
+	old_work_tables(&raw);
+	raw.execute_batch(
+		"UPDATE task_work_sessions SET task_key='task:deep' WHERE started_at=(SELECT min(started_at) FROM task_work_sessions);
+         PRAGMA user_version=18;",
+	)
+	.unwrap();
+	let Err(error) = task_db::Database::open(&path) else {
+		panic!("the upgrade went ahead");
+	};
+	assert!(error.contains("task:deep"), "{error}");
+	let version: i64 = raw
+		.query_row("PRAGMA user_version", [], |r| r.get(0))
+		.unwrap();
+	assert_eq!(version, 18);
+	let kept: i64 = raw
+		.query_row("SELECT count(*) FROM task_work_sessions", [], |r| r.get(0))
+		.unwrap();
+	assert_eq!(kept, 3);
 }
 fn worked(key: &str, from: i64, to: i64) -> crate::task_work::Session {
 	let at = |minutes: i64| DateTime::from_timestamp(1_000_000 + minutes * 60, 0).unwrap();
@@ -1171,14 +1383,7 @@ fn schema_17_work_under_a_google_identity_moves_to_the_task_id() {
 	task_db::write_document(&path, "shared.task_work", &log).unwrap();
 	let raw = db(&path);
 	sync::acknowledge(&raw, &sync::pending(&raw).unwrap()).unwrap();
-	let tokens = |raw: &Connection| -> BTreeMap<String, (String, bool, bool)> {
-		raw.prepare("SELECT row_key,revision,deleted,dirty FROM timeparagon_relational_state WHERE table_name='task_work_sessions'")
-			.unwrap()
-			.query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?, r.get(3)?))))
-			.unwrap()
-			.collect::<rusqlite::Result<_>>()
-			.unwrap()
-	};
+	let tokens = |raw: &Connection| states(raw, "work_sessions");
 	let row = |s: &crate::task_work::Session| {
 		json!([codec::session_id(&s.task_key, &json!(s.started_at), 0)]).to_string()
 	};
