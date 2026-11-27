@@ -2041,6 +2041,51 @@ mod tests {
 	}
 
 	#[test]
+	fn work_on_a_task_without_an_id_waits_for_one_and_is_recorded_under_it() {
+		let mut state = estimate_state();
+		state
+			.calendar
+			.event_mut("task:deep")
+			.unwrap()
+			.details
+			.task_data = None;
+		let _ = update(&mut state, Action::StartWork("task:deep".into()));
+		// Nothing is recorded under its Google identity meanwhile.
+		assert!(state.config.task_work.sessions.is_empty());
+		let data = crate::task_db::TaskData {
+			id: 2875,
+			metadata: Default::default(),
+		};
+		let _ = crate::focus::update(
+			&mut state,
+			crate::focus::Action::Identified("task:deep".into(), Ok(data.clone())),
+		);
+		let task = state.calendar.event("task:deep").unwrap();
+		assert_eq!(task.details.task_data, Some(data));
+		assert_eq!(state.config.task_work.active().unwrap().task_key, "2875");
+		assert!(state.config.task_work.running(&task_key(task)));
+		// Nothing starts if the ID could not be given, or the task has gone
+		// by the time it has one.
+		state.config.task_work = Default::default();
+		let _ = crate::focus::update(
+			&mut state,
+			crate::focus::Action::Identified("task:deep".into(), Err("database is locked".into())),
+		);
+		assert_eq!(state.calendar.error.as_deref(), Some("database is locked"));
+		let _ = crate::focus::update(
+			&mut state,
+			crate::focus::Action::Identified(
+				"task:gone".into(),
+				Ok(crate::task_db::TaskData {
+					id: 2876,
+					metadata: Default::default(),
+				}),
+			),
+		);
+		assert!(state.config.task_work.sessions.is_empty());
+	}
+
+	#[test]
 	fn a_work_session_can_have_its_start_and_end_edited_or_removed() {
 		let mut state = State::blank();
 		let day = NaiveDate::from_ymd_opt(2026, 10, 28).unwrap();

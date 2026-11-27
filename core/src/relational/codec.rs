@@ -33,6 +33,12 @@ fn stable_id(parts: Value, ordinal: usize) -> String {
 	)
 }
 
+/// A work session's ID: its task key and start (`started_at` as stored),
+/// numbered among sessions that share both.
+pub(super) fn session_id(task_key: &str, started_at: &Value, ordinal: usize) -> String {
+	stable_id(json!([task_key, started_at]), ordinal)
+}
+
 /// A log entry's identity within its habit day: what it records, numbered
 /// among identical entries. `counts` is shared by one day's entries. Two
 /// devices that each log an entry while offline therefore add two rows
@@ -206,9 +212,11 @@ pub(super) fn encode(key: &str, v: &Value) -> io::Result<Rows> {
 			let log: crate::task_work::WorkLog = model(v.clone())?;
 			let mut counts = BTreeMap::<String, usize>::new();
 			for (p, s) in log.sessions.iter().enumerate() {
-				let parts = json!([s.task_key, s.started_at]);
-				let count = counts.entry(parts.to_string()).or_default();
-				let id = stable_id(parts, *count);
+				let started_at = value(s.started_at)?;
+				let count = counts
+					.entry(json!([s.task_key, started_at]).to_string())
+					.or_default();
+				let id = session_id(&s.task_key, &started_at, *count);
 				*count += 1;
 				insert(
 					&mut rows,
@@ -218,7 +226,7 @@ pub(super) fn encode(key: &str, v: &Value) -> io::Result<Rows> {
 						json!(s.task_key),
 						json!(s.task_title),
 						value(&s.block_key)?,
-						value(s.started_at)?,
+						started_at,
 						value(s.stopped_at)?,
 						json!(p),
 					],

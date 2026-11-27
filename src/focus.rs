@@ -4,6 +4,7 @@ use crate::calendar::{self, Event};
 use crate::timeblocking::{assigned_all, block_key_of, event};
 use chrono::{Local, NaiveDate, TimeZone};
 use iced::Task;
+use timeparagon_core::task_db::TaskData;
 use timeparagon_core::timeblocking::{TaskStatus, block_key, task_key, task_status};
 
 #[derive(Debug, Clone)]
@@ -31,6 +32,10 @@ pub enum Action {
 	AddDistraction(u32),
 	/// Take back the focused block's latest distraction.
 	UndoDistraction,
+	/// The task with this ID, which had no TimeParagon ID, has been given one
+	/// to start work under (see [`identify`]). It goes on the loaded task,
+	/// and work on it starts.
+	Identified(String, Result<TaskData, String>),
 }
 
 pub fn update(state: &mut State, action: Action) -> Task<Message> {
@@ -262,6 +267,9 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			}) else {
 				return Task::none();
 			};
+			if task.details.task_data.is_none() {
+				return identify(task.clone());
+			}
 			if state.config.pomodoro.running()
 				&& state.config.pomodoro.phase == crate::pomodoro::Phase::Break
 			{
@@ -297,7 +305,45 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 			}
 			return Task::none();
 		}
+		Action::Identified(id, Ok(data)) => {
+			let loaded = state
+				.calendar
+				.events
+				.iter_mut()
+				.chain(state.calendar.detail_event.iter_mut())
+				.chain(
+					state
+						.inbox
+						.draft
+						.as_mut()
+						.and_then(|draft| draft.event.as_mut()),
+				)
+				.filter(|event| event.id == id);
+			for task in loaded {
+				task.details.task_data.get_or_insert_with(|| data.clone());
+			}
+			// Only once the task has its ID, so a task that has gone in the
+			// meantime is not sent to get one again.
+			if event(state, &id).is_some_and(|task| task.details.task_data.is_some()) {
+				return update(state, Action::StartWork(id));
+			}
+			return Task::none();
+		}
+		Action::Identified(_, Err(error)) => {
+			log::warn!("could not give the task an ID to record work against: {error}");
+			state.calendar.error = Some(error);
+			return Task::none();
+		}
 	}
+}
+
+/// Work is recorded against a task's TimeParagon ID, which stays the same
+/// when the task moves, where its Google identity does not. A Google Task
+/// that has no ID yet is given one first, off the interface thread.
+fn identify(task: Event) -> Task<Message> {
+	let id = task.id.clone();
+	crate::blocking::run(move || crate::task_db::open()?.import(&task))
+		.map(move |result| Action::Identified(id.clone(), result).into())
 }
 
 fn focused_block_key(state: &State) -> Option<String> {

@@ -466,6 +466,75 @@ fn migrate_log_entries(db: &Connection) -> io::Result<()> {
 	Ok(())
 }
 
+/// Schema 18: work started on a Google Task before the task had its
+/// TimeParagon ID was keyed by the task's Google identity,
+/// `<calendar_id>/<event_id>` (see `timeblocking::task_key`), which changes
+/// when the task moves. Each such session whose identity is an alias of one
+/// task moves to that task's ID, where the task's later work is. A session's
+/// row ID comes from its key (see [`codec::session_id`]), so the move is a new
+/// row: the triggers record the old row's deletion and the new row, sent
+/// together, and the new row keeps the old one's sync token, so devices that
+/// move the same synced session agree on it. A session another device already
+/// moved, and sent here, is kept, and the copy under the Google identity goes.
+/// A session whose identity is no task's alias keeps it. Idempotent.
+pub(crate) fn rekey_work_sessions(db: &Connection) -> io::Result<()> {
+	const TABLE: &str = "task_work_sessions";
+	let sessions = db
+		.prepare(
+			"SELECT s.id,min(a.task_id),s.started_at FROM task_work_sessions s
+             JOIN task_aliases a ON s.task_key=a.calendar_id||'/'||a.event_id
+             GROUP BY s.id HAVING count(DISTINCT a.task_id)=1",
+		)
+		.and_then(|mut q| {
+			q.query_map([], |r| {
+				Ok((
+					r.get::<_, String>(0)?,
+					r.get::<_, i64>(1)?,
+					r.get::<_, String>(2)?,
+				))
+			})?
+			.collect::<rusqlite::Result<Vec<_>>>()
+		})
+		.map_err(error)?;
+	for (old, task, started_at) in sessions {
+		let key = task.to_string();
+		let new = codec::session_id(&key, &Value::String(started_at), 0);
+		let revision: Option<String> = db
+			.query_row(
+				"SELECT revision FROM timeparagon_relational_state WHERE table_name=?1 AND row_key=?2 AND deleted=0",
+				params![TABLE, serde_json::json!([old]).to_string()],
+				|r| r.get(0),
+			)
+			.optional()
+			.map_err(error)?;
+		let moved: bool = db
+			.query_row(
+				"SELECT EXISTS(SELECT 1 FROM task_work_sessions WHERE id=?1)",
+				[&new],
+				|r| r.get(0),
+			)
+			.map_err(error)?;
+		if moved {
+			db.execute("DELETE FROM task_work_sessions WHERE id=?1", [&old])
+				.map_err(error)?;
+			continue;
+		}
+		db.execute(
+			"UPDATE task_work_sessions SET id=?2,task_key=?3 WHERE id=?1",
+			params![old, new, key],
+		)
+		.map_err(error)?;
+		if let Some(revision) = revision {
+			db.execute(
+				"UPDATE timeparagon_relational_state SET revision=?3 WHERE table_name=?1 AND row_key=?2",
+				params![TABLE, serde_json::json!([new]).to_string(), revision],
+			)
+			.map_err(error)?;
+		}
+	}
+	Ok(())
+}
+
 /// Schema 15: rebuilds each table of [`TABLES`] made before it was `STRICT` and
 /// had its `CHECK`s, the way SQLite documents changing a table's definition:
 /// with foreign keys off, so rebuilding a parent leaves its children alone, and

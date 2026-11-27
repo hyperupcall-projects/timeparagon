@@ -67,10 +67,10 @@ pub struct TaskData {
 /// The schema this build sets up, kept in SQLite's `user_version`.
 ///
 /// Schema changes are applied transactionally by [`Database::set_up`].
-pub const SCHEMA_VERSION: i64 = 17;
+pub const SCHEMA_VERSION: i64 = 18;
 
 /// Older schemas [`Database::set_up`] can bring up to date.
-const UPGRADABLE: std::ops::RangeInclusive<i64> = 2..=16;
+const UPGRADABLE: std::ops::RangeInclusive<i64> = 2..=17;
 
 fn schema_version(db: &Connection) -> Result<i64, String> {
 	db.query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -178,6 +178,9 @@ impl Database {
 		Self::migrate_calendar(&tx)?;
 		crate::local_changes::install_calendar(&tx).map_err(|e| e.to_string())?;
 		crate::relational::install(&tx).map_err(|e| e.to_string())?;
+		// Schema 18: work sessions keyed by a Google identity move to the
+		// task's own ID. After `install`, whose triggers record the move.
+		crate::relational::rekey_work_sessions(&tx).map_err(|e| e.to_string())?;
 		tx.commit().map_err(|e| e.to_string())?;
 
 		if !memory {
@@ -549,10 +552,7 @@ impl Database {
 	}
 
 	pub fn lookup(&self, event: &Event) -> Result<Option<TaskData>, String> {
-		self.0
-			.query_row(ALIASED, params![event.calendar_id, event.id], read_data)
-			.optional()
-			.map_err(|e| e.to_string())
+		lookup_in(&self.0, event).map_err(|e| e.to_string())
 	}
 
 	/// Records the identity Google confirmed a write under, so a later write
@@ -595,6 +595,16 @@ impl Database {
         })().map_err(|e| e.to_string())
 	}
 }
+/// The task an event's Google identity names, if it has been given an ID.
+pub(crate) fn lookup_in(
+	connection: &Connection,
+	event: &Event,
+) -> rusqlite::Result<Option<TaskData>> {
+	connection
+		.query_row(ALIASED, params![event.calendar_id, event.id], read_data)
+		.optional()
+}
+
 /// A task's ID and metadata by any Google identity it has had.
 const ALIASED: &str = "SELECT t.id,t.metadata FROM tasks t JOIN task_aliases a ON a.task_id=t.id WHERE a.calendar_id=?1 AND a.event_id=?2";
 

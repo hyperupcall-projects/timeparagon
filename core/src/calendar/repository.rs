@@ -171,6 +171,16 @@ pub(super) fn events(
 		}
 	}
 	operations::read_overlay(connection)?.apply(&mut events);
+	// A Google Task given its TimeParagon ID on this device, as when work on
+	// it starts, keeps that ID until the copy fetched from Google has it too,
+	// so what was recorded against the ID still finds the task.
+	for event in events
+		.iter_mut()
+		.filter(|event| event.details.task_data.is_none() && event.is_task())
+	{
+		event.details.task_data =
+			crate::task_db::lookup_in(connection, event).map_err(|e| e.to_string())?;
+	}
 	let mut seen = HashSet::new();
 	events.retain(|event| seen.insert((event.calendar_id.clone(), event.id.clone())));
 	events.sort_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)));
@@ -546,5 +556,66 @@ mod tests {
 				.events
 				.is_empty()
 		);
+	}
+
+	#[test]
+	fn work_on_a_task_given_its_id_still_counts_once_it_has_metadata_or_moves() {
+		let dir = tempfile::tempdir().unwrap();
+		let path = dir.path().join("calendar.sqlite3");
+		let day = sample_snapshot().day;
+		let mut task = Event {
+			id: "task:abc".into(),
+			calendar_id: "tasks:one".into(),
+			title: "Write report".into(),
+			start: at_clock(day, 0, 0),
+			end: at_clock(day.succ_opt().unwrap(), 0, 0),
+			all_day: true,
+			color: crate::calendar::colors::TASK,
+			completed: false,
+			details: Default::default(),
+		};
+		let loaded = |id: &str| {
+			all_events(&path)
+				.unwrap()
+				.into_iter()
+				.find(|event| event.id == id)
+				.unwrap()
+		};
+		// Stored before it had TimeParagon metadata.
+		save_tasks(&path, std::slice::from_ref(&task), false).unwrap();
+		assert!(loaded("task:abc").details.task_data.is_none());
+		// Starting work gives it its ID first, and a view read before Google
+		// has the ID still knows the task by it.
+		let data = Database::open(&path).unwrap().import(&task).unwrap();
+		let key = crate::timeblocking::task_key(&loaded("task:abc"));
+		assert_eq!(key, data.id.to_string());
+		let start = DateTime::from_timestamp(1_000_000, 0).unwrap();
+		let mut log = crate::task_work::WorkLog::default();
+		log.start(key.clone(), task.title.clone(), None, start);
+		log.stop(&key, start + Duration::minutes(30));
+		let worked = |task: &Event| {
+			log.seconds(
+				&crate::timeblocking::task_key(task),
+				start + Duration::days(1),
+			)
+		};
+		// The next fetch finds no metadata in its notes, so it publishes the ID
+		// the task was given.
+		let mut published = None;
+		let fetched =
+			super::super::task_metadata::load(&mut Database::open(&path).unwrap(), &task, |data| {
+				published = Some(data.clone());
+				Ok(())
+			})
+			.unwrap();
+		assert_eq!((&fetched, published.as_ref()), (&data, Some(&data)));
+		task.details.task_data = Some(fetched);
+		save_tasks(&path, std::slice::from_ref(&task), false).unwrap();
+		assert_eq!(worked(&loaded("task:abc")), 30 * 60);
+		// Moved to another list, Google knows it by another ID.
+		task.id = "task:xyz".into();
+		task.calendar_id = "tasks:two".into();
+		save_tasks(&path, std::slice::from_ref(&task), true).unwrap();
+		assert_eq!(worked(&loaded("task:xyz")), 30 * 60);
 	}
 }

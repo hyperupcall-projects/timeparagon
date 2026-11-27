@@ -38,7 +38,7 @@ The schema version is stored in `PRAGMA user_version`.
 | `user_version` | Meaning |
 | --- | --- |
 | `0` | New file. `Database::open` creates the schema. |
-| `2` through `16` | Upgraded to 17 on open: see below. |
+| `2` through `17` | Upgraded to 18 on open: see below. |
 | `6` | Like 5, with the app's tables, indexes and triggers prefixed `timeparagon_` instead of `timeslay_`, and the built-in calendar sources' IDs prefixed `timeparagon:` instead of `timeslay:`. |
 | `7` | Adds the synced `notes` metadata table. |
 | `8` | Creates the incremental Google sync cache during upgrade and reinstalls synced data tables and triggers. |
@@ -50,8 +50,9 @@ The schema version is stored in `PRAGMA user_version`.
 | `14` | `task_aliases` and `google_entities` are keyed by `(calendar_id, event_id)` instead of one string joining them. |
 | `15` | The habit, brain dump and task work tables are `STRICT` and check that related columns agree. |
 | `16` | Caches and this device's own state leave `documents` for `caches` and `device_state`. |
-| `17` | Current (`task_db::SCHEMA_VERSION`). Drops `counter`, `google_task_backend_state` and the desktop's `routes` cache, which nothing reads. |
-| anything else | Refused: `Unsupported database schema N; expected 17`. |
+| `17` | Drops `counter`, `google_task_backend_state` and the desktop's `routes` cache, which nothing reads. |
+| `18` | Current (`task_db::SCHEMA_VERSION`). Work sessions recorded under a Google Task's Google identity move to the task's TimeParagon ID. |
+| anything else | Refused: `Unsupported database schema N; expected 18`. |
 
 Builds from before version 5 refuse a version 5 file, so every TimeParagon
 process on a device (panel, dock, shortcut daemon, browser host) has to be
@@ -63,6 +64,20 @@ Every statement in setup is idempotent (`CREATE … IF NOT EXISTS`,
 processes setting up at once, or a crash halfway through, cause no harm. Once a
 file is stamped with the current version, setup is skipped, because the apps
 open the database many times a minute.
+
+**17 → 18** (`relational::rekey_work_sessions`) moves work started on a
+Google Task before the task had its TimeParagon ID. Such a session's
+`task_key` was the task's Google identity, `<calendar_id>/<event_id>`, which
+changes when the task moves. Where that identity is in `task_aliases` for
+exactly one task, the session's key becomes the task's ID. A session's `id`
+comes from its key, so the move makes a new row. The triggers record the old
+row's deletion and the new row, and both are sent together. The new row keeps
+the old row's sync token, so devices that move the same synced session agree
+on it. If the session is already there under the task's ID, because another
+device moved it and sent it here, the copy under the Google identity is
+deleted. A session whose identity is no task's alias keeps its key. The move
+runs once, on upgrade, so a session an older build records this way later
+keeps its key: upgrade every syncing device.
 
 **16 → 17** drops what nothing reads any more: the `counter` table, which
 allocated task IDs before they were random; `google_task_backend_state`, which
@@ -498,7 +513,10 @@ All calendar consumers call `calendar::repository::read`. In one read
 transaction it reads the confirmed source rows for the requested dates (two
 days either side, since all-day events are matched by their local dates), and
 every task, which shows on every day. It applies local operations once, all of
-them, so an edit that moves an item into the range shows. Then it filters the
+them, so an edit that moves an item into the range shows. A Google Task whose
+record has no TimeParagon metadata, but whose identity is in `task_aliases`,
+gets that task's ID and metadata: it was given its ID on this device, as when
+work on it starts, and the record has it only once Google does. Then it filters the
 requested dates exactly and sorts the result. Rows outside the range are not
 parsed. `repository::all_events` reads every row. `sleep_nights` owns sleep
 records; sleep copies in the Google feed are excluded from view assembly.

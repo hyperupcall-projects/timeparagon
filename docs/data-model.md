@@ -119,7 +119,7 @@ Many kinds of ID appear in the data. This table lists them all:
 | Sleep event ID | `51ee9` + `YYYYMMDD` (wake date) | `51ee920261110` | `calendar::sleep::event_id` |
 | **TimeParagon task ID** | integer ≥ 100, < 2⁶² | `2875093487120931` | `task_db::Database::import` |
 | Block key | `<calendar_id>/<event_id>` | `abc@group…/5ok3…` | `timeblocking::block_key` |
-| Task key | task ID, or `<task id>/<event id>` for an occurrence of a recurring dated task | `2875…` | `timeblocking::task_key` |
+| Task key | task ID, or `<task id>/<event id>` for an occurrence of a recurring dated task. A Google Task with no task ID yet has its block key instead, which changes when it moves, so work on it gives it a task ID first | `2875…` | `timeblocking::task_key` |
 | Habit ID | string | `h1`, random | `habits::Habit::id` |
 | Habit section ID | string | | `habits::Section::id` |
 | Alarm ID | random `u64` | | `alarms::new_id` |
@@ -811,6 +811,11 @@ shared core type `task_work::WorkLog` retains this in-memory shape:
 - `task_key` is `timeblocking::task_key`: the TimeParagon task ID, or
   `<id>/<event id>` for one occurrence of a recurring dated task. Using it
   means the work history survives the task moving between Tasks and Calendar.
+  A Google Task that has no task ID yet is given one before work on it starts
+  (`task_db::Database::import`), so a session is never keyed by the task's
+  Google identity. Sessions older builds keyed that way move to the task ID on
+  upgrade to schema 18, where the task's identity has an alias (see
+  [the schema](./database-schema.md#versioning)).
 - The active session is the most recent one with `stopped_at = null`.
 - Distractions are 1, 5, 10, 15 or 30 minutes long.
 - A distraction caused by a distraction habit is also logged on that habit, in

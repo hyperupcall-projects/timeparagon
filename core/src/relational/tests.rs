@@ -1028,3 +1028,127 @@ fn retiring_documents_with_old_triggers_does_not_journal_a_user_deletion() {
         assert_eq!(habits::store::Storage::load(Some(path)).unwrap().1,l);
     });
 }
+
+const TASK: &str = "2875093487120931";
+const GOOGLE: &str = "tasks:one/task:abc";
+/// Makes `GOOGLE` an alias of `TASK`, and the file schema 17 again.
+fn as_schema_17_knowing_the_task(path: &Path) {
+	db(path)
+		.execute_batch(&format!(
+			"INSERT INTO tasks VALUES({TASK},'{{}}');
+             INSERT INTO task_aliases VALUES('tasks:one','task:abc',{TASK});
+             PRAGMA user_version=17;"
+		))
+		.unwrap();
+}
+fn worked(key: &str, from: i64, to: i64) -> crate::task_work::Session {
+	let at = |minutes: i64| DateTime::from_timestamp(1_000_000 + minutes * 60, 0).unwrap();
+	crate::task_work::Session {
+		task_key: key.into(),
+		task_title: "Write report".into(),
+		block_key: Some("work/block".into()),
+		started_at: at(from),
+		stopped_at: Some(at(to)),
+	}
+}
+fn work_log(path: &Path) -> crate::task_work::WorkLog {
+	task_db::read_document(path, "shared.task_work")
+		.unwrap()
+		.unwrap()
+}
+#[test]
+fn schema_17_work_under_a_google_identity_moves_to_the_task_id() {
+	let (_dir, path) = database();
+	let mut log = crate::task_work::WorkLog::default();
+	log.sessions = vec![
+		worked(TASK, 0, 10),
+		// Before the task had its ID.
+		worked(GOOGLE, 20, 50),
+		// Moved by another device, which sent it here.
+		worked(GOOGLE, 60, 65),
+		worked(TASK, 60, 65),
+		// No task has this identity.
+		worked("tasks:one/task:other", 70, 80),
+	];
+	task_db::write_document(&path, "shared.task_work", &log).unwrap();
+	let raw = db(&path);
+	sync::acknowledge(&raw, &sync::pending(&raw).unwrap()).unwrap();
+	let tokens = |raw: &Connection| -> BTreeMap<String, (String, bool, bool)> {
+		raw.prepare("SELECT row_key,revision,deleted,dirty FROM timeparagon_relational_state WHERE table_name='task_work_sessions'")
+			.unwrap()
+			.query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?, r.get(3)?))))
+			.unwrap()
+			.collect::<rusqlite::Result<_>>()
+			.unwrap()
+	};
+	let row = |s: &crate::task_work::Session| {
+		json!([codec::session_id(&s.task_key, &json!(s.started_at), 0)]).to_string()
+	};
+	let synced = tokens(&raw);
+	assert_eq!(synced.len(), 5);
+	as_schema_17_knowing_the_task(&path);
+	task_db::Database::open(&path).unwrap();
+	let moved = work_log(&path);
+	let mut expected = log.clone();
+	expected.sessions.remove(2);
+	for session in &mut expected.sessions[..3] {
+		session.task_key = TASK.into();
+	}
+	assert_eq!(moved, expected);
+	assert_eq!(moved.seconds(TASK, chrono::Utc::now()), (10 + 30 + 5) * 60);
+	let migrated = tokens(&raw);
+	// Both copies under the Google identity are deleted, to be sent.
+	for old in [&log.sessions[1], &log.sessions[2]] {
+		assert!(matches!(migrated[&row(old)], (_, true, true)));
+	}
+	// The moved session keeps its token, to be sent with that deletion.
+	let (revision, ..) = &synced[&row(&log.sessions[1])];
+	assert_eq!(
+		migrated[&row(&expected.sessions[1])],
+		(revision.clone(), false, true)
+	);
+	for kept in [&log.sessions[0], &log.sessions[3], &log.sessions[4]] {
+		assert_eq!(migrated[&row(kept)], synced[&row(kept)]);
+	}
+	// The moved rows have the IDs that saving the work would give them.
+	let keys = |rows: Rows| rows.into_keys().collect::<Vec<_>>();
+	assert_eq!(
+		keys(all(&raw, Some("shared.task_work")).unwrap()),
+		keys(codec::encode("shared.task_work", &json!(moved)).unwrap())
+	);
+}
+#[test]
+fn devices_that_move_the_same_work_agree_and_others_receive_the_move() {
+	runtime().block_on(async {
+		let (dir, a) = database();
+		let (_b_dir, b) = database();
+		let (_c_dir, c) = database();
+		let (_server, conn) = server(&dir.path().join("remote.db")).await;
+		let mut log = crate::task_work::WorkLog::default();
+		log.sessions = vec![worked(GOOGLE, 0, 30)];
+		task_db::write_document(&a, "shared.task_work", &log).unwrap();
+		send(&conn, &a).await;
+		pull(&conn, &b).await;
+		pull(&conn, &c).await;
+		// `a` and `b` upgrade; `c` does not know the task and moves nothing.
+		for path in [&a, &b] {
+			as_schema_17_knowing_the_task(path);
+			task_db::Database::open(path).unwrap();
+		}
+		send(&conn, &a).await;
+		pull(&conn, &b).await;
+		send(&conn, &b).await;
+		for path in [&a, &b, &c] {
+			pull(&conn, path).await;
+		}
+		let mut expected = log.clone();
+		expected.sessions[0].task_key = TASK.into();
+		for path in [&a, &b, &c] {
+			assert_eq!(work_log(path), expected);
+			assert!(sync::pending(&db(path)).unwrap().is_empty());
+		}
+		let (_d_dir, d) = database();
+		pull(&conn, &d).await;
+		assert_eq!(work_log(&d), expected);
+	});
+}
