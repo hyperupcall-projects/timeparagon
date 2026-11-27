@@ -35,10 +35,10 @@ pub struct TaskData {
 /// The schema this build sets up, kept in SQLite's `user_version`.
 ///
 /// Schema changes are applied transactionally by [`Database::set_up`].
-pub const SCHEMA_VERSION: i64 = 14;
+pub const SCHEMA_VERSION: i64 = 15;
 
 /// Older schemas [`Database::set_up`] can bring up to date.
-const UPGRADABLE: std::ops::RangeInclusive<i64> = 2..=13;
+const UPGRADABLE: std::ops::RangeInclusive<i64> = 2..=14;
 
 fn schema_version(db: &Connection) -> Result<i64, String> {
 	db.query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -86,6 +86,15 @@ impl Database {
         }
 		if version == 2 {
 			Self::drop_legacy_key(&db).map_err(|e| e.to_string())?;
+		}
+		// Schema 15, before the setup transaction for the same reason. A value
+		// that does not fit leaves the tables as they were: the data still
+		// opens, without the new checks.
+		if version != 0
+			&& version != SCHEMA_VERSION
+			&& let Err(error) = crate::relational::make_strict(&db)
+		{
+			log::warn!("could not make the habit and work tables strict: {error}");
 		}
 		if memory || version != SCHEMA_VERSION {
 			Self::set_up(&db, path, memory)?;

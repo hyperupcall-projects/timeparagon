@@ -624,6 +624,163 @@ fn a_new_server_is_seeded_with_previously_acknowledged_rows() {
 	});
 }
 
+fn strict(raw: &Connection, table: &str) -> bool {
+	raw.query_row(
+		"SELECT strict FROM pragma_table_list WHERE schema='main' AND name=?1",
+		[table],
+		|r| r.get(0),
+	)
+	.unwrap()
+}
+/// Rebuilds every relational table as schema 14 made it: not `STRICT`, with
+/// `BOOLEAN` columns and without the newer `CHECK`s.
+fn loosen(raw: &Connection) {
+	raw.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+	for table in TABLES {
+		let columns = table
+			.columns
+			.iter()
+			.enumerate()
+			.map(|(i, (name, ty))| {
+				let ty = ty.split(" CHECK").next().unwrap();
+				format!(
+					"{name} {ty}{}",
+					if i < table.keys { " NOT NULL" } else { "" }
+				)
+			})
+			.collect::<Vec<_>>()
+			.join(",");
+		let keys = table.columns[..table.keys]
+			.iter()
+			.map(|c| c.0)
+			.collect::<Vec<_>>()
+			.join(",");
+		let names = table.names();
+		raw.execute_batch(&format!(
+			"CREATE TABLE loose({columns},PRIMARY KEY({keys}));
+			 INSERT INTO loose SELECT {names} FROM {name}; DROP TABLE {name};
+			 ALTER TABLE loose RENAME TO {name};",
+			name = table.name
+		))
+		.unwrap();
+		assert!(!strict(raw, table.name));
+	}
+	raw.execute_batch("PRAGMA foreign_keys=ON; PRAGMA user_version=14;")
+		.unwrap();
+}
+#[test]
+fn the_tables_refuse_values_of_the_wrong_type_or_shape() {
+	let (_dir, path) = database();
+	task_db::write_document(&path, "habits", &library()).unwrap();
+	let raw = db(&path);
+	for table in TABLES {
+		assert!(strict(&raw, table.name), "{}", table.name);
+	}
+	for (statement, why) in [
+		("UPDATE habits SET color='red'", "a color is a number"),
+		("UPDATE habits SET archived=2", "a boolean is 0 or 1"),
+		(
+			"UPDATE habits SET measure_unit=NULL WHERE measure_present",
+			"a measure has a unit",
+		),
+		(
+			"UPDATE habits SET measure_days=7 WHERE NOT measure_present",
+			"no measure, no days",
+		),
+		(
+			"UPDATE habits SET frequency_days=2 WHERE frequency_kind='times_per_day'",
+			"times a day has no days",
+		),
+		(
+			"UPDATE habits SET frequency_kind='interval' WHERE frequency_kind='times_per_day'",
+			"an interval has its days",
+		),
+		(
+			"UPDATE habit_days SET repetitions=NULL WHERE mark='reps'",
+			"reps have a count",
+		),
+		(
+			"UPDATE habit_days SET repetitions=2 WHERE mark='yes'",
+			"only reps have a count",
+		),
+	] {
+		assert!(raw.execute(statement, []).is_err(), "{why}");
+	}
+	assert_eq!(
+		task_db::read_document::<Library>(&path, "habits")
+			.unwrap()
+			.unwrap(),
+		library()
+	);
+}
+#[test]
+fn schema_14_tables_are_rebuilt_strict_with_their_rows_triggers_and_outbox() {
+	let (_dir, path) = database();
+	task_db::write_document(&path, "habits", &library()).unwrap();
+	task_db::write_document(&path, "shared.task_work", &work()).unwrap();
+	let raw = db(&path);
+	let outbox = |raw: &Connection| -> Vec<(String, String, String)> {
+		raw.prepare(
+			"SELECT table_name,row_key,revision FROM timeparagon_relational_state ORDER BY 1,2",
+		)
+		.unwrap()
+		.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+		.unwrap()
+		.collect::<rusqlite::Result<_>>()
+		.unwrap()
+	};
+	let objects = |raw: &Connection| -> i64 {
+		raw.query_row(
+			"SELECT count(*) FROM sqlite_master WHERE type IN ('trigger','index') AND sql IS NOT NULL",
+			[],
+			|r| r.get(0),
+		)
+		.unwrap()
+	};
+	let (rows, pending, triggers) = (all(&raw, None).unwrap(), outbox(&raw), objects(&raw));
+	loosen(&raw);
+	assert!(objects(&raw) < triggers);
+	drop(raw);
+	task_db::Database::open(&path).unwrap();
+	let raw = db(&path);
+	for table in TABLES {
+		assert!(strict(&raw, table.name), "{}", table.name);
+	}
+	assert_eq!(all(&raw, None).unwrap(), rows);
+	assert_eq!(outbox(&raw), pending);
+	assert_eq!(objects(&raw), triggers);
+	assert!(
+		raw.query_row("PRAGMA foreign_key_check", [], |_| Ok(()))
+			.optional()
+			.unwrap()
+			.is_none()
+	);
+	// The triggers are back: a change is recorded for sync.
+	sync::acknowledge(&raw, &sync::pending(&raw).unwrap()).unwrap();
+	raw.execute("UPDATE habits SET name='renamed' WHERE id='b'", [])
+		.unwrap();
+	assert_eq!(sync::pending(&raw).unwrap().len(), 1);
+}
+#[test]
+fn a_value_that_does_not_fit_leaves_the_tables_loose_and_the_file_opening() {
+	let (_dir, path) = database();
+	task_db::write_document(&path, "habits", &library()).unwrap();
+	let raw = db(&path);
+	loosen(&raw);
+	raw.execute("UPDATE habits SET archived=7 WHERE id='b'", [])
+		.unwrap();
+	drop(raw);
+	task_db::Database::open(&path).unwrap();
+	let raw = db(&path);
+	for table in TABLES {
+		assert!(!strict(&raw, table.name), "{}", table.name);
+	}
+	assert_eq!(
+		raw.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+			.unwrap(),
+		task_db::SCHEMA_VERSION
+	);
+}
 /// A day with one logged entry, as each device saves it.
 fn logged(path: &Path, at: (u32, u32), note: &str) {
 	let (storage, mut library) = habits::store::Storage::load(Some(path.to_owned())).unwrap();

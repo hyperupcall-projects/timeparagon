@@ -2138,7 +2138,7 @@ mod tests {
 		initial.save();
 		rusqlite::Connection::open(&path)
 			.unwrap()
-			.execute("UPDATE habits SET color='not a number'", [])
+			.execute("UPDATE habits SET created='not a date'", [])
 			.unwrap();
 		let mut saved = read(Some(path.clone()));
 		assert!(saved.error.is_some());

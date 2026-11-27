@@ -36,13 +36,22 @@ macro_rules! table {
 // Parents precede children. Deletions run in reverse order.
 pub(crate) const TABLES: &[Table] = &[
 	table!("habit_sections", "habits", 1, "", "id"=>"TEXT", "name"=>"TEXT NOT NULL", "collapsed"=>"BOOLEAN NOT NULL", "position"=>"INTEGER NOT NULL"),
-	table!("habits", "habits", 1, ", FOREIGN KEY(section_id) REFERENCES habit_sections(id) ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED",
+	// Each frequency kind has exactly its own numbers, and a habit has all of a
+	// measure's fields or none.
+	table!("habits", "habits", 1, ", FOREIGN KEY(section_id) REFERENCES habit_sections(id) ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED,
+        CHECK(CASE frequency_kind WHEN 'interval' THEN frequency_times IS NOT NULL AND frequency_days IS NOT NULL
+            WHEN 'times_per_day' THEN frequency_times IS NOT NULL AND frequency_days IS NULL
+            ELSE frequency_times IS NULL AND frequency_days IS NULL END),
+        CHECK(CASE WHEN measure_present THEN measure_unit IS NOT NULL AND measure_days IS NOT NULL
+            ELSE measure_unit IS NULL AND measure_target IS NULL AND measure_days IS NULL END)",
         "id"=>"TEXT", "name"=>"TEXT NOT NULL", "kind"=>"TEXT NOT NULL CHECK(kind IN ('yes','no'))", "created"=>"TEXT", "question"=>"TEXT NOT NULL", "notes"=>"TEXT NOT NULL", "color"=>"INTEGER NOT NULL",
         "frequency_kind"=>"TEXT NOT NULL CHECK(frequency_kind IN ('interval','times_per_day','weekdays'))", "frequency_times"=>"INTEGER", "frequency_days"=>"INTEGER",
         "archived"=>"BOOLEAN NOT NULL", "skip_days"=>"BOOLEAN NOT NULL", "question_marks"=>"BOOLEAN NOT NULL", "icons"=>"TEXT NOT NULL", "section_id"=>"TEXT",
         "measure_present"=>"BOOLEAN NOT NULL", "measure_unit"=>"TEXT", "measure_target"=>"REAL", "measure_days"=>"INTEGER", "area_id"=>"TEXT", "distraction"=>"BOOLEAN NOT NULL", "position"=>"INTEGER NOT NULL"),
 	table!("habit_weekdays", "habits", 2, ", FOREIGN KEY(habit_id) REFERENCES habits(id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED", "habit_id"=>"TEXT", "weekday"=>"INTEGER CHECK(weekday BETWEEN 0 AND 6)"),
-	table!("habit_days", "habits", 2, ", FOREIGN KEY(habit_id) REFERENCES habits(id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED",
+	// A count of repetitions belongs to a `reps` mark, and only to one.
+	table!("habit_days", "habits", 2, ", FOREIGN KEY(habit_id) REFERENCES habits(id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,
+        CHECK((mark IS 'reps') = (repetitions IS NOT NULL))",
         "habit_id"=>"TEXT", "date"=>"TEXT", "mark"=>"TEXT CHECK(mark IN ('yes','no','skip','reps'))", "repetitions"=>"INTEGER", "resisted"=>"INTEGER", "value"=>"INTEGER", "has_log"=>"BOOLEAN NOT NULL"),
 	// Keyed by a content-derived ID (see `codec::log_entry_id`), not by position,
 	// so entries logged on two devices at once are both kept.
@@ -73,22 +82,26 @@ impl Table {
 		)
 	}
 	pub fn create(&self, remote: bool) -> String {
+		self.create_as(self.name, remote)
+	}
+	/// The local table is `STRICT`, so a value of the wrong type is refused
+	/// rather than stored. `STRICT` has no `BOOLEAN`: such a column is an
+	/// `INTEGER` holding 0 or 1, and decodes as a boolean by its listed type.
+	/// The server's copy keeps only each column's type, since its tombstones
+	/// leave the other columns empty.
+	fn create_as(&self, name: &str, remote: bool) -> String {
 		let columns = self
 			.columns
 			.iter()
 			.enumerate()
-			.map(|(i, (name, ty))| {
+			.map(|(i, (column, ty))| {
+				let key = if i < self.keys { " NOT NULL" } else { "" };
 				if remote {
-					format!(
-						"{name} {}{}",
-						ty.split_whitespace().next().unwrap(),
-						if i < self.keys { " NOT NULL" } else { "" }
-					)
+					format!("{column} {}{key}", ty.split_whitespace().next().unwrap())
+				} else if let Some(rest) = ty.strip_prefix("BOOLEAN") {
+					format!("{column} INTEGER{rest}{key} CHECK({column} IN (0,1))")
 				} else {
-					format!(
-						"{name} {ty}{}",
-						if i < self.keys { " NOT NULL" } else { "" }
-					)
+					format!("{column} {ty}{key}")
 				}
 			})
 			.collect::<Vec<_>>()
@@ -99,14 +112,14 @@ impl Table {
 			.collect::<Vec<_>>()
 			.join(",");
 		format!(
-			"CREATE TABLE IF NOT EXISTS {}({columns}{},PRIMARY KEY({keys}){})",
-			self.name,
+			"CREATE TABLE IF NOT EXISTS {name}({columns}{},PRIMARY KEY({keys}){}){}",
 			if remote {
 				",sync_revision TEXT NOT NULL,sync_deleted INTEGER NOT NULL DEFAULT 0"
 			} else {
 				""
 			},
-			if remote { "" } else { self.constraints }
+			if remote { "" } else { self.constraints },
+			if remote { "" } else { " STRICT" }
 		)
 	}
 	pub fn upsert_sql(&self) -> String {
@@ -451,6 +464,65 @@ fn migrate_log_entries(db: &Connection) -> io::Result<()> {
 	)
 	.map_err(error)?;
 	Ok(())
+}
+
+/// Schema 15: rebuilds each table of [`TABLES`] made before it was `STRICT` and
+/// had its `CHECK`s, the way SQLite documents changing a table's definition:
+/// with foreign keys off, so rebuilding a parent leaves its children alone, and
+/// checked before committing. Triggers and indexes go with the old tables;
+/// [`install`] puts them back in the same transaction, so no write goes
+/// unrecorded in between. Must run outside a transaction, since the foreign key
+/// pragma cannot change inside one. A row that does not fit fails the whole
+/// rebuild, leaving every table as it was, and the error is returned.
+pub(crate) fn make_strict(db: &Connection) -> io::Result<()> {
+	let loose = |db: &Connection| -> io::Result<Vec<&'static Table>> {
+		let mut loose = Vec::new();
+		for table in TABLES {
+			let strict: Option<bool> = db
+				.query_row(
+					"SELECT strict FROM pragma_table_list WHERE schema='main' AND name=?1",
+					[table.name],
+					|r| r.get(0),
+				)
+				.optional()
+				.map_err(error)?;
+			if strict == Some(false) {
+				loose.push(table);
+			}
+		}
+		Ok(loose)
+	};
+	if loose(db)?.is_empty() {
+		return Ok(());
+	}
+	db.execute_batch("PRAGMA foreign_keys=OFF").map_err(error)?;
+	let result = (|| {
+		let tx = rusqlite::Transaction::new_unchecked(db, rusqlite::TransactionBehavior::Immediate)
+			.map_err(error)?;
+		// Another process may have done it while this one waited.
+		for table in loose(&tx)? {
+			let names = table.names();
+			tx.execute_batch(&format!(
+				"{}; INSERT INTO timeparagon_strict_new({names}) SELECT {names} FROM {table};
+                 DROP TABLE {table}; ALTER TABLE timeparagon_strict_new RENAME TO {table};",
+				table.create_as("timeparagon_strict_new", false),
+				table = table.name,
+			))
+			.map_err(error)?;
+		}
+		let broken = tx
+			.query_row("PRAGMA foreign_key_check", [], |_| Ok(()))
+			.optional()
+			.map_err(error)?
+			.is_some();
+		if broken {
+			return Err(invalid("a relational row refers to a missing parent"));
+		}
+		install(&tx)?;
+		tx.commit().map_err(error)
+	})();
+	db.execute_batch("PRAGMA foreign_keys=ON").map_err(error)?;
+	result
 }
 
 pub(crate) fn initialized(db: &Connection, key: &str) -> io::Result<bool> {

@@ -3115,9 +3115,11 @@ mod tests {
 		reopened.keep_in(Some(path.clone()));
 		assert_eq!(reopened.library.habits[0].name, "Stretch");
 
+		// The table refuses a value of the wrong type, so the damage is one it
+		// stores but the app cannot read.
 		rusqlite::Connection::open(&path)
 			.unwrap()
-			.execute("UPDATE habits SET color='not a number'", [])
+			.execute("UPDATE habits SET created='not a date'", [])
 			.unwrap();
 		let mut broken = crate::habits::Store::default();
 		broken.keep_in(Some(path.clone()));

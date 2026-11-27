@@ -38,7 +38,7 @@ The schema version is stored in `PRAGMA user_version`.
 | `user_version` | Meaning |
 | --- | --- |
 | `0` | New file. `Database::open` creates the schema. |
-| `2` through `13` | Upgraded to 14 on open: see below. |
+| `2` through `14` | Upgraded to 15 on open: see below. |
 | `6` | Like 5, with the app's tables, indexes and triggers prefixed `timeparagon_` instead of `timeslay_`, and the built-in calendar sources' IDs prefixed `timeparagon:` instead of `timeslay:`. |
 | `7` | Adds the synced `notes` metadata table. |
 | `8` | Creates the incremental Google sync cache during upgrade and reinstalls synced data tables and triggers. |
@@ -47,8 +47,9 @@ The schema version is stored in `PRAGMA user_version`.
 | `11` | Normalizes habits, brain dumps and task work; replicates those as native Turso rows. |
 | `12` | Habit log entries are keyed by an ID instead of their position (`habit_log_entries` becomes `habit_entries`). |
 | `13` | `google_sync_events` gains the generated `task` column and two indexes, so a view reads only its own dates' rows. |
-| `14` | Current (`task_db::SCHEMA_VERSION`). `task_aliases` and `google_entities` are keyed by `(calendar_id, event_id)` instead of one string joining them. |
-| anything else | Refused: `Unsupported database schema N; expected 14`. |
+| `14` | `task_aliases` and `google_entities` are keyed by `(calendar_id, event_id)` instead of one string joining them. |
+| `15` | Current (`task_db::SCHEMA_VERSION`). The habit, brain dump and task work tables are `STRICT` and check that related columns agree. |
+| anything else | Refused: `Unsupported database schema N; expected 15`. |
 
 Builds from before version 5 refuse a version 5 file, so every TimeParagon
 process on a device (panel, dock, shortcut daemon, browser host) has to be
@@ -60,6 +61,14 @@ Every statement in setup is idempotent (`CREATE … IF NOT EXISTS`,
 processes setting up at once, or a crash halfway through, cause no harm. Once a
 file is stamped with the current version, setup is skipped, because the apps
 open the database many times a minute.
+
+**14 → 15** (`relational::make_strict`, before the setup transaction, since
+it turns foreign keys off) rebuilds each table of
+[Normalized habits](#normalized-habits-brain-dumps-and-task-work) as `STRICT`
+with its new `CHECK`s, copying its rows, then reinstalls its triggers and
+indexes in the same transaction and checks foreign keys before committing. If
+any row does not fit, nothing changes and a warning is logged: the file still
+opens and is stamped 15, with the tables as they were.
 
 **13 → 14** (`Database::split_item_keys`) rebuilds `task_aliases` and
 `google_entities`, whose keys were one string (`calendar/event` and
@@ -323,6 +332,16 @@ log an entry while offline add two rows, where keying by position made both
 write position 0 and kept only one. Changing an entry replaces its row. A day's
 entries are read in order of time; `position` orders only entries logged at
 the same time, so removing one entry rewrites no others.
+
+The local tables are `STRICT`, so a value of the wrong type is refused rather
+than stored. `STRICT` has no `BOOLEAN`: those columns are `INTEGER` with
+`CHECK(column IN (0,1))`. Rows also have to agree with themselves: a habit's
+`frequency_times` and `frequency_days` are set exactly as its `frequency_kind`
+needs (both for `interval`, times only for `times_per_day`, neither for
+`weekdays`); `measure_unit` and `measure_days` are set exactly when
+`measure_present` is, and `measure_target` only then; and a habit day has
+`repetitions` exactly when its `mark` is `reps`. The server's tables keep only
+each column's type, since their tombstones leave the other columns empty.
 
 Habit children have foreign keys with cascading deletion. Deleting a section
 sets its habits' section to NULL. Dates and timestamps use the typed models'
