@@ -2332,6 +2332,39 @@ fn the_zoom_keys_step_in_and_out_and_reset() {
 }
 
 #[test]
+fn the_hour_grid_tells_the_dock_which_hours_it_shows() {
+	use crate::dock::model::DayWindow;
+
+	let mut state = State::blank();
+	state.screen = Screen::Calendar;
+	let per_minute = state.calendar.hour_height / 60.0;
+	let shown = |state: &State| *state.panel_day_window.lock().unwrap();
+	let scrolled = |top_min: f32, length_min: f32| {
+		Message::Calendar(CalendarMessage::CalendarGridScrolled(
+			top_min * per_minute,
+			length_min * per_minute,
+		))
+	};
+	assert_eq!(shown(&state), None);
+
+	// Scrolled to 02:00 with ten hours in view.
+	let _ = update(&mut state, scrolled(120.0, 600.0));
+	let window = shown(&state).unwrap();
+	assert!((window.start_min - 120.0).abs() < 0.01);
+	assert!((window.end_min - 720.0).abs() < 0.01);
+
+	// The month grid is not laid out by the hour, so it changes nothing.
+	state.view = CalendarView::Month;
+	let _ = update(&mut state, scrolled(0.0, 1440.0));
+	assert_eq!(shown(&state), Some(window));
+
+	// The week's hour grid counts like the day's.
+	state.view = CalendarView::Week;
+	let _ = update(&mut state, scrolled(0.0, 1440.0));
+	assert_eq!(shown(&state), Some(DayWindow::WHOLE_DAY));
+}
+
+#[test]
 fn the_zoom_keys_work_on_every_calendar_view() {
 	for view in [
 		CalendarView::Day,

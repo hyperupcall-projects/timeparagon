@@ -424,6 +424,7 @@ pub(super) fn update(state: &mut State, message: CalendarMessage) -> Task<Messag
 		}
 		CalendarMessage::CalendarGridScrolled(top, height) => {
 			state.grid_scroll = (top, height);
+			publish_day_window(state);
 			Task::none()
 		}
 		CalendarMessage::CalendarDayShift(days) => {
@@ -570,6 +571,25 @@ fn planning_sidebar(state: &mut State) -> Task<Message> {
 		Task::none()
 	} else {
 		super::on_navigation::select_screen(state, Screen::Calendar)
+	}
+}
+
+/// Records which minutes of the day the hour grid shows, for a dock set to
+/// match the panel. A zoom changes the grid's height, so it is reported here
+/// as a scroll too. The month and two-week grids are not laid out by the
+/// hour, so they leave the last hour grid's window in place.
+fn publish_day_window(state: &State) {
+	if !matches!(state.view, CalendarView::Day | CalendarView::Week) {
+		return;
+	}
+	let (top, height) = state.grid_scroll;
+	let Some(window) =
+		crate::dock::model::DayWindow::from_grid(top, height, state.calendar.hour_height)
+	else {
+		return;
+	};
+	if let Ok(mut shown) = state.panel_day_window.lock() {
+		*shown = Some(window);
 	}
 }
 

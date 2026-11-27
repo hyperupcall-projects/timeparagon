@@ -20,6 +20,77 @@ pub const DAY_MINUTES: i32 = 24 * 60;
 /// How many characters of a description the hover card keeps.
 const DESCRIPTION_CHARS: usize = 360;
 
+/// The shortest stretch of the day the strip will narrow to. Anything less
+/// is a grid that has not been laid out yet, not a view worth copying.
+const MIN_WINDOW_MINUTES: f32 = 15.0;
+
+/// The stretch of the day the strip lays out along its length, in minutes
+/// into the day. Normally the whole day; with "Match the side panel's hours"
+/// it is whatever the panel's grid was showing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DayWindow {
+	pub start_min: f32,
+	pub end_min: f32,
+}
+
+impl DayWindow {
+	pub const WHOLE_DAY: Self = Self {
+		start_min: 0.0,
+		end_min: DAY_MINUTES as f32,
+	};
+
+	/// The part of the day a scrolled hour grid shows: `top` and `height` are
+	/// its viewport in pixels and `hour_height` how tall an hour is drawn.
+	pub fn from_grid(top: f32, height: f32, hour_height: f32) -> Option<Self> {
+		if hour_height.is_nan() || hour_height <= 0.0 {
+			return None;
+		}
+		let per_minute = hour_height / 60.0;
+		Self::new(top / per_minute, (top + height) / per_minute)
+	}
+
+	/// A window clamped to the day, or `None` when too little of it is left.
+	pub fn new(start_min: f32, end_min: f32) -> Option<Self> {
+		if !start_min.is_finite() || !end_min.is_finite() {
+			return None;
+		}
+		let day = DAY_MINUTES as f32;
+		let start_min = start_min.clamp(0.0, day);
+		let end_min = end_min.clamp(0.0, day);
+		(end_min - start_min >= MIN_WINDOW_MINUTES).then_some(Self { start_min, end_min })
+	}
+
+	pub fn length(&self) -> f32 {
+		self.end_min - self.start_min
+	}
+
+	pub fn contains(&self, minute: f32) -> bool {
+		(self.start_min..=self.end_min).contains(&minute)
+	}
+
+	/// Whether any of the span from `start_min` to `end_min` falls inside.
+	pub fn overlaps(&self, start_min: f32, end_min: f32) -> bool {
+		start_min < self.end_min && end_min > self.start_min
+	}
+
+	/// How the window travels over IPC: two numbers of minutes.
+	pub fn to_reply(self) -> String {
+		format!("{} {}", self.start_min, self.end_min)
+	}
+
+	/// Reads [`Self::to_reply`] back. Anything else, including the empty
+	/// reply of a panel that has not laid out its grid, is `None`.
+	pub fn parse(reply: &str) -> Option<Self> {
+		let mut numbers = reply.split_whitespace().map(str::parse::<f32>);
+		let (Some(Ok(start)), Some(Ok(end)), None) =
+			(numbers.next(), numbers.next(), numbers.next())
+		else {
+			return None;
+		};
+		Self::new(start, end)
+	}
+}
+
 /// One coloured stretch of the strip.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Segment {
@@ -352,6 +423,30 @@ mod tests {
 			now_minute(at(day, 10, 0), day.succ_opt().unwrap(), &settings),
 			None
 		);
+	}
+
+	#[test]
+	fn a_scrolled_grid_gives_the_minutes_it_shows() {
+		// 60px an hour, scrolled two hours down, ten hours tall.
+		let window = DayWindow::from_grid(120.0, 600.0, 60.0).unwrap();
+
+		assert_eq!((window.start_min, window.end_min), (120.0, 720.0));
+		assert_eq!(DayWindow::parse(&window.to_reply()), Some(window));
+	}
+
+	#[test]
+	fn a_window_stays_inside_the_day_and_refuses_nonsense() {
+		let window = DayWindow::from_grid(-50.0, 100_000.0, 60.0).unwrap();
+		assert_eq!(window, DayWindow::WHOLE_DAY);
+
+		// A grid that has not been laid out yet has no height.
+		assert_eq!(DayWindow::from_grid(0.0, 0.0, 60.0), None);
+		assert_eq!(DayWindow::from_grid(0.0, 600.0, 0.0), None);
+		assert_eq!(DayWindow::new(f32::NAN, 600.0), None);
+
+		for reply in ["", "120", "120 720 9", "a b", "720 120"] {
+			assert_eq!(DayWindow::parse(reply), None, "{reply:?}");
+		}
 	}
 
 	#[test]

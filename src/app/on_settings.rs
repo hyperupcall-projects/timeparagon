@@ -351,6 +351,10 @@ pub(super) fn update(state: &mut State, message: SettingsMessage) -> Task<Messag
 			state.config.views.dock_hour_lines = on;
 			queue_save(state)
 		}
+		SettingsMessage::DockFollowsPanelToggled(on) => {
+			state.config.views.dock_follows_panel = on;
+			queue_save(state)
+		}
 		SettingsMessage::BorderRadiusChanged(radius) => {
 			state.view_layout_input = None;
 			if !radius.is_finite() {

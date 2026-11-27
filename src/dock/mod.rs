@@ -11,6 +11,10 @@
 //! replaced (see [`launch`]). The plus at the opposite end opens the shared
 //! task editor beside the strip, saving to Inbox.
 //!
+//! Between the two buttons the strip shows the whole day, or, with "Match the
+//! side panel's hours" on, only the hours the side panel's grid was showing at
+//! its zoom and scroll (see [`model::DayWindow`]).
+//!
 //! The surface is wider than the strip, to leave room for that card. Only the
 //! strip accepts input; hover cards leave the rest of the surface click-through.
 //!
@@ -141,9 +145,14 @@ pub fn run() -> Result<()> {
 			if let channel::Event::Msg(config) = event {
 				let updated = dock.config.clone().with_views(&config.views);
 				if updated != dock.config {
+					let follow_changed = updated.follows_panel != dock.config.follows_panel;
 					dock.config = updated;
 					configure_layer(&dock.layer, &dock.config);
 					dock.regions_for = None;
+					if follow_changed {
+						dock.window = day_window(&dock.config);
+						dock.refresh_segments();
+					}
 					dock.draw();
 				}
 				dock.app_config.views = config.views;
@@ -208,6 +217,7 @@ pub fn run() -> Result<()> {
 		keyboard: None,
 		add_hovered: false,
 		task_editor: crate::panel::layer::spawn_task_popover(created_tx.clone())?,
+		window: day_window(&dock_config),
 		config: dock_config,
 		app_config,
 		palette: Palette::from_theme(&theme),
@@ -308,6 +318,27 @@ fn configure_layer(layer: &LayerSurface, config: &config::DockConfig) {
 		layer.set_size(0, config.surface_height());
 	}
 	layer.commit();
+}
+
+/// The stretch of the day the strip shows: the hours the side panel's grid
+/// shows when the dock is set to match it, and otherwise the whole day.
+///
+/// A panel that is hidden keeps running, so it can still be asked. With no
+/// panel to ask, or none that has laid out its grid, the whole day shows.
+fn day_window(config: &config::DockConfig) -> model::DayWindow {
+	if !config.follows_panel {
+		return model::DayWindow::WHOLE_DAY;
+	}
+	match ipc::request(ipc::SIDEBAR, ipc::DAY_WINDOW) {
+		Ok(reply) => model::DayWindow::parse(&reply).unwrap_or_else(|| {
+			log::info!("the side panel has no hours to match yet; showing the whole day");
+			model::DayWindow::WHOLE_DAY
+		}),
+		Err(error) => {
+			log::info!("no side panel to match ({error:#}); showing the whole day");
+			model::DayWindow::WHOLE_DAY
+		}
+	}
 }
 
 /// Answers the shortcut daemon (`status`, `hide`) and the browser extension or
@@ -431,6 +462,8 @@ struct Dock {
 	store: Store,
 	segments: Vec<model::Segment>,
 	day: NaiveDate,
+	/// The stretch of the day laid out along the strip.
+	window: model::DayWindow,
 
 	hovered: Option<usize>,
 	/// The segment whose full card a click left open.
@@ -462,7 +495,7 @@ struct Dock {
 impl Dock {
 	fn layout(&self) -> Option<Layout> {
 		let (width, height) = self.size?;
-		Some(Layout::new(&self.config, width, height, self.scale as u32))
+		Some(Layout::new(&self.config, width, height, self.scale as u32).with_window(self.window))
 	}
 
 	fn refresh_segments(&mut self) {

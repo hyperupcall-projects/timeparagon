@@ -12,8 +12,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
-/// The side panel's socket: `show`, `hide`, `status` and JSON inbox requests.
+/// The side panel's socket: `show`, `hide`, `status`, [`DAY_WINDOW`] and JSON
+/// inbox requests.
 pub const SIDEBAR: &str = "timeparagon-sidebar.sock";
+/// Asks the side panel which minutes of the day its grid shows. The reply is
+/// two numbers of minutes into the day, or empty before the grid is laid out.
+pub const DAY_WINDOW: &str = "day-window";
 /// The dock's socket: `hide`, `status` and JSON inbox requests.
 pub const DOCK: &str = "timeparagon-dock.sock";
 

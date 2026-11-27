@@ -59,6 +59,10 @@ pub struct DockConfig {
 	/// Whether to draw hour lines, from the app's settings.
 	#[serde(skip)]
 	pub hour_lines: bool,
+	/// Whether the strip shows only the hours the side panel shows, from the
+	/// app's settings.
+	#[serde(skip)]
+	pub follows_panel: bool,
 	/// Width of the hover card, in logical pixels.
 	pub popup_width: u32,
 	/// Space between the strip and the hover card, in logical pixels.
@@ -82,6 +86,7 @@ impl Default for DockConfig {
 			animation: WindowAnimation::DesktopDefault,
 			fade_duration_ms: 150,
 			hour_lines: true,
+			follows_panel: false,
 			popup_width: 300,
 			popup_gap: 6,
 		}
@@ -112,6 +117,7 @@ impl DockConfig {
 		config.animation = views.window_animation;
 		config.fade_duration_ms = views.fade_duration_ms();
 		config.hour_lines = views.dock_hour_lines;
+		config.follows_panel = views.dock_follows_panel;
 		self.sanitized()
 	}
 
@@ -279,6 +285,7 @@ mod tests {
 			window_animation: WindowAnimation::FadeIn,
 			fade_duration_ms: 400,
 			dock_hour_lines: false,
+			dock_follows_panel: true,
 			..ViewSettings::default()
 		};
 		let config = DockConfig::load(&views);
@@ -286,6 +293,7 @@ mod tests {
 		assert_eq!(config.animation, WindowAnimation::FadeIn);
 		assert_eq!(config.fade_duration_ms, 400);
 		assert!(!config.hour_lines);
+		assert!(config.follows_panel);
 	}
 
 	#[test]

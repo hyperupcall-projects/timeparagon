@@ -27,6 +27,7 @@ const DOCK_RESERVATION_INFO: &str =
 	"Enabling prevents maximized windows from overlapping the dock.";
 const PANEL_RESERVATION_INFO: &str =
 	"Enabling prevents maximized windows from overlapping the panel.";
+const DOCK_FOLLOWS_PANEL_INFO: &str = "Instead of the whole day, the dock shows only the hours the side panel's calendar showed, at its zoom and scroll position.";
 const TRANSITION_INFO: &str = "Customize the app's transition effects for KDE.";
 const CALENDAR_ORDER_INFO: &str =
 	"Top to bottom sets left to right when events overlap. App-managed task lists are omitted.";
@@ -576,6 +577,18 @@ fn dock<'a>(state: &'a State, metrics: &Metrics) -> Element<'a, Message> {
 			LayoutField::DockRightMargin,
 			state,
 			metrics,
+		),
+		with_info(
+			container(switch(
+				"Match the side panel's hours",
+				state.config.views.dock_follows_panel,
+				|v0| Message::Settings(SettingsMessage::DockFollowsPanelToggled(v0)),
+				metrics,
+			))
+			.id("dock-follows-panel")
+			.width(Fill),
+			DOCK_FOLLOWS_PANEL_INFO,
+			metrics.label(),
 		),
 	]
 	.spacing(metrics.spacing)
@@ -1616,6 +1629,25 @@ mod tests {
 			desktop_appearance(&state, &metrics),
 		);
 		assert!(ui.find(iced::widget::Id::from("dock-hour-lines")).is_err());
+	}
+
+	#[test]
+	fn matching_the_side_panel_is_a_dock_setting() {
+		use crate::app;
+		use iced_test::{Simulator, core::Settings};
+
+		let mut state = State::blank();
+		let size = iced::Size::new(420.0, 800.0);
+		let metrics = Metrics::of(size);
+		assert!(!state.config.views.dock_follows_panel);
+
+		let mut ui = Simulator::with_size(Settings::default(), size, dock(&state, &metrics));
+		ui.click(iced::widget::Id::from("dock-follows-panel"))
+			.unwrap();
+		for message in ui.into_messages() {
+			let _ = app::update(&mut state, message);
+		}
+		assert!(state.config.views.dock_follows_panel);
 	}
 
 	#[test]

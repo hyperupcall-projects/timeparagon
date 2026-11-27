@@ -443,6 +443,9 @@ pub struct State {
 	/// Whether the panel window is on screen, as the shortcut daemon sees it
 	/// when it asks. Only meaningful when this process is the side panel.
 	pub panel_visible: Arc<AtomicBool>,
+	/// The minutes of the day the hour grid showed when it last scrolled or
+	/// zoomed, for a dock set to match the panel. Read by the IPC thread.
+	pub panel_day_window: Arc<std::sync::Mutex<Option<crate::dock::model::DayWindow>>>,
 	/// Keep empty or incomplete numbers editable until they are submitted.
 	pub view_layout_input: Option<(LayoutField, String)>,
 	/// The panel border colour box being typed into, and the text as it
@@ -603,6 +606,7 @@ pub enum SettingsMessage {
 	FadeDurationChanged(f32),
 	WindowAnimationSelected(config::WindowAnimation),
 	DockHourLinesToggled(bool),
+	DockFollowsPanelToggled(bool),
 	/// Quit and start again from the binary on disk.
 	RestartRequested,
 	/// Forget what incremental sync has stored and fetch everything again.
@@ -995,6 +999,7 @@ impl State {
 			audio_error: None,
 			shortcut_editors: Default::default(),
 			panel_visible: Arc::new(AtomicBool::new(true)),
+			panel_day_window: Arc::default(),
 			view_layout_input: None,
 			panel_border_input: None,
 			details_pane_open: false,
@@ -1343,10 +1348,13 @@ pub fn boot_sidebar() -> (State, Task<Message>) {
 	match crate::ipc::bind(crate::ipc::SIDEBAR) {
 		Ok(listener) => {
 			let visible = Arc::clone(&state.panel_visible);
+			let day_window = Arc::clone(&state.panel_day_window);
 			std::thread::Builder::new()
 				.name("panel-ipc".into())
 				.spawn(move || {
-					if let Err(error) = panel_ipc_listener(listener, tx, visible, inbox_tx, wake) {
+					if let Err(error) =
+						panel_ipc_listener(listener, tx, visible, day_window, inbox_tx, wake)
+					{
 						log::error!("panel IPC listener stopped: {error:#}");
 					}
 				})
@@ -2575,6 +2583,7 @@ fn panel_ipc_listener(
 	listener: UnixListener,
 	tx: mpsc::Sender<PanelCommand>,
 	visible: Arc<AtomicBool>,
+	day_window: Arc<std::sync::Mutex<Option<crate::dock::model::DayWindow>>>,
 	inbox: mpsc::Sender<calendar::Event>,
 	wake: iced::futures::channel::mpsc::UnboundedSender<Message>,
 ) -> AnyhowResult<()> {
@@ -2614,6 +2623,12 @@ fn panel_ipc_listener(
 			}
 			"status" if visible.load(Ordering::Relaxed) => crate::ipc::VISIBLE.to_owned(),
 			"status" => crate::ipc::HIDDEN.to_owned(),
+			crate::ipc::DAY_WINDOW => day_window
+				.lock()
+				.ok()
+				.and_then(|window| *window)
+				.map(crate::dock::model::DayWindow::to_reply)
+				.unwrap_or_default(),
 			other => {
 				log::warn!("unknown panel IPC command: {other:?}");
 				String::new()

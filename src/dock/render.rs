@@ -20,7 +20,7 @@ use iced::Color;
 use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
 
 use super::config::DockConfig;
-use super::model::{Card, DAY_MINUTES, Segment};
+use super::model::{Card, DAY_MINUTES, DayWindow, Segment};
 use crate::config::DockSide;
 
 /// Shortest a segment is ever drawn, so a five-minute task is still hoverable.
@@ -113,6 +113,8 @@ pub struct Layout {
 	pub border_outer_color: Color,
 	pub border_inner_color: Color,
 	pub scale: f32,
+	/// The stretch of the day laid out between the two buttons.
+	pub window: DayWindow,
 }
 
 impl Layout {
@@ -163,7 +165,19 @@ impl Layout {
 			border_outer_color: config.border_outer_color.0,
 			border_inner_color: config.border_inner_color.0,
 			scale: scale.max(1) as f32,
+			window: DayWindow::WHOLE_DAY,
 		}
+	}
+
+	/// The same layout, showing only `window` of the day along the strip.
+	pub fn with_window(self, window: DayWindow) -> Self {
+		Self { window, ..self }
+	}
+
+	/// Whether any of `segment` falls inside the window, and so is drawn.
+	pub fn shows(&self, segment: &Segment) -> bool {
+		self.window
+			.overlaps(segment.start_min as f32, segment.end_min as f32)
 	}
 
 	fn vertical(&self) -> bool {
@@ -201,11 +215,17 @@ impl Layout {
 		}
 	}
 
+	/// The length of the band between the two buttons, where the window of
+	/// the day is laid out.
+	fn span(&self) -> f32 {
+		(self.day_length() - 2.0 * self.header()).max(1.0)
+	}
+
 	/// The distance along the strip at which a minute is drawn.
 	pub fn along_of(&self, minute: f32) -> f32 {
 		let start = self.axis_start();
-		let header = self.header();
-		start + header + minute / DAY_MINUTES as f32 * (self.day_length() - 2.0 * header).max(1.0)
+		let into = (minute - self.window.start_min) / self.window.length();
+		start + self.header() + into * self.span()
 	}
 
 	/// The back button: a square at the start of the strip.
@@ -252,9 +272,11 @@ impl Layout {
 	}
 
 	/// The logical rectangle (x, y, width, height) of a segment.
+	/// A segment running past either end of the window is cut off there.
 	pub fn segment_rect(&self, segment: &Segment) -> (f32, f32, f32, f32) {
-		let start = self.along_of(segment.start_min as f32);
-		let end = self.along_of(segment.end_min as f32);
+		let window = self.window;
+		let start = self.along_of((segment.start_min as f32).max(window.start_min));
+		let end = self.along_of((segment.end_min as f32).min(window.end_min));
 		let length = (end - start).max(MIN_SEGMENT_HEIGHT);
 		if self.vertical() {
 			(self.content_x, start, self.content_width, length)
@@ -330,6 +352,9 @@ impl Layout {
 		}
 
 		segments.iter().rposition(|segment| {
+			if !self.shows(segment) {
+				return false;
+			}
 			let (left, top, width, height) = self.segment_rect(segment);
 			x >= left && x < left + width && y >= top && y < top + height
 		})
@@ -353,11 +378,11 @@ impl Layout {
 			x - self.content_x
 		};
 		let header = self.header();
-		let span = (self.day_length() - 2.0 * header).max(1.0);
+		let span = self.span();
 		if along < header || along >= header + span {
 			return None;
 		}
-		Some((along - header) / span * DAY_MINUTES as f32)
+		Some(self.window.start_min + (along - header) / span * self.window.length())
 	}
 
 	/// Height of a right-click menu with `rows` items.
@@ -611,6 +636,9 @@ impl Renderer {
 		let pixmap = &mut content;
 		let now = scene.now_minute;
 		for (index, segment) in scene.segments.iter().enumerate() {
+			if !layout.shows(segment) {
+				continue;
+			}
 			let hovered = scene.hovered == Some(index);
 			let promoted = scene.promoted == Some(index);
 			let past = now.is_some_and(|now| (segment.end_min as f32) < now);
@@ -638,7 +666,13 @@ impl Renderer {
 		}
 
 		if scene.hour_lines {
-			for minute in (1..DAY_MINUTES).filter(|m| (scene.day_offset_min + m) % 60 == 0) {
+			// The ends of the window are the strip's ends, which need no line.
+			let window = layout.window;
+			let inside = |m: &i32| window.start_min < *m as f32 && (*m as f32) < window.end_min;
+			for minute in (1..DAY_MINUTES)
+				.filter(|m| (scene.day_offset_min + m) % 60 == 0)
+				.filter(inside)
+			{
 				let along = layout.along_of(minute as f32) - HOUR_LINE_HEIGHT / 2.0;
 				let rect = if layout.side.is_vertical() {
 					(
@@ -659,7 +693,7 @@ impl Renderer {
 			}
 		}
 
-		if let Some(minute) = now {
+		if let Some(minute) = now.filter(|&minute| layout.window.contains(minute)) {
 			let along = layout.along_of(minute) - NOW_HEIGHT / 2.0;
 			let rect = if layout.side.is_vertical() {
 				let along = along.clamp(
@@ -1624,6 +1658,78 @@ mod tests {
 			.unwrap();
 
 		assert!((minute - 600.0).abs() < 0.01);
+	}
+
+	#[test]
+	fn a_window_of_the_day_fills_the_strip_between_the_buttons() {
+		let whole = Layout::new(&DockConfig::default(), 316, 1440, 1);
+		let window = DayWindow::new(120.0, 720.0).unwrap();
+		let layout = whole.with_window(window);
+
+		// Its ends sit where midnight and the next midnight sit on the whole day.
+		assert_eq!(layout.along_of(120.0), whole.along_of(0.0));
+		assert_eq!(layout.along_of(720.0), whole.along_of(DAY_MINUTES as f32));
+		let x = (layout.content_x + 1.0) as f64;
+		let minute = layout.minute_at(x, layout.along_of(300.0) as f64).unwrap();
+		assert!((minute - 300.0).abs() < 0.01);
+
+		// Outside the window nothing is drawn or hovered; across its edge a
+		// segment is cut off at the edge.
+		let segments = [segment(0, 60), segment(60, 180)];
+		assert!(!layout.shows(&segments[0]));
+		let (_, top, _, height) = layout.segment_rect(&segments[1]);
+		assert_eq!(top, layout.along_of(120.0));
+		assert!((top + height - layout.along_of(180.0)).abs() < 0.01);
+		assert_eq!(
+			layout.hit(&segments, x, layout.along_of(150.0) as f64),
+			Some(1)
+		);
+	}
+
+	#[test]
+	fn a_window_hides_the_hours_and_the_now_line_outside_it() {
+		let layout = Layout::new(&DockConfig::default(), 316, 1440, 1)
+			.with_window(DayWindow::new(120.0, 720.0).unwrap());
+		let (width, height) = layout.pixel_size();
+		let scene = |now_minute, hour_lines| Scene {
+			segments: &[],
+			now_minute,
+			hovered: None,
+			pinned: None,
+			promoted: None,
+			menu: None,
+			day_offset_min: 0,
+			hour_lines,
+			button_hovered: false,
+			add_hovered: false,
+			back_label: "",
+			side: DockSide::Left,
+			palette: palette(),
+		};
+		let paint = |scene: &Scene| {
+			let mut pixmap = Pixmap::new(width, height).unwrap();
+			Renderer::default().paint(&layout, scene, &mut pixmap);
+			pixmap
+		};
+		let empty = paint(&scene(None, false));
+
+		// "Now" is past the window, so the strip is as if there were none.
+		assert_eq!(paint(&scene(Some(900.0), false)).data(), empty.data());
+		let now = paint(&scene(Some(600.0), false));
+		let y = layout.along_of(600.0).floor() as u32;
+		assert_ne!(now.pixel(5, y), empty.pixel(5, y));
+
+		// Three o'clock is inside, one o'clock is not drawn at all.
+		let lines = paint(&scene(None, true));
+		let y = layout.along_of(180.0).floor() as u32;
+		assert!(
+			(y.saturating_sub(1)..=y + 1).any(|row| lines.pixel(5, row) != empty.pixel(5, row))
+		);
+		let rows_changed = (0..height)
+			.filter(|&row| lines.pixel(5, row) != empty.pixel(5, row))
+			.count();
+		// Nine hours strictly between 02:00 and 12:00, a pixel or two each.
+		assert!((9..=18).contains(&rows_changed), "{rows_changed}");
 	}
 
 	#[test]

@@ -243,6 +243,9 @@ pub struct ViewSettings {
 	pub fade_duration_ms: u32,
 	/// Whether the dock draws a faint gray line at each hour on its strip.
 	pub dock_hour_lines: bool,
+	/// Whether the dock shows only the hours the side panel's grid shows, at
+	/// its zoom and scroll, rather than the whole day.
+	pub dock_follows_panel: bool,
 }
 
 /// Which screen edge the dock strip hugs.
@@ -347,6 +350,7 @@ impl Default for ViewSettings {
 			window_animation: WindowAnimation::DesktopDefault,
 			fade_duration_ms: 150,
 			dock_hour_lines: true,
+			dock_follows_panel: false,
 			dock_reserve_space: false,
 			panel_reserve_space: false,
 		}
@@ -989,6 +993,7 @@ mod tests {
 		assert_eq!(views.window_animation, WindowAnimation::DesktopDefault);
 		assert_eq!(views.fade_duration_ms(), 150);
 		assert!(views.dock_hour_lines);
+		assert!(!views.dock_follows_panel);
 
 		let views: ViewSettings =
 			toml::from_str("window_animation = \"fade_in\"\nfade_duration_ms = 99999").unwrap();
