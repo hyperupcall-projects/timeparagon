@@ -650,7 +650,7 @@ CREATE TABLE google_entities (
   calendar_id     TEXT NOT NULL,     -- the item's calendar or task list when first recorded
   event_id        TEXT NOT NULL,     -- its ID then
   event           TEXT,              -- JSON: calendar::Event; NULL = deleted locally
-  acknowledged_at TEXT,              -- RFC 3339; when Google confirmed the last write
+  acknowledged_at TEXT,              -- RFC 3339 UTC; when Google confirmed the last write
   observed_at     TEXT,              -- RFC 3339 UTC; when a fetch first showed Google agrees
   sending_since   TEXT,              -- RFC 3339 UTC; set while a write is on its way to Google
   PRIMARY KEY (calendar_id, event_id)

@@ -288,12 +288,14 @@ fn write_delete(
 	if deletes.is_empty() && !had {
 		return Ok(());
 	}
+	// Compared as instants: rows confirmed by older builds carry a local
+	// offset, and text only orders times written in the same one.
 	let settled = (crate::clock::utc_now() - DELETE_SETTLING).to_rfc3339();
 	let mut live = HashMap::new();
 	for (key, deleting) in deletes {
 		let current = tx
             .query_row(
-                "SELECT 1 FROM google_entities WHERE calendar_id=?1 AND event_id=?2 AND event IS NULL AND (sending_since IS NOT NULL OR acknowledged_at > ?3)",
+                "SELECT 1 FROM google_entities WHERE calendar_id=?1 AND event_id=?2 AND event IS NULL AND (sending_since IS NOT NULL OR julianday(acknowledged_at) > julianday(?3))",
                 params![columns(&key).0, columns(&key).1, settled],
                 |_| Ok(()),
             )
@@ -364,7 +366,7 @@ fn write_series_edit(
 	for (key, edit) in edits.drain() {
 		let current = tx
             .query_row(
-                "SELECT 1 FROM google_entities WHERE calendar_id=?1 AND event_id=?2 AND (sending_since IS NOT NULL OR acknowledged_at > ?3)",
+                "SELECT 1 FROM google_entities WHERE calendar_id=?1 AND event_id=?2 AND (sending_since IS NOT NULL OR julianday(acknowledged_at) > julianday(?3))",
                 params![columns(&key).0, columns(&key).1, settled],
                 |_| Ok(()),
             )
@@ -1414,7 +1416,7 @@ fn finish(
 			if last {
 				tx.execute(
 					"UPDATE google_entities SET acknowledged_at=?3,sending_since=NULL WHERE calendar_id=?1 AND event_id=?2",
-					params![columns(&entity).0, columns(&entity).1, crate::clock::now().to_rfc3339()],
+					params![columns(&entity).0, columns(&entity).1, crate::clock::utc_now().to_rfc3339()],
 				)
 				.map_err(|e| e.to_string())?;
 			}
@@ -1997,7 +1999,7 @@ pub(super) fn observe_range(
 				.map(serde_json::to_string)
 				.transpose()
 				.map_err(|e| e.to_string())?;
-			tx.execute("UPDATE google_entities SET event=?3,acknowledged_at=?4,observed_at=COALESCE(observed_at,?6) WHERE calendar_id=?1 AND event_id=?2 AND acknowledged_at=?5",params![calendar,id,json,fetched.to_rfc3339(),ack,fetched.with_timezone(&Utc).to_rfc3339()]).map_err(|e|e.to_string())?;
+			tx.execute("UPDATE google_entities SET event=?3,acknowledged_at=?4,observed_at=COALESCE(observed_at,?4) WHERE calendar_id=?1 AND event_id=?2 AND acknowledged_at=?5",params![calendar,id,json,fetched.to_utc().to_rfc3339(),ack]).map_err(|e|e.to_string())?;
 		}
 	}
 	prune_observed(&tx, fetched).map_err(|e| e.to_string())?;
@@ -2068,7 +2070,7 @@ pub(super) fn observe_series(
 				.map(serde_json::to_string)
 				.transpose()
 				.map_err(|e| e.to_string())?;
-			tx.execute("UPDATE google_entities SET event=?3,acknowledged_at=?4,observed_at=COALESCE(observed_at,?6) WHERE calendar_id=?1 AND event_id=?2 AND acknowledged_at=?5",params![calendar,id,json,fetched.to_rfc3339(),ack,fetched.with_timezone(&Utc).to_rfc3339()]).map_err(|e|e.to_string())?;
+			tx.execute("UPDATE google_entities SET event=?3,acknowledged_at=?4,observed_at=COALESCE(observed_at,?4) WHERE calendar_id=?1 AND event_id=?2 AND acknowledged_at=?5",params![calendar,id,json,fetched.to_utc().to_rfc3339(),ack]).map_err(|e|e.to_string())?;
 		}
 	}
 	tx.commit().map_err(|e| e.to_string())
@@ -3375,6 +3377,75 @@ mod tests {
 		let mut fetched = vec![event];
 		overlay(&path, &mut fetched, None).unwrap();
 		assert!(fetched.is_empty());
+	}
+	#[test]
+	fn google_confirmations_are_stored_in_utc() {
+		let (_dir, path) = db();
+		let event = super::super::sample_snapshot().events.remove(0);
+		let delete = delete_job(&event, SaveScope::Current);
+		let mut writes = record_in(&path, delete, None, &event.calendar_id, &event.id).unwrap();
+		send_in(&path, writes.remove(0), |_| Ok(None)).unwrap();
+		let acknowledged: String = task_db::Database::open(&path)
+			.unwrap()
+			.connection()
+			.query_row("SELECT acknowledged_at FROM google_entities", [], |r| {
+				r.get(0)
+			})
+			.unwrap();
+		let offset = DateTime::parse_from_rfc3339(&acknowledged)
+			.unwrap()
+			.offset()
+			.local_minus_utc();
+		assert_eq!(offset, 0, "{acknowledged}");
+	}
+	#[test]
+	fn delete_and_series_records_settle_by_instant_whatever_the_offset() {
+		let (_dir, path) = db();
+		let mut db = task_db::Database::open(&path).unwrap();
+		let tx = db.connection().transaction().unwrap();
+		let event = super::super::sample_snapshot().events.remove(0);
+		let series_edit = || SeriesEdit {
+			scope: SaveScope::All,
+			original: Box::new(event.clone()),
+		};
+		let now = crate::clock::utc_now();
+		let west = chrono::FixedOffset::west_opt(5 * 3600).unwrap();
+		let east = chrono::FixedOffset::east_opt(10 * 3600).unwrap();
+		// Confirmed moments ago, written west of UTC, so still settling; and
+		// confirmed long ago, written east of it, so settled.
+		let recent = key("primary", "recent");
+		let old = key("primary", "old");
+		for (entity, at) in [
+			(
+				&recent,
+				(now - chrono::Duration::seconds(30)).with_timezone(&west),
+			),
+			(
+				&old,
+				(now - chrono::Duration::minutes(10)).with_timezone(&east),
+			),
+		] {
+			tx.execute(
+				"INSERT INTO google_entities(calendar_id,event_id,event,acknowledged_at) VALUES(?1,?2,NULL,?3)",
+				params![columns(entity).0, columns(entity).1, at.to_rfc3339()],
+			)
+			.unwrap();
+			write_delete(&tx, entity, Some(Deleting::Task)).unwrap();
+			write_series_edit(&tx, entity, series_edit()).unwrap();
+		}
+		// The next write forgets the records of rows that have settled.
+		let next = key("primary", "next");
+		write_delete(&tx, &next, Some(Deleting::Task)).unwrap();
+		write_series_edit(&tx, &next, series_edit()).unwrap();
+		let sorted = |mut keys: Vec<String>| {
+			keys.sort();
+			keys
+		};
+		let expected = sorted(vec![recent, next]);
+		let deletes = sorted(read_deletes(&tx).unwrap().into_keys().collect());
+		assert_eq!(deletes, expected);
+		let edits = read_records::<SeriesEdit>(&tx, SERIES_EDITS).unwrap();
+		assert_eq!(sorted(edits.into_keys().collect()), expected);
 	}
 	#[test]
 	fn a_refused_deletion_unlocks_the_item() {
