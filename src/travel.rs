@@ -8,16 +8,15 @@
 //! Every event with a place is a trip's destination. The trip starts at the
 //! place of the nearest earlier event that has one, or at Home when there is
 //! none. How long a trip takes comes from the Mapbox Directions API, and is
-//! kept on disk so that it is only asked for once.
+//! kept in the config (`travel.routes`) so that it is only asked for once, by
+//! any device.
 
 pub mod map;
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
 use iced::Task;
-use serde::{Deserialize, Serialize};
 
 use crate::app::{Message, State, queue_save};
 use crate::blocking;
@@ -94,7 +93,6 @@ pub struct Workspace {
 	pub rename: Option<(u64, String)>,
 	/// Counts searches, so a slow answer to an old one is thrown away.
 	serial: u64,
-	cache: Option<PathBuf>,
 }
 
 impl Workspace {
@@ -106,16 +104,21 @@ impl Workspace {
 		}
 	}
 
-	/// Keeps worked-out trips in `path`, and reads those already there. Only a
-	/// real boot calls this: a state built by hand must not touch the user's
-	/// cache.
-	pub fn cache_in(&mut self, path: Option<PathBuf>) {
-		if let Some(path) = &path {
-			for (key, route) in read_cache(path) {
-				self.routes.insert(key, RouteState::Ready(route));
-			}
+	/// Starts from the trips worked out so far, by any device.
+	pub fn seed(&mut self, saved: &[SavedRoute]) {
+		for route in saved {
+			self.routes.insert(
+				RouteKey {
+					from: route.from,
+					to: route.to,
+					mode: route.mode,
+				},
+				RouteState::Ready(Route {
+					seconds: route.seconds,
+					meters: route.meters,
+				}),
+			);
 		}
-		self.cache = path;
 	}
 
 	pub fn state(&self, key: RouteKey) -> Option<&RouteState> {
@@ -382,7 +385,8 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 		Action::Routed(key, result) => match result {
 			Ok(route) => {
 				state.travel.routes.insert(key, RouteState::Ready(route));
-				save_cache(state)
+				publish_routes(state);
+				Task::none()
 			}
 			Err(error) => {
 				state.travel.routes.insert(key, RouteState::Failed(error));
@@ -573,9 +577,9 @@ pub fn reconcile(state: &mut State) -> Task<Message> {
 	fetch_missing(state, legs)
 }
 
-/// Copies the trips worked out so far into the config, which is how they reach
-/// the phone: it draws them without asking Mapbox. Runs from `reconcile`, so
-/// the trips already cached at boot go out as well as new ones.
+/// Copies the trips worked out so far into the config, which keeps them and is
+/// how they reach the phone: it draws them without asking Mapbox. Runs when a
+/// trip is worked out, and from `reconcile`.
 fn publish_routes(state: &mut State) {
 	let mut changed = false;
 	for (key, route) in &state.travel.routes {
@@ -619,30 +623,16 @@ fn publish_routes(state: &mut State) {
 /// Takes in the trips another device worked out since the settings were last
 /// read, such as one recalculated on the phone. Without this `publish_routes`
 /// would put this device's older answer back.
-pub fn adopt_routes(state: &mut State, before: &[SavedRoute]) -> Task<Message> {
-	let mut adopted = false;
-	for saved in &state.config.travel.routes {
-		if before.contains(saved) {
-			continue;
-		}
-		state.travel.routes.insert(
-			RouteKey {
-				from: saved.from,
-				to: saved.to,
-				mode: saved.mode,
-			},
-			RouteState::Ready(Route {
-				seconds: saved.seconds,
-				meters: saved.meters,
-			}),
-		);
-		adopted = true;
-	}
-	if adopted {
-		save_cache(state)
-	} else {
-		Task::none()
-	}
+pub fn adopt_routes(state: &mut State, before: &[SavedRoute]) {
+	let new: Vec<SavedRoute> = state
+		.config
+		.travel
+		.routes
+		.iter()
+		.filter(|saved| !before.contains(saved))
+		.cloned()
+		.collect();
+	state.travel.seed(&new);
 }
 
 /// Asks Mapbox for each trip that has not been asked for.
@@ -678,28 +668,6 @@ fn fetch_missing(state: &mut State, legs: impl IntoIterator<Item = Leg>) -> Task
 	}
 
 	Task::batch(tasks)
-}
-
-fn save_cache(state: &State) -> Task<Message> {
-	let Some(path) = state.travel.cache.clone() else {
-		return Task::none();
-	};
-	let ready: Vec<(RouteKey, Route)> = state
-		.travel
-		.routes
-		.iter()
-		.filter_map(|(key, route)| match route {
-			RouteState::Ready(route) => Some((*key, *route)),
-			_ => None,
-		})
-		.collect();
-
-	blocking::run(move || {
-		if let Err(error) = write_cache(&path, &ready) {
-			log::warn!("could not save travel times: {error}");
-		}
-	})
-	.map(|()| Message::Ignored)
 }
 
 // ---------------------------------------------------------------------------
@@ -815,58 +783,6 @@ fn maps_url(travel: &TravelSettings, leg: Leg) -> Option<String> {
 		from,
 		to,
 	))
-}
-
-// ---------------------------------------------------------------------------
-// The cache of worked-out trips
-// ---------------------------------------------------------------------------
-
-#[derive(Serialize, Deserialize)]
-struct Stored {
-	from: u64,
-	to: u64,
-	mode: TravelMode,
-	seconds: u32,
-	meters: u32,
-}
-
-fn read_cache(path: &Path) -> Vec<(RouteKey, Route)> {
-	let stored: Vec<Stored> = crate::task_db::read_document(path, crate::task_db::keys::ROUTES)
-		.ok()
-		.flatten()
-		.unwrap_or_default();
-
-	stored
-		.into_iter()
-		.map(|trip| {
-			(
-				RouteKey {
-					from: trip.from,
-					to: trip.to,
-					mode: trip.mode,
-				},
-				Route {
-					seconds: trip.seconds,
-					meters: trip.meters,
-				},
-			)
-		})
-		.collect()
-}
-
-fn write_cache(path: &Path, routes: &[(RouteKey, Route)]) -> std::io::Result<()> {
-	let stored: Vec<Stored> = routes
-		.iter()
-		.map(|(key, route)| Stored {
-			from: key.from,
-			to: key.to,
-			mode: key.mode,
-			seconds: route.seconds,
-			meters: route.meters,
-		})
-		.collect();
-
-	crate::task_db::write_document(path, crate::task_db::keys::ROUTES, &stored)
 }
 
 #[cfg(test)]
@@ -1662,16 +1578,15 @@ mod tests {
 		assert_eq!(before, [saved(600)]);
 
 		state.config.travel.routes = vec![saved(900)];
-		let _ = adopt_routes(&mut state, &before);
+		adopt_routes(&mut state, &before);
 		let _ = reconcile(&mut state);
 
 		assert_eq!(state.config.travel.routes, [saved(900)]);
 	}
 
 	#[test]
-	fn worked_out_trips_come_back_after_a_restart() {
-		let dir = std::env::temp_dir().join(format!("tt-travel-{}", std::process::id()));
-		let path = dir.join("test.sqlite3");
+	fn worked_out_trips_are_kept_in_the_config_and_come_back_after_a_restart() {
+		let mut state = state();
 		let key = RouteKey {
 			from: 1,
 			to: 2,
@@ -1681,20 +1596,22 @@ mod tests {
 			seconds: 90,
 			meters: 300,
 		};
-
-		write_cache(&path, &[(key, route)]).unwrap();
+		let _ = update(&mut state, Action::Routed(key, Ok(route)));
+		let saved = state.config.travel.routes.clone();
+		assert_eq!(
+			saved,
+			[SavedRoute {
+				from: 1,
+				to: 2,
+				mode: TravelMode::Bike,
+				seconds: 90,
+				meters: 300,
+			}]
+		);
 
 		let mut travel = Workspace::default();
-		travel.cache_in(Some(path.clone()));
+		travel.seed(&saved);
 		assert_eq!(travel.state(key), Some(&RouteState::Ready(route)));
-
-		crate::task_db::write_document_json(&path, crate::task_db::keys::ROUTES, "not json")
-			.unwrap();
-		let mut travel = Workspace::default();
-		travel.cache_in(Some(path));
-		assert!(travel.routes.is_empty(), "a damaged cache is just empty");
-
-		let _ = std::fs::remove_dir_all(dir);
 	}
 
 	#[test]

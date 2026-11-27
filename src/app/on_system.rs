@@ -84,7 +84,7 @@ pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message>
 				return Task::none();
 			}
 			let previous = std::mem::replace(&mut state.config, config);
-			let adopted = crate::travel::adopt_routes(state, &disk_before.travel.routes);
+			crate::travel::adopt_routes(state, &disk_before.travel.routes);
 			if previous.notes != state.config.notes {
 				if let Err(error) = state.notes.configure(state.config.notes.path()) {
 					state.notes.error = Some(error);
@@ -125,7 +125,7 @@ pub(super) fn update(state: &mut State, message: SystemMessage) -> Task<Message>
 					.set_day_end_hour(state.config.calendar.day_start_hour());
 				state.calendar.set_day(day, day);
 			}
-			let mut tasks = vec![adopted];
+			let mut tasks = Vec::new();
 			if state.screen == Screen::Life {
 				let page = state.life.page;
 				tasks.push(crate::life::update(

@@ -271,15 +271,12 @@ pub(crate) fn send_from(
 			calendar::api::series_recurrence_from(token, calendar, series, *from)?;
 	}
 	calendar::calendar_tasks::persist(token, &original, &mut saved, settings)?;
-	database.record_remote(
-		&saved,
-		saved
-			.details
-			.task_data
-			.as_ref()
-			.ok_or("Missing task data")?,
-		local_id,
-	)?;
+	saved
+		.details
+		.task_data
+		.as_ref()
+		.ok_or("Missing task data")?;
+	database.record_remote(&saved, local_id)?;
 	Ok(saved)
 }
 
@@ -349,8 +346,9 @@ pub(crate) fn send_inbox_task(
 		data.metadata = metadata;
 	}
 	data.metadata.created_at = Some(created_at);
-	// Keep the creation instant retryable if the metadata upload fails.
-	database.record_remote(&event, &data, local_id)?;
+	// Before the metadata upload, so a write that still names the local ID
+	// reaches the new task even if the upload fails.
+	database.record_remote(&event, local_id)?;
 	calendar::task_metadata::save(token, &event, &data)?;
 	event.details.task_data = Some(data);
 	Ok(event)

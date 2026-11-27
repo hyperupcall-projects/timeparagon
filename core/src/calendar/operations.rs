@@ -1993,9 +1993,6 @@ pub(super) fn observe_range(
 					.unwrap_or(false)
 			});
 		if covered {
-			if let Some(data) = current.and_then(|e| e.details.task_data.as_ref()) {
-				tx.execute("INSERT INTO google_task_backend_state(task_id,data) VALUES(?1,?2) ON CONFLICT(task_id) DO UPDATE SET data=excluded.data",params![data.id,serde_json::to_string(data).map_err(|e|e.to_string())?]).map_err(|e|e.to_string())?;
-			}
 			let json = current
 				.map(serde_json::to_string)
 				.transpose()

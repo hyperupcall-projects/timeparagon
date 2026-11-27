@@ -1429,7 +1429,8 @@ fn boot_state() -> State {
 	state.calendar.restore(database.clone());
 	state.notes.go_live(timeparagon_core::notes::directory());
 	state.people.go_live(database.clone());
-	state.travel.cache_in(database.clone());
+	let routes = state.config.travel.routes.clone();
+	state.travel.seed(&routes);
 
 	state.alarms.keep_in(database.clone());
 	state.habits.keep_in(database);

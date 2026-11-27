@@ -38,7 +38,7 @@ The schema version is stored in `PRAGMA user_version`.
 | `user_version` | Meaning |
 | --- | --- |
 | `0` | New file. `Database::open` creates the schema. |
-| `2` through `15` | Upgraded to 16 on open: see below. |
+| `2` through `16` | Upgraded to 17 on open: see below. |
 | `6` | Like 5, with the app's tables, indexes and triggers prefixed `timeparagon_` instead of `timeslay_`, and the built-in calendar sources' IDs prefixed `timeparagon:` instead of `timeslay:`. |
 | `7` | Adds the synced `notes` metadata table. |
 | `8` | Creates the incremental Google sync cache during upgrade and reinstalls synced data tables and triggers. |
@@ -49,8 +49,9 @@ The schema version is stored in `PRAGMA user_version`.
 | `13` | `google_sync_events` gains the generated `task` column and two indexes, so a view reads only its own dates' rows. |
 | `14` | `task_aliases` and `google_entities` are keyed by `(calendar_id, event_id)` instead of one string joining them. |
 | `15` | The habit, brain dump and task work tables are `STRICT` and check that related columns agree. |
-| `16` | Current (`task_db::SCHEMA_VERSION`). Caches and this device's own state leave `documents` for `caches` and `device_state`. |
-| anything else | Refused: `Unsupported database schema N; expected 16`. |
+| `16` | Caches and this device's own state leave `documents` for `caches` and `device_state`. |
+| `17` | Current (`task_db::SCHEMA_VERSION`). Drops `counter`, `google_task_backend_state` and the desktop's `routes` cache, which nothing reads. |
+| anything else | Refused: `Unsupported database schema N; expected 17`. |
 
 Builds from before version 5 refuse a version 5 file, so every TimeParagon
 process on a device (panel, dock, shortcut daemon, browser host) has to be
@@ -62,6 +63,11 @@ Every statement in setup is idempotent (`CREATE … IF NOT EXISTS`,
 processes setting up at once, or a crash halfway through, cause no harm. Once a
 file is stamped with the current version, setup is skipped, because the apps
 open the database many times a minute.
+
+**16 → 17** drops what nothing reads any more: the `counter` table, which
+allocated task IDs before they were random; `google_task_backend_state`, which
+copied each task's metadata as Google last confirmed it; and the desktop's
+`routes` cache, which held the same trips as the `travel.routes` settings.
 
 **15 → 16** (`Database::move_local_documents`) creates `caches` and
 `device_state` and moves the [documents](#documents) that are not shared into
@@ -166,7 +172,6 @@ manifest and runs an integrity check before publishing the backup.
 ```mermaid
 erDiagram
     tasks ||--o{ task_aliases : "task_id"
-    tasks ||--o| google_task_backend_state : "task_id (logical)"
     documents ||--o{ timeparagon_sync_edits : "journaled by trigger"
     timeparagon_sync_snapshots ||--o{ timeparagon_sync_edits : "folds (JSON list)"
     timeparagon_sync_folded }o--|| timeparagon_sync_edits : "tombstone of"
@@ -201,10 +206,6 @@ erDiagram
         TEXT local PK
         TEXT remote
         TEXT calendar
-    }
-    google_task_backend_state {
-        INTEGER task_id PK
-        TEXT data
     }
     timeparagon_change_counters {
         TEXT name PK
@@ -254,7 +255,7 @@ The tables fall into six groups:
 | [Tasks](#tasks) | `tasks`, `task_aliases` | `task_db::Database::set_up` |
 | [Documents](#documents) | `documents`, `caches`, `device_state` | `task_db::Database::set_up` |
 | [Google cache](#google-cache) | `google_sync_events`, `google_task_records`, `google_sync_windows` | `task_db::Database::set_up` |
-| [Google writes](#google-writes) | `google_entities`, `google_id_map`, `google_task_backend_state` | `task_db::Database::set_up` |
+| [Google writes](#google-writes) | `google_entities`, `google_id_map` | `task_db::Database::set_up` |
 | [Settings](#settings) | `settings`, `device_settings` | `settings::schema::CREATE`, from `task_db::Database::set_up` |
 | [Change detection](#change-detection) | `timeparagon_change_counters` + triggers | `local_changes::install` |
 | [Device sync](#device-sync-turso) | `timeparagon_sync_control`, `timeparagon_sync_edits`, `timeparagon_sync_snapshots`, `timeparagon_sync_folded` + triggers | `database_sync::enroll`, `database_sync::install_snapshots` |
@@ -274,8 +275,8 @@ This ID is what time blocks, work sessions and recurring copies refer to.
 
 New IDs are random 62-bit integers ≥ 100, so two devices cannot pick the same
 ID while offline. Allocation retries until it finds an ID not already in
-`tasks`. Files created by older versions may still hold a `counter` table from
-when IDs were sequential; nothing reads or writes it any more.
+`tasks`. (Until schema 17, files kept the `counter` table from when IDs were
+sequential.)
 
 ### `tasks`
 
@@ -441,7 +442,6 @@ empty value, so callers can refuse to save over data they could not read.
 | `shared.projects` | `documents` | `config::ProjectsSettings` | Life / projects | `{"items": [Project], "areas": [LifeArea]}` |
 | `shared.routines` | `documents` | `routines::Routines` | Routines (desktop) | `{"entries": [Entry]}`, one per day, week or month. [Details](./data-model.md#routines) |
 | `contacts` | `caches` | `people::cache::File` | People screen | Raw Google People API responses per signed-in account |
-| `routes` | `caches` | `Vec<travel::Stored>` | Desktop travel | Cached Mapbox trip times: `[{from,to,mode,seconds,meters}]` |
 | `calendar_sync_state` | `caches` | `repository::SyncState` | Calendar refresh | `{"fetched_at", "calendars": [{id,name,color,primary,selected_by_google}], "notice"}` |
 | `shared_data_modified_ms` | `device_state` | integer as text | `shared_data::store` | When a `shared.*` document last changed, in ms since the epoch |
 | `dioxus_theme` | `device_state` | `String` | Android app | Theme name. Rust publishes it in `widget-day.json`; the Android home-screen widget reads only that snapshot |
@@ -552,7 +552,7 @@ sequenceDiagram
     W->>W: log "Saving to Google: …"
     W->>G: execute Job
     alt success
-        W->>DB: record google_id_map / backend state,<br/>stamp acknowledged_at, clear sending_since
+        W->>DB: record google_id_map,<br/>stamp acknowledged_at, clear sending_since
         W->>W: log "Saved to Google: …"
     else failure
         W->>DB: delete the google_entities row;<br/>confirmed source data remains available
@@ -677,20 +677,6 @@ Created items get a temporary local ID, and moving a task between Tasks and
 Calendar gives it a new Google ID. This map lets the UI keep using the ID it
 already knows the item by, and lets a later write that still names the old ID
 reach the right item. Task IDs are stored bare (without the `task:` prefix).
-
-### `google_task_backend_state`
-
-```sql
-CREATE TABLE google_task_backend_state (
-  task_id INTEGER PRIMARY KEY,   -- tasks.id
-  data    TEXT NOT NULL          -- JSON: task_db::TaskData
-);
-```
-
-The `TaskData` Google holds for each task, as confirmed by a successful write
-or by a fetch that came after one. Current code only writes this table. It is
-a record of the last state known to be on Google, and the migration scripts
-also use it.
 
 ---
 

@@ -2953,11 +2953,7 @@ pub(crate) mod send {
 		crate::timeblocking::apply_status(&mut updated, status);
 		if let Err(error) = write(&updated).and_then(|()| {
 			database
-				.record_remote(
-					&updated,
-					updated.details.task_data.as_ref().unwrap(),
-					local_id,
-				)
+				.record_remote(&updated, local_id)
 				.map_err(GoogleError::from)
 		}) {
 			// The message changes, but the failure keeps the original kind.

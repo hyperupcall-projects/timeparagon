@@ -20,7 +20,6 @@ pub mod keys {
 	pub const HABITS: &str = "habits";
 	pub const ALARMS: &str = "alarms";
 	pub const CONTACTS: &str = "contacts";
-	pub const ROUTES: &str = "routes";
 	pub const SYNC_STATE: &str = "calendar_sync_state";
 	/// Published by Rust in the Android widget snapshot: see `widget.rs`.
 	pub const THEME: &str = "dioxus_theme";
@@ -34,7 +33,7 @@ pub mod keys {
 
 	/// Kept in `caches`: copies of what Google, Mapbox and the People API
 	/// hold, fetched again when missing.
-	pub const CACHED: [&str; 3] = [CONTACTS, ROUTES, SYNC_STATE];
+	pub const CACHED: [&str; 2] = [CONTACTS, SYNC_STATE];
 	/// Kept in `device_state`: what this device keeps about itself and its
 	/// own writes in progress. Never replicated, and not rebuilt if lost.
 	pub const DEVICE: [&str; 5] = [
@@ -68,10 +67,10 @@ pub struct TaskData {
 /// The schema this build sets up, kept in SQLite's `user_version`.
 ///
 /// Schema changes are applied transactionally by [`Database::set_up`].
-pub const SCHEMA_VERSION: i64 = 16;
+pub const SCHEMA_VERSION: i64 = 17;
 
 /// Older schemas [`Database::set_up`] can bring up to date.
-const UPGRADABLE: std::ops::RangeInclusive<i64> = 2..=15;
+const UPGRADABLE: std::ops::RangeInclusive<i64> = 2..=16;
 
 fn schema_version(db: &Connection) -> Result<i64, String> {
 	db.query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -151,12 +150,20 @@ impl Database {
             CREATE TABLE IF NOT EXISTS device_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS caches (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS google_task_records (id TEXT PRIMARY KEY, event TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS google_task_backend_state (task_id INTEGER PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS google_entities (calendar_id TEXT NOT NULL, event_id TEXT NOT NULL, event TEXT, acknowledged_at TEXT, observed_at TEXT, sending_since TEXT, PRIMARY KEY (calendar_id, event_id));
             CREATE TABLE IF NOT EXISTS google_id_map (local TEXT PRIMARY KEY, remote TEXT NOT NULL, calendar TEXT NOT NULL);
 ")
             .map_err(|e| e.to_string())?;
 		Self::move_local_documents(&tx).map_err(|e| e.to_string())?;
+		// Schema 17: what nothing reads any more. `counter` allocated task IDs
+		// before they were random; `google_task_backend_state` copied each
+		// task's metadata as Google last confirmed it; the desktop's `routes`
+		// cache held the same trips as the `travel.routes` settings.
+		tx.execute_batch(
+			"DROP TABLE IF EXISTS counter; DROP TABLE IF EXISTS google_task_backend_state;
+             DELETE FROM documents WHERE key='routes'; DELETE FROM caches WHERE key='routes';",
+		)
+		.map_err(|e| e.to_string())?;
 		// Schema 5: the settings, which used to be config.toml.
 		tx.execute_batch(crate::settings::schema::CREATE)
 			.map_err(|e| e.to_string())?;
@@ -548,20 +555,15 @@ impl Database {
 			.map_err(|e| e.to_string())
 	}
 
-	/// Record confirmed Google state without overwriting a newer local edit.
-	/// `local_id` is the identity the caller is sending, before ID resolution.
-	pub fn record_remote(
-		&mut self,
-		event: &Event,
-		data: &TaskData,
-		local_id: &str,
-	) -> Result<(), String> {
-		let json = serde_json::to_string(data).map_err(|e| e.to_string())?;
+	/// Records the identity Google confirmed a write under, so a later write
+	/// that still names `local_id` (the identity the caller sent, before ID
+	/// resolution) reaches it. Leaves the desired metadata alone, so an older
+	/// write's answer cannot overwrite a newer local edit.
+	pub fn record_remote(&mut self, event: &Event, local_id: &str) -> Result<(), String> {
 		let tx = self
 			.0
 			.transaction_with_behavior(TransactionBehavior::Immediate)
 			.map_err(|e| e.to_string())?;
-		tx.execute("INSERT INTO google_task_backend_state(task_id,data) VALUES(?1,?2) ON CONFLICT(task_id) DO UPDATE SET data=excluded.data", params![data.id,json]).map_err(|e| e.to_string())?;
 		// A self-mapping also matters: moving back to the original identity
 		// must replace its previous destination, rather than leave a cycle.
 		if event.is_task() {
@@ -755,16 +757,8 @@ mod tests {
 		remote.details.description = crate::calendar::task_metadata::write("", &confirmed).unwrap();
 		// Reading an older write's metadata must not adopt it as a new edit.
 		assert_eq!(db.import_remote(&remote).unwrap(), confirmed);
-		db.record_remote(&remote, &confirmed, &local.id).unwrap();
+		db.record_remote(&remote, &local.id).unwrap();
 		assert_eq!(db.lookup(&local).unwrap(), Some(wanted));
-		let json: String =
-			db.0.query_row(
-				"SELECT data FROM google_task_backend_state WHERE task_id=123",
-				[],
-				|r| r.get(0),
-			)
-			.unwrap();
-		assert_eq!(serde_json::from_str::<TaskData>(&json).unwrap(), confirmed);
 		let mapping: (String, String) =
 			db.0.query_row(
 				"SELECT remote,calendar FROM google_id_map WHERE local='original-local'",
@@ -774,7 +768,7 @@ mod tests {
 			.unwrap();
 		assert_eq!(mapping, ("latest-remote".into(), "tasks:test".into()));
 		// Returning to the original ID retires the earlier mapping.
-		db.record_remote(&local, &confirmed, &local.id).unwrap();
+		db.record_remote(&local, &local.id).unwrap();
 		let remote: String =
 			db.0.query_row(
 				"SELECT remote FROM google_id_map WHERE local='original-local'",
@@ -1191,6 +1185,48 @@ mod local_document_tests {
 				.unwrap()
 				.is_none()
 		);
+	}
+}
+
+#[cfg(test)]
+mod retired_table_tests {
+	use super::*;
+
+	#[test]
+	fn schema_16_drops_what_nothing_reads() {
+		let dir = tempfile::tempdir().unwrap();
+		let path = dir.path().join("test.sqlite3");
+		Database::open(&path).unwrap();
+		{
+			let db = Connection::open(&path).unwrap();
+			db.execute_batch(
+				"CREATE TABLE counter (value INTEGER);
+                 CREATE TABLE google_task_backend_state (task_id INTEGER PRIMARY KEY, data TEXT NOT NULL);
+                 INSERT INTO google_task_backend_state VALUES (123, '{}');
+                 INSERT INTO caches VALUES ('routes', '[]');
+                 INSERT INTO caches VALUES ('contacts', '{}');
+                 PRAGMA user_version=16;",
+			)
+			.unwrap();
+		}
+		Database::open(&path).unwrap();
+		let db = Connection::open(&path).unwrap();
+		let tables: i64 = db
+			.query_row(
+				"SELECT count(*) FROM sqlite_master WHERE name IN ('counter','google_task_backend_state')",
+				[],
+				|r| r.get(0),
+			)
+			.unwrap();
+		assert_eq!(tables, 0);
+		let cached: Vec<String> = db
+			.prepare("SELECT key FROM caches")
+			.unwrap()
+			.query_map([], |r| r.get(0))
+			.unwrap()
+			.collect::<Result<_, _>>()
+			.unwrap();
+		assert_eq!(cached, ["contacts"]);
 	}
 }
 

@@ -95,8 +95,7 @@ API boundary for compatibility; it does not imply document storage.
 Everything else stays on the device. That includes the Google caches and the
 local copies of edits being sent (each device talks to Google itself), the
 stored nights of sleep (each device refreshes them from Google), contacts,
-cached routes, calendar sync state, the Android theme, `device_settings`,
-secrets and notes.
+calendar sync state, the Android theme, `device_settings`, secrets and notes.
 
 The four remaining documents and settings/note rows merge **field by field**;
 see [Merge rules](./database-schema.md#merge-rules). Normalized data uses native
@@ -729,9 +728,9 @@ and the settings `travel.api_key` (Mapbox token), `travel.home` (place ID),
 on the calendar) and `travel.map_app` (which map to open, chosen on the desktop).
 
 Tasks refer to places with `metadata.location`, and time blocks pass a place
-down with `ChildMetadata.location`. The desktop app also caches calculated
-trips in the `routes` document (same shape as `travel.routes`), which stays
-on the device.
+down with `ChildMetadata.location`. The desktop app keeps each trip it
+calculates in `travel.routes` as soon as Mapbox answers, and starts from those
+trips when it opens.
 
 ---
 
