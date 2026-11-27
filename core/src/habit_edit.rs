@@ -240,6 +240,9 @@ pub enum Log {
 /// A log entry as it is being edited: the time and the amount as typed.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LogRow {
+	/// The [`LogEntry::id`] of the entry this row edits. Blank for a row
+	/// added in the dialog.
+	pub id: String,
 	/// Blank for an entry from before times were kept.
 	pub time: String,
 	/// Blank for no amount.
@@ -258,6 +261,7 @@ impl LogRow {
 				.amount()
 				.map_or(String::new(), crate::habits::format_amount),
 			note: entry.note,
+			id: entry.id,
 		}
 	}
 
@@ -280,7 +284,10 @@ impl LogRow {
 					.ok_or_else(|| format!("Could not read \"{amount}\" as a number"))?,
 			)
 		};
-		Ok(LogEntry::new(at, amount).with_note(self.note.trim()))
+		Ok(LogEntry {
+			id: self.id.clone(),
+			..LogEntry::new(at, amount).with_note(self.note.trim())
+		})
 	}
 }
 
@@ -383,8 +390,7 @@ impl DayDialog {
 	pub fn now_row(&self) -> LogRow {
 		LogRow {
 			time: crate::calendar::time_format::clock(now_time(), self.time_format),
-			amount: String::new(),
-			note: String::new(),
+			..LogRow::default()
 		}
 	}
 

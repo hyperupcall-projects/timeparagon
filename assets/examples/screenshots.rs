@@ -326,6 +326,7 @@ fn routine_sample(state: &mut State) {
 	];
 	let at = |hour: u32| calendar::at_clock(today, hour, 0).with_timezone(&chrono::Utc);
 	state.config.task_work.sessions = vec![timeparagon::task_work::Session {
+		id: String::new(),
 		task_key: "111".into(),
 		task_title: "Review the launch checklist".into(),
 		block_key: None,

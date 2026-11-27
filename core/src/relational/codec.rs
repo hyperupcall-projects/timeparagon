@@ -26,6 +26,10 @@ fn ordered(rows: &Rows, table: usize, position: usize) -> Vec<&Vec<Value>> {
 	});
 	result
 }
+/// The ID of an entry, session or distraction from before each had one of its
+/// own: a hash of what it records, so identical history gets identical IDs on
+/// every device. Each is given its ID when it is made, and these work out the
+/// ones the rows from before already have.
 fn stable_id(parts: Value, ordinal: usize) -> String {
 	format!(
 		"{:x}",
@@ -33,17 +37,15 @@ fn stable_id(parts: Value, ordinal: usize) -> String {
 	)
 }
 
-/// A work session's ID: its task key and start (`started_at` as stored),
-/// numbered among sessions that share both.
+/// The ID of a work session from before sessions had one: its task key and
+/// start (`started_at` as stored), numbered among sessions that share both.
 pub(super) fn session_id(task_key: &str, started_at: &Value, ordinal: usize) -> String {
 	stable_id(json!([task_key, started_at]), ordinal)
 }
 
-/// A log entry's identity within its habit day: what it records, numbered
-/// among identical entries. `counts` is shared by one day's entries. Two
-/// devices that each log an entry while offline therefore add two rows
-/// instead of both writing the same position, and identical history gets
-/// identical IDs on every device. Changing an entry replaces its row.
+/// The ID of a log entry from before entries had one: what it records,
+/// numbered among identical entries. `counts` is shared by one day's
+/// entries.
 pub(super) fn log_entry_id(
 	kind: &str,
 	at: &Value,
@@ -168,7 +170,11 @@ pub(super) fn encode(key: &str, v: &Value) -> io::Result<Rows> {
 								let p = same_time.entry(e.at).or_default();
 								let p = std::mem::replace(p, *p + 1);
 								let (at, amount) = (value(e.at)?, value(e.amount)?);
-								let id = log_entry_id(kind, &at, &amount, &e.note, &mut counts);
+								let id = if e.id.is_empty() {
+									log_entry_id(kind, &at, &amount, &e.note, &mut counts)
+								} else {
+									e.id.clone()
+								};
 								insert(
 									&mut rows,
 									4,
@@ -213,11 +219,16 @@ pub(super) fn encode(key: &str, v: &Value) -> io::Result<Rows> {
 			let mut counts = BTreeMap::<String, usize>::new();
 			for (p, s) in log.sessions.iter().enumerate() {
 				let started_at = value(s.started_at)?;
-				let count = counts
-					.entry(json!([s.task_key, started_at]).to_string())
-					.or_default();
-				let id = session_id(&s.task_key, &started_at, *count);
-				*count += 1;
+				let id = if s.id.is_empty() {
+					let count = counts
+						.entry(json!([s.task_key, started_at]).to_string())
+						.or_default();
+					let id = session_id(&s.task_key, &started_at, *count);
+					*count += 1;
+					id
+				} else {
+					s.id.clone()
+				};
 				insert(
 					&mut rows,
 					7,
@@ -234,10 +245,15 @@ pub(super) fn encode(key: &str, v: &Value) -> io::Result<Rows> {
 			}
 			counts.clear();
 			for (p, d) in log.distractions.iter().enumerate() {
-				let parts = json!([d.block_key, d.recorded_at]);
-				let count = counts.entry(parts.to_string()).or_default();
-				let id = stable_id(parts, *count);
-				*count += 1;
+				let id = if d.id.is_empty() {
+					let parts = json!([d.block_key, d.recorded_at]);
+					let count = counts.entry(parts.to_string()).or_default();
+					let id = stable_id(parts, *count);
+					*count += 1;
+					id
+				} else {
+					d.id.clone()
+				};
 				insert(
 					&mut rows,
 					8,
@@ -368,6 +384,7 @@ pub(super) fn decode(key: &str, rows: &Rows) -> io::Result<Value> {
 				for e in entries {
 					let log = h.log.entry(model(e[1].clone())?).or_default();
 					let entry = LogEntry {
+						id: model(e[2].clone())?,
 						at: model(e[5].clone())?,
 						amount: model(e[6].clone())?,
 						note: model(e[7].clone())?,
@@ -396,6 +413,7 @@ pub(super) fn decode(key: &str, rows: &Rows) -> io::Result<Value> {
 			let mut log = crate::task_work::WorkLog::default();
 			for r in ordered(rows, 7, 6) {
 				log.sessions.push(crate::task_work::Session {
+					id: model(r[0].clone())?,
 					task_key: model(r[1].clone())?,
 					task_title: model(r[2].clone())?,
 					block_key: model(r[3].clone())?,
@@ -405,6 +423,7 @@ pub(super) fn decode(key: &str, rows: &Rows) -> io::Result<Value> {
 			}
 			for r in ordered(rows, 8, 4) {
 				log.distractions.push(crate::task_work::Distraction {
+					id: model(r[0].clone())?,
 					block_key: model(r[1].clone())?,
 					minutes: model(r[2].clone())?,
 					recorded_at: model(r[3].clone())?,

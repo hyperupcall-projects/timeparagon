@@ -18,6 +18,22 @@ fn db(path: &Path) -> Connection {
 	db.execute_batch("PRAGMA foreign_keys=ON").unwrap();
 	db
 }
+/// `l` without the IDs its log entries have, which storage gives the ones
+/// that had none: to compare what was read with what was written.
+fn without_ids(mut l: Library) -> Library {
+	for log in l.habits.iter_mut().flat_map(|h| h.log.values_mut()) {
+		for entry in log.happened.iter_mut().chain(&mut log.resisted) {
+			entry.id.clear();
+		}
+	}
+	l
+}
+/// [`without_ids`] for a work log's sessions and distractions.
+fn work_without_ids(mut w: crate::task_work::WorkLog) -> crate::task_work::WorkLog {
+	w.sessions.iter_mut().for_each(|s| s.id.clear());
+	w.distractions.iter_mut().for_each(|d| d.id.clear());
+	w
+}
 fn library() -> Library {
 	let mut a = Habit::new("a", "Run 🏃");
 	a.frequency = Frequency::Weekdays {
@@ -53,6 +69,7 @@ fn library() -> Library {
 			happened: vec![
 				LogEntry::default(),
 				LogEntry {
+					id: String::new(),
 					at: Some(NaiveTime::from_hms_opt(10, 20, 30).unwrap()),
 					amount: Some(1250),
 					note: "hello".into(),
@@ -85,6 +102,7 @@ fn work() -> crate::task_work::WorkLog {
 	w.start("task:123".into(), "Title".into(), Some("block".into()), at);
 	for _ in 0..2 {
 		w.distractions.push(crate::task_work::Distraction {
+			id: String::new(),
 			block_key: "block".into(),
 			minutes: 5,
 			recorded_at: at,
@@ -118,11 +136,11 @@ fn schema_10_documents_migrate_atomically_and_reopen_without_journaling_collecti
 	drop(raw);
 	task_db::Database::open(&path).unwrap();
 	let actual: Library = task_db::read_document(&path, "habits").unwrap().unwrap();
-	assert_eq!(actual, l);
+	assert_eq!(without_ids(actual), l);
 	let actual: crate::task_work::WorkLog = task_db::read_document(&path, "shared.task_work")
 		.unwrap()
 		.unwrap();
-	assert_eq!(actual, w);
+	assert_eq!(work_without_ids(actual), work_without_ids(w));
 	let actual: Value = task_db::read_document(&path, "shared.brain_dump")
 		.unwrap()
 		.unwrap();
@@ -371,16 +389,20 @@ fn native_tables_round_trip_offline_edits_deletions_and_all_scalar_types() {
 		send(&conn, &p1).await;
 		pull(&conn, &p2).await;
 		assert_eq!(
-			task_db::read_document::<Library>(&p2, "habits")
-				.unwrap()
-				.unwrap(),
+			without_ids(
+				task_db::read_document::<Library>(&p2, "habits")
+					.unwrap()
+					.unwrap()
+			),
 			l
 		);
 		assert_eq!(
-			task_db::read_document::<crate::task_work::WorkLog>(&p2, "shared.task_work")
-				.unwrap()
-				.unwrap(),
-			work()
+			work_without_ids(
+				task_db::read_document::<crate::task_work::WorkLog>(&p2, "shared.task_work")
+					.unwrap()
+					.unwrap()
+			),
+			work_without_ids(work())
 		);
 		assert!(sync::pending(&db(&p2)).unwrap().is_empty());
 		let (s1, mut a) = habits::store::Storage::load(Some(p1.clone())).unwrap();
@@ -616,10 +638,12 @@ fn a_new_server_is_seeded_with_previously_acknowledged_rows() {
 		let (_dir, b) = database();
 		pull(&conn, &b).await;
 		assert_eq!(
-			task_db::read_document::<crate::task_work::WorkLog>(&b, "shared.task_work")
-				.unwrap()
-				.unwrap(),
-			work()
+			work_without_ids(
+				task_db::read_document::<crate::task_work::WorkLog>(&b, "shared.task_work")
+					.unwrap()
+					.unwrap()
+			),
+			work_without_ids(work())
 		);
 	});
 }
@@ -707,9 +731,11 @@ fn the_tables_refuse_values_of_the_wrong_type_or_shape() {
 		assert!(raw.execute(statement, []).is_err(), "{why}");
 	}
 	assert_eq!(
-		task_db::read_document::<Library>(&path, "habits")
-			.unwrap()
-			.unwrap(),
+		without_ids(
+			task_db::read_document::<Library>(&path, "habits")
+				.unwrap()
+				.unwrap()
+		),
 		library()
 	);
 }
@@ -848,6 +874,74 @@ fn log_entries_added_on_two_devices_at_once_are_both_kept() {
 	});
 }
 #[test]
+fn an_edited_log_entry_or_work_session_stays_the_same_row() {
+	let (_dir, path) = database();
+	let mut l = Library::default();
+	l.habits.push(Habit::new("a", "Water"));
+	task_db::write_document(&path, "habits", &l).unwrap();
+	logged(&path, (8, 0), "breakfast");
+	let start = DateTime::from_timestamp(1_000_000, 0).unwrap();
+	let mut w = crate::task_work::WorkLog::default();
+	w.start("2875".into(), "Write report".into(), None, start);
+	w.stop("2875", start + chrono::Duration::minutes(30));
+	task_db::write_document(&path, "shared.task_work", &w).unwrap();
+	let raw = db(&path);
+	sync::acknowledge(&raw, &sync::pending(&raw).unwrap()).unwrap();
+	// What the entry records changes, as the day's dialog changes it.
+	let (storage, mut library) = habits::store::Storage::load(Some(path.clone())).unwrap();
+	let habit = &mut library.habits[0];
+	let mut dialog = crate::habit_edit::DayDialog::new(
+		habit,
+		day(18),
+		crate::calendar::time_format::TimeFormat::TwentyFourHour,
+	);
+	dialog.edit(crate::habit_edit::Log::Happened, 0, |row| {
+		row.time = "8:30".into();
+		row.note = "a late breakfast".into();
+	});
+	dialog.record(&mut library).unwrap();
+	storage.save(&library).unwrap();
+	// And the session's start, as editing it in focus mode does.
+	let mut w: crate::task_work::WorkLog = task_db::read_document(&path, "shared.task_work")
+		.unwrap()
+		.unwrap();
+	w.sessions[0].started_at -= chrono::Duration::minutes(10);
+	task_db::write_document(&path, "shared.task_work", &w).unwrap();
+	let pending = sync::pending(&raw).unwrap();
+	let changed = pending
+		.iter()
+		.filter(|c| matches!(TABLES[c.table].name, "habit_entries" | "task_work_sessions"))
+		.map(|c| (TABLES[c.table].name, c.deleted))
+		.collect::<Vec<_>>();
+	assert_eq!(
+		changed,
+		[("habit_entries", false), ("task_work_sessions", false)]
+	);
+	assert_eq!(notes(&path), ["a late breakfast"]);
+}
+#[test]
+fn identical_entries_logged_on_two_devices_are_both_kept() {
+	runtime().block_on(async {
+		let (dir, a) = database();
+		let (_dir, b) = database();
+		let (_server, conn) = server(&dir.path().join("remote.db")).await;
+		let mut l = Library::default();
+		l.habits.push(Habit::new("a", "Water"));
+		task_db::write_document(&a, "habits", &l).unwrap();
+		send(&conn, &a).await;
+		pull(&conn, &b).await;
+		logged(&a, (8, 0), "a glass");
+		logged(&b, (8, 0), "a glass");
+		for path in [&a, &b] {
+			send(&conn, path).await;
+		}
+		for path in [&a, &b] {
+			pull(&conn, path).await;
+			assert_eq!(notes(path), ["a glass", "a glass"]);
+		}
+	});
+}
+#[test]
 fn schema_11_log_entries_move_to_their_new_keys_with_their_sync_state() {
 	let (_dir, path) = database();
 	task_db::write_document(&path, "habits", &library()).unwrap();
@@ -959,10 +1053,12 @@ fn confirmed_rows_the_server_lacks_are_sent_again() {
 		let (_dir, b) = database();
 		pull(&conn, &b).await;
 		assert_eq!(
-			task_db::read_document::<crate::task_work::WorkLog>(&b, "shared.task_work")
-				.unwrap()
-				.unwrap(),
-			work()
+			work_without_ids(
+				task_db::read_document::<crate::task_work::WorkLog>(&b, "shared.task_work")
+					.unwrap()
+					.unwrap()
+			),
+			work_without_ids(work())
 		);
 	});
 }
@@ -994,6 +1090,7 @@ fn config_saves_use_the_supplied_baseline_even_after_another_reader_refreshes() 
 fn merged_work_rows_choose_the_latest_session_and_distraction_by_time() {
 	let mut w = work();
 	let mut later = w.sessions[0].clone();
+	later.id = crate::task_work::new_id();
 	later.started_at += chrono::Duration::seconds(10);
 	later.task_key = "later".into();
 	w.sessions.insert(0, later);
@@ -1025,7 +1122,7 @@ fn retiring_documents_with_old_triggers_does_not_journal_a_user_deletion() {
         task_db::Database::open(&path).unwrap();
         assert_eq!(raw.query_row("SELECT count(*) FROM timeparagon_sync_edits WHERE document='habits' AND after_json IS NULL",[],|r|r.get::<_,i64>(0)).unwrap(),0);
         let (_server,conn)=server(&dir.path().join("remote.db")).await;sync::bootstrap(&conn,&path,"test-server").await.unwrap();
-        assert_eq!(habits::store::Storage::load(Some(path)).unwrap().1,l);
+        assert_eq!(without_ids(habits::store::Storage::load(Some(path)).unwrap().1),l);
     });
 }
 
@@ -1044,6 +1141,7 @@ fn as_schema_17_knowing_the_task(path: &Path) {
 fn worked(key: &str, from: i64, to: i64) -> crate::task_work::Session {
 	let at = |minutes: i64| DateTime::from_timestamp(1_000_000 + minutes * 60, 0).unwrap();
 	crate::task_work::Session {
+		id: String::new(),
 		task_key: key.into(),
 		task_title: "Write report".into(),
 		block_key: Some("work/block".into()),
@@ -1094,7 +1192,7 @@ fn schema_17_work_under_a_google_identity_moves_to_the_task_id() {
 	for session in &mut expected.sessions[..3] {
 		session.task_key = TASK.into();
 	}
-	assert_eq!(moved, expected);
+	assert_eq!(work_without_ids(moved.clone()), expected);
 	assert_eq!(moved.seconds(TASK, chrono::Utc::now()), (10 + 30 + 5) * 60);
 	let migrated = tokens(&raw);
 	// Both copies under the Google identity are deleted, to be sent.
@@ -1144,11 +1242,11 @@ fn devices_that_move_the_same_work_agree_and_others_receive_the_move() {
 		let mut expected = log.clone();
 		expected.sessions[0].task_key = TASK.into();
 		for path in [&a, &b, &c] {
-			assert_eq!(work_log(path), expected);
+			assert_eq!(work_without_ids(work_log(path)), expected);
 			assert!(sync::pending(&db(path)).unwrap().is_empty());
 		}
 		let (_d_dir, d) = database();
 		pull(&conn, &d).await;
-		assert_eq!(work_log(&d), expected);
+		assert_eq!(work_without_ids(work_log(&d)), expected);
 	});
 }

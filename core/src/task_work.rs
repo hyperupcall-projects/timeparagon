@@ -2,8 +2,21 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+/// An ID for a new session or distraction.
+pub fn new_id() -> String {
+	let mut bytes = [0_u8; 8];
+	getrandom::fill(&mut bytes).expect("work log identity needs system randomness");
+	bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Session {
+	/// Given when the session starts and never changed, so the session stays
+	/// the same stored row whatever else about it changes. Blank on a session
+	/// from before sessions had one: storage then works one out from its task
+	/// and start.
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub id: String,
 	pub task_key: String,
 	pub task_title: String,
 	pub block_key: Option<String>,
@@ -22,9 +35,23 @@ pub const DISTRACTION_MINUTES: [u32; 5] = [1, 5, 10, 15, 30];
 /// Time lost to something else while a time block was in focus.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Distraction {
+	/// As a [`Session`]'s: given when it is recorded, never changed, and blank
+	/// on one from before distractions had one.
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub id: String,
 	pub block_key: String,
 	pub minutes: u32,
 	pub recorded_at: DateTime<Utc>,
+}
+impl Distraction {
+	pub fn new(block_key: String, minutes: u32, recorded_at: DateTime<Utc>) -> Self {
+		Self {
+			id: new_id(),
+			block_key,
+			minutes,
+			recorded_at,
+		}
+	}
 }
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -69,6 +96,7 @@ impl WorkLog {
 		}
 		self.stop_all(now);
 		self.sessions.push(Session {
+			id: new_id(),
 			task_key: key,
 			task_title: title,
 			block_key: block,
@@ -108,11 +136,8 @@ mod tests {
 		let mut log = WorkLog::default();
 		assert!(log.is_empty());
 		for (block, minutes) in [("a", 5), ("b", 30), ("a", 10)] {
-			log.distractions.push(Distraction {
-				block_key: block.into(),
-				minutes,
-				recorded_at: at,
-			});
+			log.distractions
+				.push(Distraction::new(block.into(), minutes, at));
 		}
 		assert!(!log.is_empty());
 		assert_eq!(log.distracted("a"), (2, 15));
@@ -128,11 +153,11 @@ mod tests {
 		let old: WorkLog = toml::from_str("sessions = []").unwrap();
 		assert!(old.distractions.is_empty());
 		let mut log = WorkLog::default();
-		log.distractions.push(Distraction {
-			block_key: "block".into(),
-			minutes: 15,
-			recorded_at: DateTime::from_timestamp(1000, 0).unwrap(),
-		});
+		log.distractions.push(Distraction::new(
+			"block".into(),
+			15,
+			DateTime::from_timestamp(1000, 0).unwrap(),
+		));
 		let restored: WorkLog = toml::from_str(&toml::to_string(&log).unwrap()).unwrap();
 		assert_eq!(restored, log);
 	}

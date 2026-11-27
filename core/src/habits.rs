@@ -342,6 +342,12 @@ pub struct DayEntry {
 /// number, how much (such as how many minutes it went on for), with a comment.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LogEntry {
+	/// Given when the entry is first logged ([`Habit::set_log`]) and kept
+	/// through edits, so a changed entry stays the same stored row. Blank on
+	/// an entry not logged yet, and on one from before entries had one:
+	/// storage then works one out from what it records.
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub id: String,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub at: Option<NaiveTime>,
 	/// In the habit's unit, in thousandths, as `values` are.
@@ -355,6 +361,7 @@ pub struct LogEntry {
 impl LogEntry {
 	pub fn new(at: Option<NaiveTime>, amount: Option<f64>) -> Self {
 		Self {
+			id: String::new(),
 			at,
 			amount: amount.map(|amount| (amount.max(0.0) * 1000.0).round() as i64),
 			note: String::new(),
@@ -406,12 +413,19 @@ fn log_entries(count: u32, logged: &[LogEntry]) -> Vec<LogEntry> {
 	entries
 }
 
-/// Entries as they are stored: in order of time, blank ones left out.
+/// Entries as they are stored: in order of time, blank ones left out, each
+/// newly logged one given its ID.
 fn stored_entries(entries: &[LogEntry]) -> Vec<LogEntry> {
 	let mut entries: Vec<LogEntry> = entries
 		.iter()
 		.filter(|entry| !entry.is_blank())
 		.cloned()
+		.map(|mut entry| {
+			if entry.id.is_empty() {
+				entry.id = crate::habit_edit::new_id();
+			}
+			entry
+		})
 		.collect();
 	entries.sort_by_key(|entry| entry.at);
 	entries
@@ -2679,9 +2693,23 @@ mod tests {
 		let late = LogEntry::new(NaiveTime::from_hms_opt(23, 0, 0), Some(12.0));
 		habit.set_log(day, &[late.clone(), LogEntry::new(at, Some(6.0))], &[]);
 		let back: Habit = serde_json::from_str(&serde_json::to_string(&habit).unwrap()).unwrap();
-		assert_eq!(
-			back.happened_log_on(day),
-			vec![LogEntry::new(at, Some(6.0)), late]
-		);
+		let logged = back.happened_log_on(day);
+		let without_ids = |entries: &[LogEntry]| {
+			entries
+				.iter()
+				.map(|entry| LogEntry {
+					id: String::new(),
+					..entry.clone()
+				})
+				.collect::<Vec<_>>()
+		};
+		assert_eq!(without_ids(&logged), [LogEntry::new(at, Some(6.0)), late]);
+		// Each entry logged is given its own ID, and keeps it when it changes.
+		assert!(logged.iter().all(|entry| !entry.id.is_empty()));
+		assert_ne!(logged[0].id, logged[1].id);
+		let mut edited = logged.clone();
+		edited[0].note = "after dinner".into();
+		habit.set_log(day, &edited, &[]);
+		assert_eq!(habit.happened_log_on(day), edited);
 	}
 }

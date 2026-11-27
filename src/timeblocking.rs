@@ -2096,6 +2096,7 @@ mod tests {
 			.task_work
 			.sessions
 			.push(crate::task_work::Session {
+				id: "session".into(),
 				task_key: "task:deep".into(),
 				task_title: "Deep work".into(),
 				block_key: Some("work/block".into()),

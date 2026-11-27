@@ -660,6 +660,7 @@ mod tests {
 		};
 		state.config.task_work.sessions = vec![
 			crate::task_work::Session {
+				id: String::new(),
 				task_key: "100".into(),
 				task_title: "Write report".into(),
 				block_key: None,
@@ -667,6 +668,7 @@ mod tests {
 				stopped_at: Some(at(11)),
 			},
 			crate::task_work::Session {
+				id: String::new(),
 				task_key: "101".into(),
 				task_title: "Email".into(),
 				block_key: None,

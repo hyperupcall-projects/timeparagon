@@ -239,11 +239,11 @@ pub fn update(state: &mut State, action: Action) -> Task<Message> {
 				.config
 				.task_work
 				.distractions
-				.push(crate::task_work::Distraction {
-					block_key: key,
+				.push(crate::task_work::Distraction::new(
+					key,
 					minutes,
-					recorded_at: crate::clock::utc_now(),
-				});
+					crate::clock::utc_now(),
+				));
 			let saved = crate::app::queue_save(state);
 			return match cause {
 				Some(DistractionCause::Habit(id)) => {
@@ -374,6 +374,7 @@ fn resume_target(
 	now: chrono::DateTime<chrono::Utc>,
 ) -> crate::task_work::Session {
 	crate::task_work::Session {
+		id: String::new(),
 		task_key: task_key(task),
 		task_title: task.title.clone(),
 		block_key: block_key_of(state, task),

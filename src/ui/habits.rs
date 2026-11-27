@@ -1923,6 +1923,17 @@ mod tests {
 		let _ = crate::app::update(state, Message::Habits(action));
 	}
 
+	/// What a day's log records, without the IDs its entries are given.
+	fn without_ids(entries: Vec<model::LogEntry>) -> Vec<model::LogEntry> {
+		entries
+			.into_iter()
+			.map(|entry| model::LogEntry {
+				id: String::new(),
+				..entry
+			})
+			.collect()
+	}
+
 	fn list(state: &State) -> Simulator<'_, Message> {
 		Simulator::with_size(
 			iced_test::core::Settings::default(),
@@ -2156,7 +2167,7 @@ mod tests {
 			Status::Slipped(2)
 		);
 		assert_eq!(
-			habit.happened_log_on(today),
+			without_ids(habit.happened_log_on(today)),
 			vec![
 				LogEntry::new(time(20, 5), None),
 				LogEntry::new(time(23, 0), None)
@@ -2164,7 +2175,7 @@ mod tests {
 		);
 		assert_eq!(habit.resisted_on(today), 2);
 		assert_eq!(
-			habit.resisted_log_on(today)[1],
+			without_ids(habit.resisted_log_on(today))[1],
 			LogEntry::new(time(9, 30), None)
 		);
 
@@ -2235,7 +2246,7 @@ mod tests {
 			assert!(state.habits.day_dialog.is_none(), "{kind:?}");
 			let habit = state.habits.library.habit("h").unwrap();
 			assert_eq!(
-				habit.happened_log_on(today),
+				without_ids(habit.happened_log_on(today)),
 				vec![
 					LogEntry::new(NaiveTime::from_hms_opt(20, 5, 0), Some(6.0)),
 					LogEntry::new(NaiveTime::from_hms_opt(23, 0, 0), Some(12.0)),

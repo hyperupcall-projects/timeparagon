@@ -347,12 +347,18 @@ these three legacy keys to the tables, so callers cannot recreate JSON blobs.
 | `task_work_sessions` | `id` | `task_key`, `task_title`, `block_key`, `started_at`, `stopped_at`, `position` |
 | `task_work_distractions` | `id` | `block_key`, `minutes`, `recorded_at`, `position` |
 
-A log entry's `id` is a hash of its kind, time, amount and note, numbered
-among identical entries that day (`codec::log_entry_id`). Two devices that each
-log an entry while offline add two rows, where keying by position made both
-write position 0 and kept only one. Changing an entry replaces its row. A day's
-entries are read in order of time; `position` orders only entries logged at
-the same time, so removing one entry rewrites no others.
+Log entries, work sessions and distractions each have an `id` of their own,
+given when they are made (`Habit::set_log`, `WorkLog::start`,
+`Distraction::new`) and kept in the model, so changing one updates its row:
+a log entry's time or note edited in the day's dialog, or a session's times
+edited in focus mode. Two devices that each log an entry while offline add two
+rows, even when the entries are identical. Rows from before these had an ID
+keep the one they were stored under, which the codec works out the same way
+for data without one: a hash of what it records (a log entry's kind, time,
+amount and note; a session's task key and start; a distraction's block key and
+time), numbered among identical ones (`codec::stable_id`). A day's entries are
+read in order of time; `position` orders only entries logged at the same time,
+so removing one entry rewrites no others.
 
 The local tables are `STRICT`, so a value of the wrong type is refused rather
 than stored. `STRICT` has no `BOOLEAN`: those columns are `INTEGER` with
@@ -366,11 +372,8 @@ each column's type, since their tombstones leave the other columns empty.
 
 Habit children have foreign keys with cascading deletion. Deleting a section
 sets its habits' section to NULL. Dates and timestamps use the typed models'
-ISO representations. Work row IDs are deterministic hashes of immutable task/
-block and timestamp identities plus an occurrence number, preserving identical
-legacy distractions. A session's ID remains stable when it stops. Area and
-task/block identifiers refer to features outside these normalized tables and
-have no local foreign key.
+ISO representations. Area and task/block identifiers refer to features
+outside these normalized tables and have no local foreign key.
 
 Indexes support habit-date, section, task-session and block-history queries.
 The usual change counters watch all these tables, including received writes.

@@ -619,8 +619,9 @@ Stored in `habits`, `habit_sections`, `habit_weekdays`, `habit_days`,
 ```
 
 `Mark`: `"yes"`, `{"reps": 3}` (done 3 times that day), `"no"`, `"skip"`.
-A day with no mark has no answer. `LogEntry` is `{at?: "HH:MM:SS", amount?:
-thousandths, note?}`.
+A day with no mark has no answer. `LogEntry` is `{id?, at?: "HH:MM:SS",
+amount?: thousandths, note?}`. `id` is given when the entry is first logged and
+kept through edits; it is absent on an entry not logged yet.
 
 Statuses computed from the record (not stored): `Yes`, `Auto` (covered by an
 earlier repetition), `Partial(n)`, `No`, `Skip`, `Unknown`, `Clean` /
@@ -797,12 +798,12 @@ shared core type `task_work::WorkLog` retains this in-memory shape:
 ```json
 {
   "sessions": [
-    {"task_key": "2875093487120931", "task_title": "Write report",
-     "block_key": "abc@group…/5ok3…",
+    {"id": "9c41e07b2a5d83f6", "task_key": "2875093487120931",
+     "task_title": "Write report", "block_key": "abc@group…/5ok3…",
      "started_at": "2026-11-09T09:00:00Z", "stopped_at": "2026-11-09T09:25:00Z"}
   ],
   "distractions": [
-    {"block_key": "abc@group…/5ok3…", "minutes": 5,
+    {"id": "e2b7105d9f3a6c48", "block_key": "abc@group…/5ok3…", "minutes": 5,
      "recorded_at": "2026-11-09T09:12:00Z"}
   ]
 }
