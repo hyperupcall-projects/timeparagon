@@ -124,11 +124,34 @@ pub(super) fn forget_task(task_id: &str) {
 }
 
 pub(crate) fn install_schema(db: &Connection) -> rusqlite::Result<()> {
-	db.execute_batch(CREATE)
+	db.execute_batch(CREATE)?;
+	// Schema 13: views read only the rows of their dates, and every task.
+	let has_task: bool = db.query_row(
+		"SELECT EXISTS(SELECT 1 FROM pragma_table_xinfo('google_sync_events') WHERE name='task')",
+		[],
+		|r| r.get(0),
+	)?;
+	if !has_task {
+		// Derived from the stored event, so every writer, old or new, keeps it
+		// right. Mirrors `Event::is_task`, which a test holds it to. A damaged
+		// row counts as no task rather than failing the index that uses this.
+		db.execute_batch(&format!(
+			"ALTER TABLE google_sync_events ADD COLUMN task INTEGER GENERATED ALWAYS AS (
+                CASE WHEN json_valid(event)
+                    THEN json_extract(event,'$.details.task_data') IS NOT NULL ELSE 0 END
+                OR id GLOB '{task}*' OR calendar_id GLOB '{list}*') VIRTUAL;",
+			task = crate::calendar::ids::TASK,
+			list = crate::calendar::ids::TASK_LIST,
+		))?;
+	}
+	db.execute_batch(
+		"CREATE INDEX IF NOT EXISTS google_sync_events_time ON google_sync_events (end_at, start_at);
+         CREATE INDEX IF NOT EXISTS google_sync_events_tasks ON google_sync_events (end_at) WHERE task;",
+	)
 }
 
 /// A UTC instant in one fixed format, so stored times compare as text.
-fn stamp(at: DateTime<Utc>) -> String {
+pub(in crate::calendar) fn stamp(at: DateTime<Utc>) -> String {
 	at.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 

@@ -780,7 +780,7 @@ fn record_in(
 			.cloned()
 			.unwrap_or_else(|| deleted_block(calendar, id));
 		let hour = crate::config::Config::load().calendar.day_start_hour();
-		let children = super::repository::events(&tx)?;
+		let children = super::repository::events(&tx, None)?;
 
 		if with_tasks.is_some() {
 			// The one-offs in every occurrence deleted go with them. Tasks

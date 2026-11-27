@@ -3,7 +3,7 @@
 
 use super::{Calendar, Event, Snapshot, at_clock, on_any_day, operations, range_bounds};
 use crate::task_db::{Database, keys};
-use chrono::{DateTime, Local, NaiveDate};
+use chrono::{DateTime, Duration, Local, NaiveDate, Utc};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, path::Path};
@@ -59,8 +59,8 @@ pub fn read(path: &Path, dates: &[NaiveDate], hour: u32) -> Result<Read, String>
 		.transaction()
 		.map_err(|e| e.to_string())?;
 	let state = state(&tx)?;
-	let mut events = events(&tx)?;
 	let bounds = range_bounds(dates, hour);
+	let mut events = events(&tx, Some(window(&bounds)))?;
 	events.retain(|event| on_any_day(event, &bounds));
 	let mut covered = Vec::new();
 	for &day in dates {
@@ -92,28 +92,75 @@ pub fn read(path: &Path, dates: &[NaiveDate], hour: u32) -> Result<Read, String>
 	})
 }
 
+/// What to read from the stored rows for a range: from two days before it
+/// to two days after. All-day events are matched by their dates where they
+/// are, which can be most of a day either side of their stored UTC times;
+/// the margin only widens what is parsed, and [`on_any_day`] decides.
+fn window(bounds: &super::RangeBounds) -> (DateTime<Utc>, DateTime<Utc>) {
+	let margin = Duration::days(2);
+	let start = bounds.iter().map(|(_, (start, _))| *start).min();
+	let end = bounds.iter().map(|(_, (_, end))| *end).max();
+	match start.zip(end) {
+		Some((start, end)) => (start.to_utc() - margin, end.to_utc() + margin),
+		None => (DateTime::<Utc>::MAX_UTC, DateTime::<Utc>::MIN_UTC),
+	}
+}
+
 /// Source ownership is exclusive: Calendar rows own calendar tasks, Tasks rows
 /// own Google Tasks, and the stored sleep table owns nights. Local operations
 /// are the sole authority over changes that Google has not yet superseded.
-pub(super) fn events(connection: &Connection) -> Result<Vec<Event>, String> {
+///
+/// With a `window`, only rows overlapping it are read, plus every task, which
+/// is on every day (see `event_on_day_within`). Local operations are applied
+/// in full either way, so an edit that moves an item into the window shows.
+pub(super) fn events(
+	connection: &Connection,
+	window: Option<(DateTime<Utc>, DateTime<Utc>)>,
+) -> Result<Vec<Event>, String> {
+	// The rows of the window, then the tasks outside it: each part has an index.
+	const IN_WINDOW: &str = "end_at > ?1 AND start_at < ?2";
+	let (calendar, sleep) = match window {
+		Some(_) => (
+			format!(
+				"SELECT event FROM google_sync_events WHERE {IN_WINDOW}
+                 UNION ALL SELECT event FROM google_sync_events WHERE task AND NOT ({IN_WINDOW})"
+			),
+			format!("SELECT event FROM sleep_nights WHERE {IN_WINDOW}"),
+		),
+		None => (
+			"SELECT event FROM google_sync_events".to_owned(),
+			"SELECT event FROM sleep_nights".to_owned(),
+		),
+	};
+	let bounds = window
+		.map(|(start, end)| {
+			vec![
+				super::api::incremental::stamp(start),
+				super::api::incremental::stamp(end),
+			]
+		})
+		.unwrap_or_default();
 	let mut events = Vec::new();
-	for (table, accepts) in [
+	for (sql, parameters, accepts) in [
 		(
-			"google_sync_events",
+			calendar.as_str(),
+			&bounds[..],
 			(|event: &Event| event.details.sleep.is_none()) as fn(&Event) -> bool,
 		),
-		("google_task_records", |event: &Event| {
-			!event.is_calendar_task()
-		}),
-		("sleep_nights", |event: &Event| {
+		(
+			"SELECT event FROM google_task_records",
+			&[][..],
+			|event: &Event| !event.is_calendar_task(),
+		),
+		(sleep.as_str(), &bounds[..], |event: &Event| {
 			event.details.sleep.is_some()
 		}),
 	] {
-		let mut query = connection
-			.prepare(&format!("SELECT event FROM {table}"))
-			.map_err(|e| e.to_string())?;
+		let mut query = connection.prepare(sql).map_err(|e| e.to_string())?;
 		for row in query
-			.query_map([], |r| r.get::<_, String>(0))
+			.query_map(rusqlite::params_from_iter(parameters), |r| {
+				r.get::<_, String>(0)
+			})
 			.map_err(|e| e.to_string())?
 		{
 			let event: Event = serde_json::from_str(&row.map_err(|e| e.to_string())?)
@@ -164,7 +211,7 @@ pub fn all_events(path: &Path) -> Result<Vec<Event>, String> {
 		.connection()
 		.transaction()
 		.map_err(|e| e.to_string())?;
-	events(&tx)
+	events(&tx, None)
 }
 
 pub fn event(path: &Path, calendar: &str, id: &str) -> Result<Option<Event>, String> {
@@ -221,7 +268,123 @@ pub(super) fn seed(path: &Path, snapshot: &Snapshot, dates: &[NaiveDate], hour: 
 mod tests {
 	use super::*;
 	use crate::calendar::{Store, sample_snapshot};
-	use chrono::Duration;
+	use crate::task_db::TaskData;
+
+	fn task_flags(path: &Path) -> Vec<(String, bool)> {
+		let mut database = Database::open(path).unwrap();
+		let connection = database.connection();
+		let mut query = connection
+			.prepare("SELECT id,task FROM google_sync_events ORDER BY id")
+			.unwrap();
+		query
+			.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+			.unwrap()
+			.collect::<rusqlite::Result<_>>()
+			.unwrap()
+	}
+
+	/// A plain event, a calendar task long before `day`, and a Google Task
+	/// stored as an event, as an older build may have left one.
+	fn seed_tasks(path: &Path, day: NaiveDate) -> Vec<Event> {
+		let event = |id: &str, calendar: &str, start: DateTime<Local>| Event {
+			id: id.into(),
+			calendar_id: calendar.into(),
+			title: id.into(),
+			start,
+			end: start + Duration::hours(1),
+			all_day: false,
+			color: crate::calendar::colors::DEFAULT_EVENT,
+			completed: false,
+			details: Default::default(),
+		};
+		let noon = at_clock(day, 12, 0);
+		let mut task = event("old-task", "personal", noon - Duration::days(60));
+		task.details.task_data = Some(TaskData {
+			id: 500,
+			metadata: Default::default(),
+		});
+		let events = vec![
+			event("plain", "personal", noon),
+			event("far", "personal", noon - Duration::days(60)),
+			task,
+			event("task:listed", "tasks:list", noon - Duration::days(60)),
+		];
+		let mut database = Database::open(path).unwrap();
+		let tx = database.connection().transaction().unwrap();
+		for event in &events {
+			super::super::api::incremental::store(&tx, event, false).unwrap();
+		}
+		tx.commit().unwrap();
+		events
+	}
+
+	#[test]
+	fn the_task_column_agrees_with_event_is_task() {
+		let dir = tempfile::tempdir().unwrap();
+		let path = dir.path().join("calendar.sqlite3");
+		let mut events = seed_tasks(&path, sample_snapshot().day);
+		events.sort_by(|a, b| a.id.cmp(&b.id));
+		let expected = events
+			.iter()
+			.map(|e| (e.id.clone(), e.is_task()))
+			.collect::<Vec<_>>();
+		assert_eq!(task_flags(&path), expected);
+		assert_eq!(expected.iter().filter(|(_, task)| *task).count(), 2);
+	}
+
+	#[test]
+	fn a_range_parses_only_its_own_rows_and_every_task() {
+		let dir = tempfile::tempdir().unwrap();
+		let path = dir.path().join("calendar.sqlite3");
+		let snapshot = sample_snapshot();
+		let day = snapshot.day;
+		seed(&path, &snapshot, &[day], 0);
+		seed_tasks(&path, day);
+		let mut expected = all_events(&path).unwrap();
+		expected.retain(|event| on_any_day(event, &range_bounds(&[day], 0)));
+		assert!(expected.iter().any(|e| e.id == "old-task"));
+		assert!(expected.iter().all(|e| e.id != "far"));
+		assert_eq!(read(&path, &[day], 0).unwrap().snapshot.events, expected);
+		// A row far from the range is not even parsed.
+		let mut database = Database::open(&path).unwrap();
+		database
+			.connection()
+			.execute(
+				"UPDATE google_sync_events SET event='not json' WHERE id='far'",
+				[],
+			)
+			.unwrap();
+		assert_eq!(read(&path, &[day], 0).unwrap().snapshot.events, expected);
+		assert!(all_events(&path).is_err());
+	}
+
+	#[test]
+	fn schema_12_gains_the_task_column_and_indexes() {
+		let dir = tempfile::tempdir().unwrap();
+		let path = dir.path().join("calendar.sqlite3");
+		seed_tasks(&path, sample_snapshot().day);
+		let expected = task_flags(&path);
+		let mut database = Database::open(&path).unwrap();
+		database
+			.connection()
+			.execute_batch(
+				"DROP INDEX google_sync_events_time; DROP INDEX google_sync_events_tasks;
+                 ALTER TABLE google_sync_events DROP COLUMN task; PRAGMA user_version=12;",
+			)
+			.unwrap();
+		drop(database);
+		assert_eq!(task_flags(&path), expected);
+		let mut database = Database::open(&path).unwrap();
+		let indexes: i64 = database
+			.connection()
+			.query_row(
+				"SELECT count(*) FROM sqlite_master WHERE name IN ('google_sync_events_time','google_sync_events_tasks')",
+				[],
+				|r| r.get(0),
+			)
+			.unwrap();
+		assert_eq!(indexes, 2);
+	}
 
 	#[test]
 	fn an_empty_fetched_day_has_coverage_after_restart_and_navigation_is_read_only() {

@@ -38,15 +38,16 @@ The schema version is stored in `PRAGMA user_version`.
 | `user_version` | Meaning |
 | --- | --- |
 | `0` | New file. `Database::open` creates the schema. |
-| `2` through `11` | Upgraded to 12 on open: see below. |
+| `2` through `12` | Upgraded to 13 on open: see below. |
 | `6` | Like 5, with the app's tables, indexes and triggers prefixed `timeparagon_` instead of `timeslay_`, and the built-in calendar sources' IDs prefixed `timeparagon:` instead of `timeslay:`. |
 | `7` | Adds the synced `notes` metadata table. |
 | `8` | Creates the incremental Google sync cache during upgrade and reinstalls synced data tables and triggers. |
 | `9` | Removes monthly view snapshots, separates confirmed tasks from desired edits, and tracks changes to all calendar inputs. |
 | `10` | Keeps every shared setting in `settings`, and no longer replicates `sleep_nights`. |
 | `11` | Normalizes habits, brain dumps and task work; replicates those as native Turso rows. |
-| `12` | Current (`task_db::SCHEMA_VERSION`). Habit log entries are keyed by an ID instead of their position (`habit_log_entries` becomes `habit_entries`). |
-| anything else | Refused: `Unsupported database schema N; expected 12`. |
+| `12` | Habit log entries are keyed by an ID instead of their position (`habit_log_entries` becomes `habit_entries`). |
+| `13` | Current (`task_db::SCHEMA_VERSION`). `google_sync_events` gains the generated `task` column and two indexes, so a view reads only its own dates' rows. |
+| anything else | Refused: `Unsupported database schema N; expected 13`. |
 
 Builds from before version 5 refuse a version 5 file, so every TimeParagon
 process on a device (panel, dock, shortcut daemon, browser host) has to be
@@ -58,6 +59,11 @@ Every statement in setup is idempotent (`CREATE … IF NOT EXISTS`,
 processes setting up at once, or a crash halfway through, cause no harm. Once a
 file is stamped with the current version, setup is skipped, because the apps
 open the database many times a minute.
+
+**12 → 13** (`calendar::api::incremental::install_schema`) adds
+`google_sync_events.task` and the indexes `google_sync_events_time` and
+`google_sync_events_tasks` (see [Incremental Google sync cache](#incremental-google-sync-cache)).
+Nothing is rewritten: the column is computed from each row's event.
 
 **11 → 12** (`relational::migrate_log_entries`) moves each row of
 `habit_log_entries`, keyed by `(habit_id, date, kind, position)`, into
@@ -446,8 +452,12 @@ to `google_sync_events`. Desired local changes live only in `google_entities`;
 a rejected edit reveals the confirmed row without a rollback copy.
 
 All calendar consumers call `calendar::repository::read`. In one read
-transaction it reads the confirmed source rows, applies local operations once,
-filters the requested dates and sorts the result. `sleep_nights` owns sleep
+transaction it reads the confirmed source rows for the requested dates (two
+days either side, since all-day events are matched by their local dates), and
+every task, which shows on every day. It applies local operations once, all of
+them, so an edit that moves an item into the range shows. Then it filters the
+requested dates exactly and sorts the result. Rows outside the range are not
+parsed. `repository::all_events` reads every row. `sleep_nights` owns sleep
 records; sleep copies in the Google feed are excluded from view assembly.
 The result includes explicit date coverage and a database revision. An empty
 covered date is a cache hit, and an uncovered date can still show local items.
@@ -468,7 +478,13 @@ Schema 8 creates these device-local tables before Google sync runs:
 | `google_sync_tasks` | Task JSON keyed by list and task ID |
 
 `google_sync_events_series` indexes `(calendar_id, series)` for refreshing
-recurring occurrences. These tables are not replicated. Full sync clears their
+recurring occurrences. `google_sync_events.task` is a virtual generated column,
+true when the stored event is a task as `Event::is_task` decides (it has
+`details.task_data`, or a Google Tasks ID or list); a row whose JSON is damaged
+counts as no task. `google_sync_events_time` on `(end_at, start_at)` finds a
+range's rows, and the partial index `google_sync_events_tasks` (`WHERE task`)
+finds the tasks outside it. Both compare `start_at`/`end_at` as text, so they are
+always written in one format: UTC, whole seconds, `Z`. These tables are not replicated. Full sync clears their
 rows and rebuilds the cache from Google.
 
 ---
