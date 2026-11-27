@@ -204,26 +204,47 @@ pub(crate) async fn send(conn: &turso::Connection, changes: &[Change]) -> io::Re
 				.map(|c| c.0)
 				.chain(["sync_revision", "sync_deleted"])
 				.collect::<Vec<_>>();
-			let update = names[table.keys..]
-				.iter()
-				.map(|n| format!("{n}=excluded.{n}"))
-				.collect::<Vec<_>>()
-				.join(",");
-			let keys = names[..table.keys].join(",");
+			let placeholders = |names: &[&str], separator: &str| {
+				names
+					.iter()
+					.map(|n| format!("{n}=?"))
+					.collect::<Vec<_>>()
+					.join(separator)
+			};
 			let mut values = row.iter().map(native).collect::<io::Result<Vec<_>>>()?;
 			values.push(turso::Value::Text(c.revision.clone()));
 			values.push(turso::Value::Integer(i64::from(c.deleted)));
-			conn.execute(
-				&format!(
-					"INSERT INTO {}({}) VALUES({}) ON CONFLICT({keys}) DO UPDATE SET {update}",
-					table.name,
-					names.join(","),
-					vec!["?"; names.len()].join(",")
-				),
-				values,
-			)
-			.await
-			.map_err(error)?;
+			// Not an upsert: with change capture on, turso 0.8.3 misreads a row
+			// that ON CONFLICT DO UPDATE resizes and fails as "Corrupt".
+			let updated = conn
+				.execute(
+					&format!(
+						"UPDATE {} SET {} WHERE {}",
+						table.name,
+						placeholders(&names[table.keys..], ","),
+						placeholders(&names[..table.keys], " AND ")
+					),
+					values[table.keys..]
+						.iter()
+						.chain(&values[..table.keys])
+						.cloned()
+						.collect::<Vec<_>>(),
+				)
+				.await
+				.map_err(error)?;
+			if updated == 0 {
+				conn.execute(
+					&format!(
+						"INSERT INTO {}({}) VALUES({})",
+						table.name,
+						names.join(","),
+						vec!["?"; names.len()].join(",")
+					),
+					values,
+				)
+				.await
+				.map_err(error)?;
+			}
 		}
 		// The cutover marker is committed with the seed rows. An interrupted
 		// push cannot publish the marker ahead of its migrated data.

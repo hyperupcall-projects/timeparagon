@@ -328,6 +328,10 @@ async fn server(path: &Path) -> (turso::Database, turso::Connection) {
 		.await
 		.unwrap();
 	let conn = db.connect().unwrap();
+	// The sync engine records every write on its connection; match it.
+	conn.execute("PRAGMA capture_data_changes_conn('full,turso_cdc')", ())
+		.await
+		.unwrap();
 	sync::install(&conn).await.unwrap();
 	conn.execute(
 		"CREATE TABLE timeparagon_revisions_v1(id TEXT PRIMARY KEY,payload TEXT NOT NULL)",
@@ -405,6 +409,48 @@ fn native_tables_round_trip_offline_edits_deletions_and_all_scalar_types() {
 		let raw = db(&p2);
 		let changes = sync::receive(&conn, &raw).await.unwrap();
 		assert!(changes.is_empty());
+	});
+}
+#[test]
+fn stopping_a_work_session_beside_others_syncs_the_longer_row() {
+	runtime().block_on(async {
+		let (d1, p1) = database();
+		let (_d2, p2) = database();
+		let (_server, conn) = server(&d1.path().join("remote.db")).await;
+		let block = format!(
+			"{}@group.calendar.google.com/{}",
+			"a".repeat(64),
+			"b".repeat(32)
+		);
+		let mut w = crate::task_work::WorkLog::default();
+		for i in 0..7 {
+			let at = DateTime::from_timestamp(1000 + i * 60, 598590497).unwrap();
+			w.start(
+				format!("task:{i}"),
+				format!("Study session {i}"),
+				Some(block.clone()),
+				at,
+			);
+		}
+		task_db::write_document(&p1, "shared.task_work", &w).unwrap();
+		send(&conn, &p1).await;
+		// Stopping the active session lengthens a row that shares its page.
+		w.stop_all(DateTime::from_timestamp(2000, 235675389).unwrap());
+		task_db::write_document(&p1, "shared.task_work", &w).unwrap();
+		// A retry after a lost acknowledgement resends identical rows.
+		let raw = db(&p1);
+		let pending = sync::pending(&raw).unwrap();
+		assert_eq!(pending.len(), 1);
+		sync::send(&conn, &pending).await.unwrap();
+		sync::send(&conn, &pending).await.unwrap();
+		sync::acknowledge(&raw, &pending).unwrap();
+		pull(&conn, &p2).await;
+		assert_eq!(
+			task_db::read_document::<crate::task_work::WorkLog>(&p2, "shared.task_work")
+				.unwrap()
+				.unwrap(),
+			w
+		);
 	});
 }
 #[test]
