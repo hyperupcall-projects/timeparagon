@@ -294,6 +294,7 @@ async fn receive_inner(
 			.await
 			.map_err(error)?;
 		let mut wanted = Vec::new();
+		let mut on_server = std::collections::HashSet::new();
 		while let Some(row) = rows.next().await.map_err(error)? {
 			let key_values = (0..table.keys)
 				.map(|j| from_native(row.get_value(j).map_err(error)?, table.columns[j].1))
@@ -303,10 +304,14 @@ async fn receive_inner(
 			let deleted = row.get::<i64>(table.keys + 1).map_err(error)? != 0;
 			let same: bool=db.query_row("SELECT EXISTS(SELECT 1 FROM timeparagon_relational_state WHERE table_name=?1 AND row_key=?2 AND revision=?3 AND dirty=0)",params![table.name,key,revision],|r|r.get(0)).map_err(error)?;
 			if force || !same {
-				wanted.push((key, key_values, revision, deleted));
+				wanted.push((key.clone(), key_values, revision, deleted));
 			}
+			on_server.insert(key);
 		}
 		drop(rows);
+		if !force {
+			resend_missing(db, table, &on_server)?;
+		}
 		for (key, key_values, revision, deleted) in wanted {
 			let row = if deleted {
 				None
@@ -354,6 +359,40 @@ async fn receive_inner(
 		}
 	}
 	Ok(result)
+}
+/// Queues again each row this device holds as sent or received that the
+/// server has no trace of. Remote tombstones never expire, so this only
+/// happens to rows the server never had: rows a schema upgrade moved to a new
+/// table, or a server that lost data. Rows the server has, at any revision,
+/// are left to the ordinary exchange, so a newer edit there is not overwritten.
+fn resend_missing(
+	db: &Connection,
+	table: &Table,
+	on_server: &std::collections::HashSet<String>,
+) -> io::Result<()> {
+	let local = db
+		.prepare(
+			"SELECT row_key,deleted FROM timeparagon_relational_state WHERE table_name=?1 AND dirty=0",
+		)
+		.and_then(|mut q| {
+			q.query_map([table.name], |r| {
+				Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?))
+			})?
+			.collect::<rusqlite::Result<Vec<_>>>()
+		})
+		.map_err(error)?;
+	for (key, deleted) in local.iter().filter(|(key, _)| !on_server.contains(key)) {
+		// The outbox can only send a live row that is still here.
+		if !deleted && table.read_one(db, key)?.is_none() {
+			continue;
+		}
+		db.execute(
+			"UPDATE timeparagon_relational_state SET dirty=1 WHERE table_name=?1 AND row_key=?2 AND dirty=0",
+			params![table.name, key],
+		)
+		.map_err(error)?;
+	}
+	Ok(())
 }
 fn from_native(v: turso::Value, ty: &str) -> io::Result<Value> {
 	Ok(match v {

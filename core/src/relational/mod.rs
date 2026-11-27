@@ -44,8 +44,10 @@ pub(crate) const TABLES: &[Table] = &[
 	table!("habit_weekdays", "habits", 2, ", FOREIGN KEY(habit_id) REFERENCES habits(id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED", "habit_id"=>"TEXT", "weekday"=>"INTEGER CHECK(weekday BETWEEN 0 AND 6)"),
 	table!("habit_days", "habits", 2, ", FOREIGN KEY(habit_id) REFERENCES habits(id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED",
         "habit_id"=>"TEXT", "date"=>"TEXT", "mark"=>"TEXT CHECK(mark IN ('yes','no','skip','reps'))", "repetitions"=>"INTEGER", "resisted"=>"INTEGER", "value"=>"INTEGER", "has_log"=>"BOOLEAN NOT NULL"),
-	table!("habit_log_entries", "habits", 4, ", FOREIGN KEY(habit_id,date) REFERENCES habit_days(habit_id,date) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED",
-        "habit_id"=>"TEXT", "date"=>"TEXT", "kind"=>"TEXT CHECK(kind IN ('happened','resisted'))", "position"=>"INTEGER", "at"=>"TEXT", "amount"=>"INTEGER", "note"=>"TEXT NOT NULL"),
+	// Keyed by a content-derived ID (see `codec::log_entry_id`), not by position,
+	// so entries logged on two devices at once are both kept.
+	table!("habit_entries", "habits", 3, ", FOREIGN KEY(habit_id,date) REFERENCES habit_days(habit_id,date) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED",
+        "habit_id"=>"TEXT", "date"=>"TEXT", "id"=>"TEXT", "kind"=>"TEXT NOT NULL CHECK(kind IN ('happened','resisted'))", "position"=>"INTEGER NOT NULL", "at"=>"TEXT", "amount"=>"INTEGER", "note"=>"TEXT NOT NULL"),
 	table!("habit_preferences", "habits", 1, "", "id"=>"INTEGER CHECK(id=1)", "sort"=>"TEXT NOT NULL", "reversed"=>"BOOLEAN NOT NULL", "hide_archived"=>"BOOLEAN NOT NULL", "hide_completed"=>"BOOLEAN NOT NULL", "score_bucket"=>"TEXT NOT NULL", "history_bucket"=>"TEXT NOT NULL"),
 	table!("brain_dump_entries", "shared.brain_dump", 1, "", "date"=>"TEXT", "text"=>"TEXT NOT NULL", "position"=>"INTEGER NOT NULL"),
 	table!("task_work_sessions", "shared.task_work", 1, "", "id"=>"TEXT", "task_key"=>"TEXT NOT NULL", "task_title"=>"TEXT NOT NULL", "block_key"=>"TEXT", "started_at"=>"TEXT NOT NULL", "stopped_at"=>"TEXT", "position"=>"INTEGER NOT NULL"),
@@ -269,6 +271,7 @@ pub(crate) fn install(db: &Connection) -> io::Result<()> {
         CREATE INDEX IF NOT EXISTS task_work_sessions_task ON task_work_sessions(task_key,started_at);
         CREATE INDEX IF NOT EXISTS task_work_sessions_block ON task_work_sessions(block_key,started_at);
         CREATE INDEX IF NOT EXISTS task_work_distractions_block ON task_work_distractions(block_key,recorded_at);").map_err(error)?;
+	migrate_log_entries(db)?;
 	for key in ["habits", "shared.brain_dump", "shared.task_work"] {
 		let legacy: Option<String> = db
 			.query_row("SELECT value FROM documents WHERE key=?1", [key], |r| {
@@ -331,6 +334,125 @@ pub(crate) fn install(db: &Connection) -> io::Result<()> {
 	}
 	Ok(())
 }
+/// Schema 12: `habit_log_entries`, keyed by `(habit_id, date, kind, position)`,
+/// becomes `habit_entries`, keyed by `(habit_id, date, id)`. Each entry keeps
+/// its sync token and whether it still has to be sent, under its new key, so
+/// devices that migrate the same synced rows agree on them. An unsent deletion
+/// cannot be carried over (the deleted entry's content, which its new ID comes
+/// from, is gone) and is dropped. The server's old table is left for builds
+/// that still use it. Idempotent: does nothing once the old table is gone.
+fn migrate_log_entries(db: &Connection) -> io::Result<()> {
+	const OLD: &str = "habit_log_entries";
+	let exists: bool = db
+		.query_row(
+			"SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+			[OLD],
+			|r| r.get(0),
+		)
+		.map_err(error)?;
+	if !exists {
+		return Ok(());
+	}
+	let table = TABLES
+		.iter()
+		.find(|t| t.name == "habit_entries")
+		.expect("habit_entries is a relational table");
+	let mut renamed = BTreeMap::<String, String>::new();
+	let mut rows = Vec::new();
+	{
+		let mut query = db
+			.prepare(&format!(
+				"SELECT habit_id,date,kind,position,at,amount,note FROM {OLD} ORDER BY habit_id,date,kind,position"
+			))
+			.map_err(error)?;
+		let mut result = query.query([]).map_err(error)?;
+		let mut counts = BTreeMap::<(String, String), BTreeMap<String, usize>>::new();
+		while let Some(row) = result.next().map_err(error)? {
+			let habit: String = row.get(0).map_err(error)?;
+			let date: String = row.get(1).map_err(error)?;
+			let kind: String = row.get(2).map_err(error)?;
+			let position: i64 = row.get(3).map_err(error)?;
+			let at: Value = row.get::<_, Option<String>>(4).map_err(error)?.into();
+			let amount: Value = row.get::<_, Option<i64>>(5).map_err(error)?.into();
+			let note: String = row.get(6).map_err(error)?;
+			let id = codec::log_entry_id(
+				&kind,
+				&at,
+				&amount,
+				&note,
+				counts.entry((habit.clone(), date.clone())).or_default(),
+			);
+			let old_key = serde_json::json!([habit, date, kind, position]).to_string();
+			renamed.insert(old_key, serde_json::json!([habit, date, id]).to_string());
+			rows.push(vec![
+				habit.into(),
+				date.into(),
+				id.into(),
+				kind.into(),
+				position.into(),
+				at,
+				amount,
+				note.into(),
+			]);
+		}
+	}
+	// The copies are not new edits: their sync state moves with them below.
+	let projecting: i64 = db
+		.query_row(
+			"SELECT projecting FROM timeparagon_relational_control WHERE id=1",
+			[],
+			|r| r.get(0),
+		)
+		.map_err(error)?;
+	db.execute(
+		"UPDATE timeparagon_relational_control SET projecting=1 WHERE id=1",
+		[],
+	)
+	.map_err(error)?;
+	for row in &rows {
+		table.upsert(db, row)?;
+	}
+	let states = db
+		.prepare(
+			"SELECT row_key,revision,deleted,dirty FROM timeparagon_relational_state WHERE table_name=?1",
+		)
+		.and_then(|mut q| {
+			q.query_map([OLD], |r| {
+				Ok((
+					r.get::<_, String>(0)?,
+					r.get::<_, String>(1)?,
+					r.get::<_, i64>(2)?,
+					r.get::<_, i64>(3)?,
+				))
+			})?
+			.collect::<rusqlite::Result<Vec<_>>>()
+		})
+		.map_err(error)?;
+	for (key, revision, deleted, dirty) in states {
+		if let (0, Some(key)) = (deleted, renamed.get(&key)) {
+			db.execute(
+				"INSERT INTO timeparagon_relational_state VALUES(?1,?2,?3,0,?4) ON CONFLICT(table_name,row_key) DO UPDATE SET revision=excluded.revision,deleted=0,dirty=excluded.dirty",
+				params![table.name, key, revision, dirty],
+			)
+			.map_err(error)?;
+		}
+	}
+	db.execute(
+		"DELETE FROM timeparagon_relational_state WHERE table_name=?1",
+		[OLD],
+	)
+	.map_err(error)?;
+	// Also drops its triggers.
+	db.execute_batch(&format!("DROP TABLE {OLD};"))
+		.map_err(error)?;
+	db.execute(
+		"UPDATE timeparagon_relational_control SET projecting=?1 WHERE id=1",
+		[projecting],
+	)
+	.map_err(error)?;
+	Ok(())
+}
+
 pub(crate) fn initialized(db: &Connection, key: &str) -> io::Result<bool> {
 	db.query_row(
 		"SELECT EXISTS(SELECT 1 FROM timeparagon_relational_initialized WHERE key=?1)",

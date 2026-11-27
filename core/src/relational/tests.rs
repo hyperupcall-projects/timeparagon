@@ -49,13 +49,14 @@ fn library() -> Library {
 	a.log.insert(
 		day(1),
 		DayLog {
+			// In order of time, as `Habit::set_log` keeps them.
 			happened: vec![
+				LogEntry::default(),
 				LogEntry {
 					at: Some(NaiveTime::from_hms_opt(10, 20, 30).unwrap()),
 					amount: Some(1250),
 					note: "hello".into(),
 				},
-				LogEntry::default(),
 			],
 			resisted: vec![LogEntry::new(None, Some(2.0))],
 		},
@@ -147,7 +148,7 @@ fn schema_10_documents_migrate_atomically_and_reopen_without_journaling_collecti
 	);
 	assert_eq!(raw.query_row("SELECT count(*) FROM timeparagon_sync_edits WHERE document IN ('habits','shared.task_work','shared.brain_dump')",[],|r|r.get::<_,i64>(0)).unwrap(),0);
 	assert_eq!(
-		raw.query_row("SELECT count(*) FROM habit_log_entries", [], |r| r
+		raw.query_row("SELECT count(*) FROM habit_entries", [], |r| r
 			.get::<_, i64>(0))
 			.unwrap(),
 		3
@@ -612,6 +613,192 @@ fn a_new_server_is_seeded_with_previously_acknowledged_rows() {
 		assert!(sync::pending(&raw).unwrap().is_empty());
 		assert!(sync::bootstrap(&conn, &path, "new-server").await.unwrap());
 		send(&conn, &path).await;
+		let (_dir, b) = database();
+		pull(&conn, &b).await;
+		assert_eq!(
+			task_db::read_document::<crate::task_work::WorkLog>(&b, "shared.task_work")
+				.unwrap()
+				.unwrap(),
+			work()
+		);
+	});
+}
+
+/// A day with one logged entry, as each device saves it.
+fn logged(path: &Path, at: (u32, u32), note: &str) {
+	let (storage, mut library) = habits::store::Storage::load(Some(path.to_owned())).unwrap();
+	let habit = library.habits.iter_mut().find(|h| h.id == "a").unwrap();
+	let mut entries = habit
+		.log
+		.get(&day(18))
+		.cloned()
+		.unwrap_or_default()
+		.happened;
+	entries.push(LogEntry::new(NaiveTime::from_hms_opt(at.0, at.1, 0), None).with_note(note));
+	habit
+		.marks
+		.insert(day(18), Mark::Reps(entries.len() as u32));
+	habit.set_log(day(18), &entries, &[]);
+	storage.save(&library).unwrap();
+}
+fn notes(path: &Path) -> Vec<String> {
+	let library = habits::store::Storage::load(Some(path.to_owned()))
+		.unwrap()
+		.1;
+	let habit = library.habits.iter().find(|h| h.id == "a").unwrap();
+	habit.log[&day(18)]
+		.happened
+		.iter()
+		.map(|e| e.note.clone())
+		.collect()
+}
+#[test]
+fn log_entries_added_on_two_devices_at_once_are_both_kept() {
+	runtime().block_on(async {
+		let (dir, a) = database();
+		let (_dir, b) = database();
+		let (_server, conn) = server(&dir.path().join("remote.db")).await;
+		let mut l = Library::default();
+		l.habits.push(Habit::new("a", "Water"));
+		task_db::write_document(&a, "habits", &l).unwrap();
+		logged(&a, (8, 0), "breakfast");
+		send(&conn, &a).await;
+		pull(&conn, &b).await;
+		// Both append the second entry of the day while offline.
+		logged(&a, (12, 0), "lunch on A");
+		logged(&b, (13, 0), "lunch on B");
+		send(&conn, &a).await;
+		send(&conn, &b).await;
+		pull(&conn, &a).await;
+		pull(&conn, &b).await;
+		for path in [&a, &b] {
+			assert_eq!(notes(path), ["breakfast", "lunch on A", "lunch on B"]);
+		}
+		// Removing the first entry leaves the others' rows alone.
+		let raw = db(&a);
+		sync::acknowledge(&raw, &sync::pending(&raw).unwrap()).unwrap();
+		let (storage, mut library) = habits::store::Storage::load(Some(a.clone())).unwrap();
+		let habit = &mut library.habits[0];
+		let rest = habit.log[&day(18)].happened[1..].to_vec();
+		habit.set_log(day(18), &rest, &[]);
+		storage.save(&library).unwrap();
+		let pending = sync::pending(&raw).unwrap();
+		let entries = pending
+			.iter()
+			.filter(|c| TABLES[c.table].name == "habit_entries");
+		assert_eq!(entries.clone().count(), 1);
+		assert!(entries.clone().all(|c| c.deleted));
+	});
+}
+#[test]
+fn schema_11_log_entries_move_to_their_new_keys_with_their_sync_state() {
+	let (_dir, path) = database();
+	task_db::write_document(&path, "habits", &library()).unwrap();
+	let raw = db(&path);
+	sync::acknowledge(&raw, &sync::pending(&raw).unwrap()).unwrap();
+	let expected = all(&raw, Some("habits")).unwrap();
+	let tokens = |raw: &Connection| -> BTreeMap<String, (String, i64)> {
+		raw.prepare("SELECT row_key,revision,dirty FROM timeparagon_relational_state WHERE table_name='habit_entries'")
+			.unwrap()
+			.query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))
+			.unwrap()
+			.collect::<rusqlite::Result<_>>()
+			.unwrap()
+	};
+	let synced = tokens(&raw);
+	assert_eq!(synced.len(), 3);
+	// Rebuild the schema 11 table from the current rows, as an old build left it.
+	raw.execute_batch(
+		"UPDATE timeparagon_relational_control SET projecting=1;
+		 CREATE TABLE habit_log_entries(habit_id TEXT NOT NULL,date TEXT NOT NULL,kind TEXT NOT NULL CHECK(kind IN ('happened','resisted')),position INTEGER NOT NULL,at TEXT,amount INTEGER,note TEXT NOT NULL,PRIMARY KEY(habit_id,date,kind,position),FOREIGN KEY(habit_id,date) REFERENCES habit_days(habit_id,date) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED);
+		 CREATE TEMP TABLE dense AS SELECT *, row_number() OVER (PARTITION BY habit_id,date,kind ORDER BY at,position) - 1 AS dense FROM habit_entries;
+		 INSERT INTO habit_log_entries SELECT habit_id,date,kind,dense,at,amount,note FROM dense;
+		 UPDATE timeparagon_relational_state SET table_name='habit_log_entries',
+		   row_key=(SELECT json_array(e.habit_id,e.date,e.kind,e.dense) FROM dense e WHERE json_array(e.habit_id,e.date,e.id)=row_key)
+		   WHERE table_name='habit_entries';
+		 DELETE FROM habit_entries;
+		 UPDATE timeparagon_relational_control SET projecting=0;",
+	)
+	.unwrap();
+	// One entry was edited and another deleted before the upgrade, unsent.
+	raw.execute_batch(
+		"UPDATE habit_log_entries SET note='edited' WHERE kind='resisted';
+		 UPDATE timeparagon_relational_state SET dirty=1,revision='edited' WHERE row_key LIKE '%\"resisted\",0]';
+		 INSERT INTO timeparagon_relational_state VALUES('habit_log_entries','[\"a\",\"2026-11-01\",\"happened\",9]','gone',1,1);
+		 PRAGMA user_version=11;",
+	)
+	.unwrap();
+	drop(raw);
+	task_db::Database::open(&path).unwrap();
+	let raw = db(&path);
+	let exists = |name: &str| -> bool {
+		raw.query_row(
+			"SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name=?1)",
+			[name],
+			|r| r.get(0),
+		)
+		.unwrap()
+	};
+	assert!(!exists("habit_log_entries"));
+	let mut expected = expected;
+	for ((i, _), row) in expected.iter_mut() {
+		if TABLES[*i].name == "habit_entries" && row[3] == "resisted" {
+			row[7] = json!("edited");
+		}
+	}
+	let actual = all(&raw, Some("habits")).unwrap();
+	// The edited entry's content, and so its key, changed; the others kept theirs.
+	assert_eq!(actual.len(), expected.len());
+	let notes = |rows: &Rows| {
+		let mut notes = rows
+			.iter()
+			.filter(|((i, _), _)| TABLES[*i].name == "habit_entries")
+			.map(|(_, r)| r[7].to_string())
+			.collect::<Vec<_>>();
+		notes.sort();
+		notes
+	};
+	assert_eq!(notes(&actual), notes(&expected));
+	let migrated = tokens(&raw);
+	assert_eq!(migrated.len(), 3);
+	for (key, (revision, dirty)) in &migrated {
+		match synced.get(key) {
+			Some(token) => assert_eq!(&(revision.clone(), *dirty), token),
+			None => assert_eq!((revision.as_str(), *dirty), ("edited", 1)),
+		}
+	}
+	assert_eq!(
+		raw.query_row(
+			"SELECT count(*) FROM timeparagon_relational_state WHERE table_name='habit_log_entries'",
+			[],
+			|r| r.get::<_, i64>(0)
+		)
+		.unwrap(),
+		0
+	);
+	// Reading and saving the migrated habits changes nothing.
+	let (storage, library) = habits::store::Storage::load(Some(path.clone())).unwrap();
+	storage.save(&library).unwrap();
+	assert_eq!(sync::pending(&raw).unwrap().len(), 1);
+}
+#[test]
+fn confirmed_rows_the_server_lacks_are_sent_again() {
+	runtime().block_on(async {
+		let (dir, a) = database();
+		let (_server, conn) = server(&dir.path().join("remote.db")).await;
+		task_db::write_document(&a, "shared.task_work", &work()).unwrap();
+		// Confirmed locally, as rows moved by an upgrade are, but never sent.
+		let raw = db(&a);
+		sync::acknowledge(&raw, &sync::pending(&raw).unwrap()).unwrap();
+		pull(&conn, &a).await;
+		let resent = sync::pending(&raw).unwrap();
+		assert_eq!(
+			resent.len(),
+			work().sessions.len() + work().distractions.len()
+		);
+		send(&conn, &a).await;
+		pull(&conn, &a).await;
+		assert!(sync::pending(&raw).unwrap().is_empty());
 		let (_dir, b) = database();
 		pull(&conn, &b).await;
 		assert_eq!(

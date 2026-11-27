@@ -570,7 +570,7 @@ not need a calendar event. Any number of events can count towards it through
 not done takes one away.
 
 Stored in `habits`, `habit_sections`, `habit_weekdays`, `habit_days`,
-`habit_log_entries` and `habit_preferences` (shared). The in-memory type
+`habit_entries` and `habit_preferences` (shared). The in-memory type
 `habits::Library` retains this interchange shape:
 
 ```json

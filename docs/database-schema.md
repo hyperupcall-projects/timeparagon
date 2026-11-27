@@ -38,14 +38,15 @@ The schema version is stored in `PRAGMA user_version`.
 | `user_version` | Meaning |
 | --- | --- |
 | `0` | New file. `Database::open` creates the schema. |
-| `2` through `10` | Upgraded to 11 on open: see below. |
+| `2` through `11` | Upgraded to 12 on open: see below. |
 | `6` | Like 5, with the app's tables, indexes and triggers prefixed `timeparagon_` instead of `timeslay_`, and the built-in calendar sources' IDs prefixed `timeparagon:` instead of `timeslay:`. |
 | `7` | Adds the synced `notes` metadata table. |
 | `8` | Creates the incremental Google sync cache during upgrade and reinstalls synced data tables and triggers. |
 | `9` | Removes monthly view snapshots, separates confirmed tasks from desired edits, and tracks changes to all calendar inputs. |
 | `10` | Keeps every shared setting in `settings`, and no longer replicates `sleep_nights`. |
-| `11` | Current (`task_db::SCHEMA_VERSION`). Normalizes habits, brain dumps and task work; replicates those as native Turso rows. |
-| anything else | Refused: `Unsupported database schema N; expected 11`. |
+| `11` | Normalizes habits, brain dumps and task work; replicates those as native Turso rows. |
+| `12` | Current (`task_db::SCHEMA_VERSION`). Habit log entries are keyed by an ID instead of their position (`habit_log_entries` becomes `habit_entries`). |
+| anything else | Refused: `Unsupported database schema N; expected 12`. |
 
 Builds from before version 5 refuse a version 5 file, so every TimeParagon
 process on a device (panel, dock, shortcut daemon, browser host) has to be
@@ -57,6 +58,18 @@ Every statement in setup is idempotent (`CREATE … IF NOT EXISTS`,
 processes setting up at once, or a crash halfway through, cause no harm. Once a
 file is stamped with the current version, setup is skipped, because the apps
 open the database many times a minute.
+
+**11 → 12** (`relational::migrate_log_entries`) moves each row of
+`habit_log_entries`, keyed by `(habit_id, date, kind, position)`, into
+`habit_entries`, keyed by `(habit_id, date, id)`; see
+[Normalized habits](#normalized-habits-brain-dumps-and-task-work). Each row keeps
+its sync token and whether it is still to be sent, under its new key. A
+deletion not yet sent cannot be carried over, because the new key comes from
+the deleted entry's content, and is dropped. The server's `habit_log_entries`
+table is left as it is and no longer read: upgrade every syncing device, since
+entries logged by schema 11 builds no longer reach upgraded ones. Rows the
+server's new table does not have yet are sent by the first sync (see
+[Native row sync](#native-row-sync-and-cutover)).
 
 **9 → 10** (`database_sync::legacy`, run by sync enrollment, so also when
 the sync worker opens the file first) retires the nine tables that each held
@@ -281,11 +294,18 @@ these three legacy keys to the tables, so callers cannot recreate JSON blobs.
 | `habits` | `id` | Name, kind, creation date, question, notes, color; frequency kind/times/days; display flags, icons, section ID; measure unit/target/days; area ID, distraction flag, position |
 | `habit_weekdays` | `habit_id, weekday` | One selected weekday per row, Monday = 0 |
 | `habit_days` | `habit_id, date` | `mark`, `repetitions`, `resisted`, `value` in thousandths, `has_log`; NULL preserves the difference between absent and zero |
-| `habit_log_entries` | `habit_id, date, kind, position` | Each happened/resisted entry: `at`, `amount`, `note` |
+| `habit_entries` | `habit_id, date, id` | Each happened/resisted entry: `kind`, `position`, `at`, `amount`, `note` |
 | `habit_preferences` | `id` (always 1) | Sort, reversal, visibility flags, chart buckets |
 | `brain_dump_entries` | `date` | `text`, `position`; empty text is a saved page |
 | `task_work_sessions` | `id` | `task_key`, `task_title`, `block_key`, `started_at`, `stopped_at`, `position` |
 | `task_work_distractions` | `id` | `block_key`, `minutes`, `recorded_at`, `position` |
+
+A log entry's `id` is a hash of its kind, time, amount and note, numbered
+among identical entries that day (`codec::log_entry_id`). Two devices that each
+log an entry while offline add two rows, where keying by position made both
+write position 0 and kept only one. Changing an entry replaces its row. A day's
+entries are read in order of time; `position` orders only entries logged at
+the same time, so removing one entry rewrites no others.
 
 Habit children have foreign keys with cascading deletion. Deleting a section
 sets its habits' section to NULL. Dates and timestamps use the typed models'
@@ -319,7 +339,12 @@ primary-key tuple. It contains no before/after payload. Triggers replace the
 token on a changed row, acknowledge only the token actually sent, and record
 old-key deletion on rekey. Remote tombstones are retained, without a time-based
 expiry. Idle pulls scan only keys and tokens; payloads are read for changed
-rows. Repeated local updates to one row occupy one state entry.
+rows. Repeated local updates to one row occupy one state entry. A row this
+device holds as sent or received, but of which the server has no trace (not
+even a tombstone), is queued to be sent again. Because tombstones never expire,
+that only happens to rows the server never had, such as rows an upgrade moved
+into a new table, or after the server lost data; rows the server has at
+another revision are left to the ordinary exchange.
 
 The migration decodes the former documents in the schema transaction, copies
 the originals into local-only `timeparagon_relational_legacy(key,value)`, and

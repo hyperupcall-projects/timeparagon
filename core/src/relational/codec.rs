@@ -33,6 +33,25 @@ fn stable_id(parts: Value, ordinal: usize) -> String {
 	)
 }
 
+/// A log entry's identity within its habit day: what it records, numbered
+/// among identical entries. `counts` is shared by one day's entries. Two
+/// devices that each log an entry while offline therefore add two rows
+/// instead of both writing the same position, and identical history gets
+/// identical IDs on every device. Changing an entry replaces its row.
+pub(super) fn log_entry_id(
+	kind: &str,
+	at: &Value,
+	amount: &Value,
+	note: &str,
+	counts: &mut BTreeMap<String, usize>,
+) -> String {
+	let parts = json!([kind, at, amount, note]);
+	let count = counts.entry(parts.to_string()).or_default();
+	let id = stable_id(parts, *count);
+	*count += 1;
+	id
+}
+
 pub(super) fn encode(key: &str, v: &Value) -> io::Result<Rows> {
 	let mut rows = Rows::new();
 	match key {
@@ -131,20 +150,30 @@ pub(super) fn encode(key: &str, v: &Value) -> io::Result<Rows> {
 						],
 					)?;
 					if let Some(log) = h.log.get(&date) {
+						let mut counts = BTreeMap::<String, usize>::new();
 						for (kind, entries) in
 							[("happened", &log.happened), ("resisted", &log.resisted)]
 						{
-							for (p, e) in entries.iter().enumerate() {
+							// Entries are kept in order of time (`Habit::set_log`), so
+							// the position only orders entries logged at the same time,
+							// and removing one leaves the rest of the day unchanged.
+							let mut same_time = BTreeMap::<Option<chrono::NaiveTime>, usize>::new();
+							for e in entries {
+								let p = same_time.entry(e.at).or_default();
+								let p = std::mem::replace(p, *p + 1);
+								let (at, amount) = (value(e.at)?, value(e.amount)?);
+								let id = log_entry_id(kind, &at, &amount, &e.note, &mut counts);
 								insert(
 									&mut rows,
 									4,
 									vec![
 										json!(h.id),
 										value(date)?,
+										json!(id),
 										json!(kind),
 										json!(p),
-										value(e.at)?,
-										value(e.amount)?,
+										at,
+										amount,
 										json!(e.note),
 									],
 								)?;
@@ -314,14 +343,28 @@ pub(super) fn decode(key: &str, rows: &Rows) -> io::Result<Value> {
 						h.log.insert(date, DayLog::default());
 					}
 				}
-				for e in ordered(rows, 4, 3).into_iter().filter(|e| e[0] == r[0]) {
+				let mut entries = rows
+					.iter()
+					.filter(|((i, _), e)| *i == 4 && e[0] == r[0])
+					.map(|(_, e)| e)
+					.collect::<Vec<_>>();
+				// By time, then position among entries at the same time. Entries
+				// two devices added at the same time and position follow their ID.
+				entries.sort_by(|a, b| {
+					(a[5].as_str(), a[4].as_i64(), a[2].as_str()).cmp(&(
+						b[5].as_str(),
+						b[4].as_i64(),
+						b[2].as_str(),
+					))
+				});
+				for e in entries {
 					let log = h.log.entry(model(e[1].clone())?).or_default();
 					let entry = LogEntry {
-						at: model(e[4].clone())?,
-						amount: model(e[5].clone())?,
-						note: model(e[6].clone())?,
+						at: model(e[5].clone())?,
+						amount: model(e[6].clone())?,
+						note: model(e[7].clone())?,
 					};
-					match e[2].as_str() {
+					match e[3].as_str() {
 						Some("happened") => log.happened.push(entry),
 						Some("resisted") => log.resisted.push(entry),
 						_ => return Err(invalid("invalid habit log kind")),
